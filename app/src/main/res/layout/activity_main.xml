@@ -188,11 +188,11 @@
                 android:fontFamily="monospace" />
         </LinearLayout>
 
-        <!-- 4段目: SONY WALKMAN 風グラフィカル・レベルメーター -->
+        <!-- 4段目: SONY WALKMAN 完全再現グラフィカル・レベルメーター -->
         <com.example.perfectbitrate.WalkmanLevelMeterView
             android:id="@+id/walkmanLevelMeter"
             android:layout_width="match_parent"
-            android:layout_height="22dp"
+            android:layout_height="24dp"
             android:layout_marginTop="3dp"
             android:layout_marginBottom="1dp" />
 

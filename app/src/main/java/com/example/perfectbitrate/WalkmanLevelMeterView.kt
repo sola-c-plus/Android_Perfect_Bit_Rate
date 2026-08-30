@@ -19,22 +19,33 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
+    // 目盛り用テキスト
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#777777")
-        textSize = 7.5f * density
+        color = Color.parseColor("#888888")
+        textSize = 8.0f * density
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#999999")
-        textSize = 8.5f * density
+    // -∞ 専用の少し大きめペイント
+    private val infinityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#888888")
+        textSize = 9.0f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textAlign = Paint.Align.CENTER
+    }
+
+    // L / R ラベル用ペイント
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#CCCCCC")
+        textSize = 7.5f * density
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
 
+    // 目盛り線
     private val scaleLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#222222")
+        color = Color.parseColor("#2E2E2E")
         strokeWidth = 1.0f * density
     }
 
@@ -56,9 +67,9 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
 
-    // 消灯グリッド: ダークグレー
+    // 消灯グリッド
     private val segInactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#141414")
+        color = Color.parseColor("#161616")
         style = Paint.Style.FILL
     }
 
@@ -77,7 +88,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var currentDbL = -60f
     private var currentDbR = -60f
 
-    // Peak Hold 管理
     private var peakHoldDbL = -60f
     private var peakHoldDbR = -60f
     private var peakHoldTimeL = 0L
@@ -88,7 +98,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var lastDrawTime = 0L
     private val decayRateDbPerSec = 75f
 
-    // 描画高速化用キャッシュ
     private var numSegments = 0
     private var segRectsL = arrayOf<RectF>()
     private var segRectsR = arrayOf<RectF>()
@@ -100,6 +109,8 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var barL_Top = 0f
     private var barHeight = 0f
     private var barR_Top = 0f
+    private var lCenterY = 0f
+    private var rCenterY = 0f
 
     fun setLevels(dbL: Float, dbR: Float) {
         val safeL = if (dbL.isNaN() || dbL.isInfinite()) -60f else dbL.coerceIn(-60f, 6f)
@@ -113,12 +124,10 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         if (targetDbL > currentDbL) currentDbL = targetDbL
         if (targetDbR > currentDbR) currentDbR = targetDbR
 
-        // Peak Hold L
         if (targetDbL >= peakHoldDbL) {
             peakHoldDbL = targetDbL
             peakHoldTimeL = now
         }
-        // Peak Hold R
         if (targetDbR >= peakHoldDbR) {
             peakHoldDbR = targetDbR
             peakHoldTimeR = now
@@ -142,27 +151,32 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         if (w <= 0 || h <= 0) return
 
         val wf = w.toFloat()
-        val labelWidth = 14f * density
-        meterLeft = labelWidth + 4f * density
-        meterRight = wf - 4f * density
+        val labelWidth = 11f * density
+        meterLeft = labelWidth + 3f * density
+        meterRight = wf - 3f * density
         val meterWidth = meterRight - meterLeft
 
-        scaleY = 7.5f * density
-        scaleLineY = scaleY + 3f * density
+        scaleY = 8.0f * density
+        scaleLineY = scaleY + 3.0f * density
 
         barL_Top = scaleLineY + 2.5f * density
         barHeight = 2.8f * density
-        barR_Top = barL_Top + barHeight + 2.5f * density
+        val barGap = 3.0f * density
+        barR_Top = barL_Top + barHeight + barGap
 
-        // 目盛り位置の事前計算
+        // L / R のフォントメトリクスから完璧に垂直中央揃え
+        val fontMetrics = labelPaint.fontMetrics
+        val textCenterOffset = (fontMetrics.descent + fontMetrics.ascent) / 2f
+        lCenterY = barL_Top + (barHeight / 2f) - textCenterOffset
+        rCenterY = barR_Top + (barHeight / 2f) - textCenterOffset
+
         for (i in dbScale.indices) {
             val frac = dbToFraction(dbScale[i].second)
             scaleTickX[i] = meterLeft + meterWidth * frac
         }
 
-        // セグメント矩形の事前計算（描画時のGCと負荷を完全排除）
         val segWidth = 2.2f * density
-        val segGap = 1.2f * density
+        val segGap = 1.0f * density
         val totalSegStep = segWidth + segGap
         numSegments = (meterWidth / totalSegStep).toInt()
 
@@ -217,14 +231,19 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         // 1. 目盛り文字と刻み線
         for (i in dbScale.indices) {
             val x = scaleTickX[i]
-            canvas.drawText(dbScale[i].first, x, scaleY, textPaint)
+            val text = dbScale[i].first
+            if (text == "-∞") {
+                canvas.drawText(text, x + 1.5f * density, scaleY + 0.5f * density, infinityPaint)
+            } else {
+                canvas.drawText(text, x, scaleY, textPaint)
+            }
             canvas.drawLine(x, scaleLineY - 1.5f * density, x, scaleLineY + 1.5f * density, scaleLinePaint)
         }
         canvas.drawLine(meterLeft, scaleLineY, meterRight, scaleLineY, scaleLinePaint)
 
-        // 2. "L" と "R" ラベル
-        canvas.drawText("L", 0f, barL_Top + barHeight - 0.5f * density, labelPaint)
-        canvas.drawText("R", 0f, barR_Top + barHeight - 0.5f * density, labelPaint)
+        // 2. "L" と "R" ラベル（バーの中央高さに独立描画）
+        canvas.drawText("L", 0f, lCenterY, labelPaint)
+        canvas.drawText("R", 0f, rCenterY, labelPaint)
 
         // 3. インデックス算出
         val activeIdxL = (dbToFraction(currentDbL) * numSegments).toInt()
@@ -235,23 +254,23 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
         val clipIdx = (0.96f * numSegments).toInt()
 
-        // 4. Lチャンネルの描画（白バー ＋ ゴールドPeak）
+        // 4. Lチャンネルの描画
         for (i in 0 until numSegments) {
             val paint = when {
                 i >= clipIdx && i <= activeIdxL -> segClipPaint
-                i == peakIdxL && peakHoldDbL > -48f -> segPeakPaint // ★Peakはゴールド
-                i <= activeIdxL -> segActivePaint                  // ★バー本体は白
+                i == peakIdxL && peakHoldDbL > -48f -> segPeakPaint
+                i <= activeIdxL -> segActivePaint
                 else -> segInactivePaint
             }
             canvas.drawRoundRect(segRectsL[i], 0.5f * density, 0.5f * density, paint)
         }
 
-        // 5. Rチャンネルの描画（白バー ＋ ゴールドPeak）
+        // 5. Rチャンネルの描画
         for (i in 0 until numSegments) {
             val paint = when {
                 i >= clipIdx && i <= activeIdxR -> segClipPaint
-                i == peakIdxR && peakHoldDbR > -48f -> segPeakPaint // ★Peakはゴールド
-                i <= activeIdxR -> segActivePaint                  // ★バー本体は白
+                i == peakIdxR && peakHoldDbR > -48f -> segPeakPaint
+                i <= activeIdxR -> segActivePaint
                 else -> segInactivePaint
             }
             canvas.drawRoundRect(segRectsR[i], 0.5f * density, 0.5f * density, paint)

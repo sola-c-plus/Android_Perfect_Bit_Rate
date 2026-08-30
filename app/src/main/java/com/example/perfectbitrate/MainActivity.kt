@@ -82,7 +82,6 @@ class MainActivity : AppCompatActivity() {
 
     private var isOtherAppInterfering = false
 
-    // メインスレッド負荷を完全になくす 300ms のスマート更新タイマー
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
@@ -197,6 +196,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchVolLock.setOnCheckedChangeListener { _, isChecked ->
+            // DACが接続されている時だけ0dBを有効化
+            if (isChecked && activeDacDevice == null) {
+                switchVolLock.isChecked = false
+                return@setOnCheckedChangeListener
+            }
             isVolLockOn = isChecked
             prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
             playbackService?.isVolumeLocked = isChecked
@@ -272,8 +276,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            playbackService?.lockSystemVolumeToMax()
-            return true
+            if (activeDacDevice != null) {
+                playbackService?.lockSystemVolumeToMax()
+                return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }
@@ -323,6 +329,16 @@ class MainActivity : AppCompatActivity() {
                 break
             }
         }
+
+        // ★DACが未接続になったら0dBスイッチを自動OFF & 音量安全復帰
+        if (activeDacDevice == null && isVolLockOn) {
+            isVolLockOn = false
+            switchVolLock.isChecked = false
+            prefs.edit { putBoolean("vol_lock_enabled", false) }
+            playbackService?.isVolumeLocked = false
+            playbackService?.restoreOriginalVolume()
+        }
+
         updateStatus()
     }
 
@@ -338,7 +354,6 @@ class MainActivity : AppCompatActivity() {
                 pcmPacketCount += pcmBytes.size
                 isPlayingState = true
 
-                // UIスレッドは何も計算せず、最速でサービスへ流す
                 playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
             }
             "codec" -> {

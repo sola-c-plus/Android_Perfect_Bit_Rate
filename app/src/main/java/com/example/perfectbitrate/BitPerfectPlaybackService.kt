@@ -48,12 +48,10 @@ class BitPerfectPlaybackService : Service() {
 
     private var originalSystemVolume = -1
 
-    // キュー容量を20（約1秒分）に最適化し、遅延とメモリ滞留を防止
     val pcmQueue = LinkedBlockingQueue<ByteArray>(20)
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    // バックグラウンド計算されたピークをメインUIへ渡すコールバック
     var onPeakListener: ((Float, Float, Int) -> Unit)? = null
 
     var isVolumeLocked = false
@@ -81,7 +79,8 @@ class BitPerfectPlaybackService : Service() {
 
     private val volumeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (isVolumeLocked) {
+            // DACが接続されている時だけ0dBを維持
+            if (isVolumeLocked && targetDacDevice != null) {
                 lockSystemVolumeToMax()
             }
         }
@@ -119,9 +118,12 @@ class BitPerfectPlaybackService : Service() {
 
     fun lockSystemVolumeToMax() {
         try {
-            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
-            audioTrack?.setVolume(1.0f)
+            // DACが接続されている場合のみ最大化
+            if (targetDacDevice != null) {
+                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
+                audioTrack?.setVolume(1.0f)
+            }
         } catch (e: Exception) {
             Log.e("BitPerfect", "Volume lock error", e)
         }
@@ -165,6 +167,14 @@ class BitPerfectPlaybackService : Service() {
 
     fun setDacDevice(device: AudioDeviceInfo?) {
         targetDacDevice = device
+        
+        // ★重要: DACが抜けた場合は即座に0dBロックを解除し、内蔵スピーカーの音量を元に戻す
+        if (device == null && isVolumeLocked) {
+            isVolumeLocked = false
+            restoreOriginalVolume()
+            Log.i("BitPerfect", "DAC disconnected: Auto-disabled 0dB and restored speaker volume.")
+        }
+
         if (isCurrentlyPlaying) {
             initAudioTrack(currentBitMode, currentSampleRate, device)
         }
@@ -433,7 +443,8 @@ class BitPerfectPlaybackService : Service() {
                 audioTrack?.setPreferredDevice(it)
             }
 
-            if (isVolumeLocked) {
+            // DAC接続時のみ0dB音量を反映
+            if (isVolumeLocked && targetDevice != null) {
                 audioTrack?.setVolume(1.0f)
                 lockSystemVolumeToMax()
             }
@@ -454,7 +465,6 @@ class BitPerfectPlaybackService : Service() {
                 try {
                     val pcm = pcmQueue.take()
 
-                    // バックグラウンドスレッドでピークを高速計算
                     analyzeAndDispatchPeak(pcm, currentBitMode)
 
                     audioLock.lock()
@@ -464,7 +474,7 @@ class BitPerfectPlaybackService : Service() {
                                 if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                                     track.play()
                                 }
-                                if (isVolumeLocked) {
+                                if (isVolumeLocked && targetDacDevice != null) {
                                     track.setVolume(1.0f)
                                 }
                                 track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
@@ -485,7 +495,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // バックグラウンドで高速実行されるピーク計算（メインUIを一切ブロックしない）
     private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String) {
         val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
         var instantPeakL = -60f
@@ -563,6 +572,7 @@ class BitPerfectPlaybackService : Service() {
             unregisterReceiver(volumeReceiver)
         } catch (e: Exception) {}
 
+        // ★アプリ終了時も確実に元の音量へ復帰
         restoreOriginalVolume()
 
         try {
