@@ -214,14 +214,23 @@ function setupAudioPipeline() {
                 let bytes = null;
 
                 if (currentBitMode === "32bit") {
+                    // ★ 32-bit Signed Integer PCM (Int32, S32_LE: -2147483648 〜 2147483647)
                     const buffer = new ArrayBuffer(len * 8);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
-                        view.setFloat32(i * 8, left[i], true);
-                        view.setFloat32(i * 8 + 4, right[i], true);
+                        let l = Math.max(-1.0, Math.min(1.0, left[i]));
+                        let r = Math.max(-1.0, Math.min(1.0, right[i]));
+                        let intL = l < 0 ? Math.round(l * 2147483648) : Math.round(l * 2147483647);
+                        let intR = r < 0 ? Math.round(r * 2147483648) : Math.round(r * 2147483647);
+                        intL = Math.max(-2147483648, Math.min(2147483647, intL));
+                        intR = Math.max(-2147483648, Math.min(2147483647, intR));
+
+                        view.setInt32(i * 8, intL, true);
+                        view.setInt32(i * 8 + 4, intR, true);
                     }
                     bytes = new Uint8Array(buffer);
                 } else if (currentBitMode === "24bit") {
+                    // 24-bit Packed Signed Integer PCM (Int24, S24_3LE)
                     const buffer = new ArrayBuffer(len * 6);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -243,6 +252,7 @@ function setupAudioPipeline() {
                     }
                     bytes = new Uint8Array(buffer);
                 } else {
+                    // 16-bit Signed Integer PCM (Int16, S16_LE)
                     const buffer = new ArrayBuffer(len * 4);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {

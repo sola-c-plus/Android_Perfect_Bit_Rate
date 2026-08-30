@@ -358,7 +358,7 @@ class BitPerfectPlaybackService : Service() {
         val playPauseIcon = if (isCurrentlyPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
 
         val bitStr = when (currentBitMode) {
-            "32bit" -> "32bit Float"
+            "32bit" -> "32bit"
             "24bit" -> "24bit"
             else -> "16bit"
         }
@@ -410,8 +410,15 @@ class BitPerfectPlaybackService : Service() {
             currentSampleRate = sampleRate
             activeOutputDevice = targetDevice
 
-            val encoding = when (bitMode) {
-                "32bit" -> AudioFormat.ENCODING_PCM_FLOAT
+            // ★ 32bit は ENCODING_PCM_FLOAT ではなく ENCODING_PCM_32BIT (22) を使用
+            var encoding = when (bitMode) {
+                "32bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    AudioFormat.ENCODING_PCM_32BIT
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    AudioFormat.ENCODING_PCM_24BIT_PACKED
+                } else {
+                    AudioFormat.ENCODING_PCM_16BIT
+                }
                 "24bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     AudioFormat.ENCODING_PCM_24BIT_PACKED
                 } else {
@@ -420,14 +427,29 @@ class BitPerfectPlaybackService : Service() {
                 else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
+            // DAC が 32bit 整数に非対応な場合の自動フォールバック
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                 try {
                     val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
-                    val matched = mixers.firstOrNull {
+                    var matched = mixers.firstOrNull {
                         it.format.sampleRate == sampleRate && it.format.encoding == encoding
-                    } ?: mixers.firstOrNull {
-                        it.format.sampleRate == sampleRate
-                    } ?: AudioMixerAttributes.Builder(
+                    }
+
+                    // 32bit が DAC で直接受け入れられない場合、24bit/16bit を探す
+                    if (matched == null) {
+                        matched = mixers.firstOrNull {
+                            it.format.sampleRate == sampleRate && it.format.encoding == AudioFormat.ENCODING_PCM_24BIT_PACKED
+                        } ?: mixers.firstOrNull {
+                            it.format.sampleRate == sampleRate && it.format.encoding == AudioFormat.ENCODING_PCM_16BIT
+                        } ?: mixers.firstOrNull {
+                            it.format.sampleRate == sampleRate
+                        }
+                        if (matched != null) {
+                            encoding = matched.format.encoding
+                        }
+                    }
+
+                    val finalMixer = matched ?: AudioMixerAttributes.Builder(
                         AudioFormat.Builder()
                             .setSampleRate(sampleRate)
                             .setEncoding(encoding)
@@ -439,20 +461,20 @@ class BitPerfectPlaybackService : Service() {
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
-                    audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
+                    audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, finalMixer)
                 } catch (e: Exception) {
                     Log.e("BitPerfect", "Mixer attribute set error", e)
                 }
             }
 
-            val bytesPerSample = when (bitMode) {
-                "32bit" -> 4
-                "24bit" -> 3
+            val bytesPerSample = when (encoding) {
+                AudioFormat.ENCODING_PCM_32BIT -> 4
+                AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
                 else -> 2
             }
 
             val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
-            val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms ジッター吸収用バッファ
+            val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms
             val bufferSize = max(minBuf * 4, desiredBuf)
 
             val newTrack = AudioTrack.Builder()
@@ -485,7 +507,7 @@ class BitPerfectPlaybackService : Service() {
             newTrack.play()
             audioTrack = newTrack
 
-            Log.i("BitPerfect", "★ AudioTrack Started: ${sampleRate}Hz, Buffer=$bufferSize bytes -> ${targetDevice?.productName ?: "Default"}")
+            Log.i("BitPerfect", "★ AudioTrack Started: ${sampleRate}Hz, Encoding=$encoding, Buffer=$bufferSize -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
             Log.e("BitPerfect", "AudioTrack init error", e)
         } finally {
@@ -539,16 +561,18 @@ class BitPerfectPlaybackService : Service() {
 
         when (bitMode) {
             "32bit" -> {
-                var maxL = 0f
-                var maxR = 0f
+                // ★ 32-bit Signed Integer (Int32) 解析
+                var maxL = 0
+                var maxR = 0
                 while (buffer.remaining() >= 8) {
-                    val sL = abs(buffer.float)
-                    val sR = abs(buffer.float)
-                    if (sL > maxL) maxL = sL
-                    if (sR > maxR) maxR = sR
+                    val valL = abs(buffer.int)
+                    val valR = abs(buffer.int)
+                    if (valL > maxL) maxL = valL
+                    if (valR > maxR) maxR = valR
+                    bitMask = bitMask or (valL) or (valR)
                 }
-                instantPeakL = if (maxL > 0f) 20 * log10(maxL) else -60f
-                instantPeakR = if (maxR > 0f) 20 * log10(maxR) else -60f
+                instantPeakL = if (maxL > 0) 20 * log10(maxL / 2147483647.0f) else -60f
+                instantPeakR = if (maxR > 0) 20 * log10(maxR / 2147483647.0f) else -60f
             }
             "24bit" -> {
                 var maxL = 0

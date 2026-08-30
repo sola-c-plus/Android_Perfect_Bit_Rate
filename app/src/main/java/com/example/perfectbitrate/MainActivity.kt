@@ -1,5 +1,7 @@
 package com.example.perfectbitrate
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -12,6 +14,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -32,6 +35,7 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
@@ -80,7 +84,7 @@ class MainActivity : AppCompatActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
 
     private var currentBitMode = "16bit"
-    private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Float)")
+    private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
 
     private var peakDbL = -60f
@@ -97,6 +101,14 @@ class MainActivity : AppCompatActivity() {
             uiHandler.postDelayed(this, 300)
         }
     }
+
+    private val requestBluetoothPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
+            if (isGranted) {
+                fetchBluetoothCodec()
+                updateStatus()
+            }
+        }
 
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -252,39 +264,57 @@ class MainActivity : AppCompatActivity() {
         uiHandler.post(uiUpdateRunnable)
     }
 
-    private fun setupBluetoothTracker() {
-        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        bluetoothAdapter = btManager?.adapter
-        bluetoothAdapter?.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
-            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
-                if (profile == BluetoothProfile.A2DP) {
-                    bluetoothA2dp = proxy as? BluetoothA2dp
-                    fetchBluetoothCodec()
-                }
+    private fun checkAndRequestBluetoothPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                requestBluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
             }
-            override fun onServiceDisconnected(profile: Int) {
-                if (profile == BluetoothProfile.A2DP) {
-                    bluetoothA2dp = null
-                }
-            }
-        }, BluetoothProfile.A2DP)
-
-        val filter = IntentFilter().apply {
-            addAction("android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED")
-            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
-            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
-            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }
-        try {
-            registerReceiver(btReceiver, filter)
-        } catch (e: Exception) {}
     }
 
+    @SuppressLint("MissingPermission")
+    private fun setupBluetoothTracker() {
+        checkAndRequestBluetoothPermission()
+        try {
+            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            bluetoothAdapter = btManager?.adapter
+            bluetoothAdapter?.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+                    if (profile == BluetoothProfile.A2DP) {
+                        bluetoothA2dp = proxy as? BluetoothA2dp
+                        fetchBluetoothCodec()
+                    }
+                }
+                override fun onServiceDisconnected(profile: Int) {
+                    if (profile == BluetoothProfile.A2DP) {
+                        bluetoothA2dp = null
+                    }
+                }
+            }, BluetoothProfile.A2DP)
+
+            val filter = IntentFilter().apply {
+                addAction("android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED")
+                addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+            }
+            registerReceiver(btReceiver, filter)
+        } catch (e: Exception) {
+            Log.e("BitPerfect", "Bluetooth tracker setup error", e)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun fetchBluetoothCodec() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                return
+            }
+        }
         val a2dp = bluetoothA2dp ?: return
         try {
             val devices = a2dp.connectedDevices
-            if (devices.isEmpty()) {
+            if (devices.isNullOrEmpty()) {
                 currentBtCodecName = ""
                 return
             }
@@ -299,15 +329,15 @@ class MainActivity : AppCompatActivity() {
                     Log.i("BitPerfect", "★ Bluetooth Codec Detected: $currentBtCodecName")
                 }
             }
+        } catch (e: SecurityException) {
+            Log.w("BitPerfect", "Bluetooth permission not granted")
         } catch (e: Exception) {
             currentBtCodecName = "BT HD Audio"
         }
     }
 
-    // ★すべての Bluetooth コーデック（aptX Adaptive / Lossless / TWS+ / LHDC / SSC等）に対応
     private fun parseComprehensiveCodec(codecConfig: Any, codecStatus: Any): String {
         try {
-            // 1. getCodecName() メソッドからの直接取得を試みる
             try {
                 val getNameMethod = codecConfig.javaClass.getMethod("getCodecName")
                 val nameObj = getNameMethod.invoke(codecConfig)
@@ -316,7 +346,6 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {}
 
-            // 2. toString() による詳細文字列スキャン（AptX Adaptive, LHDC, Samsung Scalable 等を検出）
             val fullStr = "${codecConfig} ${codecStatus}".lowercase()
             when {
                 fullStr.contains("lossless") -> return "aptX Lossless"
@@ -337,7 +366,6 @@ class MainActivity : AppCompatActivity() {
                 fullStr.contains("sbc") -> return "SBC"
             }
 
-            // 3. getCodecType() 数値によるフォールバック判定
             val getTypeMethod = codecConfig.javaClass.getMethod("getCodecType")
             val type = getTypeMethod.invoke(codecConfig) as Int
             return when (type) {
@@ -571,7 +599,7 @@ class MainActivity : AppCompatActivity() {
         textDacName.text = outputDeviceName
 
         val bitLabel = when (currentBitMode) {
-            "32bit" -> "32 bit Float"
+            "32bit" -> "32 bit"
             "24bit" -> "24 bit"
             else -> "16 bit"
         }
@@ -668,13 +696,16 @@ class MainActivity : AppCompatActivity() {
         geckoSession.setActive(true)
     }
 
+    @SuppressLint("MissingPermission")
     override fun onDestroy() {
         super.onDestroy()
         uiHandler.removeCallbacks(uiUpdateRunnable)
         try {
             unregisterReceiver(btReceiver)
         } catch (e: Exception) {}
-        bluetoothAdapter?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
+        try {
+            bluetoothAdapter?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
+        } catch (e: Exception) {}
         if (isServiceBound) {
             unbindService(serviceConnection)
             isServiceBound = false
