@@ -1,10 +1,14 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import java.nio.ByteBuffer
 
 object NativeAudioEngine {
     init {
-        System.loadLibrary("native_audio_engine")
+        try {
+            System.loadLibrary("native_audio_engine")
+        } catch (e: UnsatisfiedLinkError) {
+            e.printStackTrace()
+        }
     }
 
     external fun nativeInit()
@@ -14,5 +18,6 @@ object NativeAudioEngine {
     external fun nativeStop(): Boolean
     external fun nativeFlush()
     external fun nativeClose()
+    external fun nativeWriteByteArray(byteArray: ByteArray, offset: Int, length: Int): Int
     external fun nativeWriteDirect(byteBuffer: ByteBuffer, offset: Int, length: Int): Int
 }

@@ -47,6 +47,9 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
+    // Android 14 (API 34) 以上かどうかの判定
+    private val isAndroid14Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+
     var isVolumeLocked = false
         set(value) {
             field = value
@@ -88,6 +91,12 @@ class BitPerfectPlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+
+        try {
+            NativeAudioEngine.nativeInit()
+        } catch (e: Exception) {
+            Log.e("BitPerfect", "Native init error", e)
+        }
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         originalSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
@@ -133,13 +142,14 @@ class BitPerfectPlaybackService : Service() {
             isCurrentlyPlaying = true
         }
 
-        val rateOrModeChanged = (sampleRate != currentSampleRate || bitMode != currentBitMode || audioTrack == null)
+        val rateOrModeChanged = (sampleRate != currentSampleRate || bitMode != currentBitMode || 
+            (isAndroid14Plus && audioTrack == null))
 
         if (rateOrModeChanged) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
             pcmQueue.clear()
-            initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = true)
+            initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = true)
         }
 
         if (pcmQueue.remainingCapacity() > 0) {
@@ -154,7 +164,7 @@ class BitPerfectPlaybackService : Service() {
     fun setDacDevice(device: AudioDeviceInfo?) {
         targetDacDevice = device
         if (isCurrentlyPlaying) {
-            initAudioTrack(currentBitMode, currentSampleRate, device, isRateShift = false)
+            initAudioEngine(currentBitMode, currentSampleRate, device, isRateShift = false)
         }
     }
 
@@ -218,15 +228,20 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
         audioLock.lock()
         try {
-            audioTrack?.let { track ->
-                try {
-                    track.pause()
-                    track.flush()
-                    track.stop()
-                    track.release()
-                } catch (e: Exception) {}
+            if (isAndroid14Plus) {
+                audioTrack?.let { track ->
+                    try {
+                        track.pause()
+                        track.flush()
+                        track.stop()
+                        track.release()
+                    } catch (e: Exception) {}
+                }
+                audioTrack = null
+            } else {
+                NativeAudioEngine.nativeStop()
+                NativeAudioEngine.nativeClose()
             }
-            audioTrack = null
         } finally {
             audioLock.unlock()
         }
@@ -255,8 +270,12 @@ class BitPerfectPlaybackService : Service() {
         } else {
             audioLock.lock()
             try {
-                if (audioTrack == null) {
-                    initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = false)
+                if (isAndroid14Plus) {
+                    if (audioTrack == null) {
+                        initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = false)
+                    }
+                } else {
+                    initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = false)
                 }
             } finally {
                 audioLock.unlock()
@@ -314,10 +333,12 @@ class BitPerfectPlaybackService : Service() {
             else -> "16bit"
         }
 
+        val modeLabel = if (isAndroid14Plus) "DIRECT" else "AAUDIO EXCLUSIVE"
+
         val notification = NotificationCompat.Builder(this, "bitperfect_service_channel")
             .setContentTitle(currentTitle)
             .setContentText("$currentArtist | $currentCodec")
-            .setSubText("${currentSampleRate}Hz $bitStr DIRECT")
+            .setSubText("${currentSampleRate}Hz $bitStr $modeLabel")
             .setLargeIcon(currentArtwork)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .addAction(android.R.drawable.ic_media_previous, "前へ", prevIntent)
@@ -336,7 +357,20 @@ class BitPerfectPlaybackService : Service() {
         startForeground(1001, notification)
     }
 
+    // MainActivityなど互換性のためのオーバーロード
     fun initAudioTrack(
+        bitMode: String = currentBitMode,
+        sampleRate: Int = currentSampleRate,
+        targetDevice: AudioDeviceInfo? = targetDacDevice
+    ) {
+        initAudioEngine(bitMode, sampleRate, targetDevice, isRateShift = false)
+    }
+
+    fun initAudioTrack(bitMode: String, targetDevice: AudioDeviceInfo?) {
+        initAudioEngine(bitMode, currentSampleRate, targetDevice, isRateShift = false)
+    }
+
+    fun initAudioEngine(
         bitMode: String,
         sampleRate: Int = currentSampleRate,
         targetDevice: AudioDeviceInfo? = null,
@@ -344,111 +378,132 @@ class BitPerfectPlaybackService : Service() {
     ) {
         audioLock.lock()
         try {
-            audioTrack?.let {
-                try {
-                    it.pause()
-                    it.flush()
-                    it.stop()
-                    it.release()
-                } catch (e: Exception) {}
-            }
-            audioTrack = null
-
             currentBitMode = bitMode
             currentSampleRate = sampleRate
-
-            val encoding = when (bitMode) {
-                "32bit" -> AudioFormat.ENCODING_PCM_FLOAT
-                "24bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    AudioFormat.ENCODING_PCM_24BIT_PACKED
-                } else {
-                    AudioFormat.ENCODING_PCM_16BIT
-                }
-                else -> AudioFormat.ENCODING_PCM_16BIT
-            }
-
-            // Android 14+ (UPSIDE_DOWN_CAKE): USB DAC の物理クロックを切り替え
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && targetDevice != null) {
-                try {
-                    val mixers = audioManager.getSupportedMixerAttributes(targetDevice)
-                    val matched = mixers.firstOrNull {
-                        it.format.sampleRate == sampleRate && it.format.encoding == encoding
-                    } ?: mixers.firstOrNull {
-                        it.format.sampleRate == sampleRate
-                    } ?: AudioMixerAttributes.Builder(
-                        AudioFormat.Builder()
-                            .setSampleRate(sampleRate)
-                            .setEncoding(encoding)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                            .build()
-                    ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
-
-                    val mediaAttr = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                    val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
-                    Log.i("BitPerfect", "★ Mixer switch to $sampleRate Hz: $success")
-                } catch (e: Exception) {
-                    Log.e("BitPerfect", "Mixer attribute set error", e)
-                }
-            }
 
             val bytesPerSample = when (bitMode) {
                 "32bit" -> 4
                 "24bit" -> 3
                 else -> 2
             }
-            var minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
-            if (minBuf <= 0) {
-                minBuf = sampleRate * 2 * bytesPerSample / 5
+
+            if (isAndroid14Plus) {
+                // ==================== Android 14+ (AudioTrack + preferredMixer) ====================
+                audioTrack?.let {
+                    try {
+                        it.pause()
+                        it.flush()
+                        it.stop()
+                        it.release()
+                    } catch (e: Exception) {}
+                }
+                audioTrack = null
+
+                val encoding = when (bitMode) {
+                    "32bit" -> AudioFormat.ENCODING_PCM_FLOAT
+                    "24bit" -> AudioFormat.ENCODING_PCM_24BIT_PACKED
+                    else -> AudioFormat.ENCODING_PCM_16BIT
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && targetDevice != null) {
+                    try {
+                        val mixers = audioManager.getSupportedMixerAttributes(targetDevice)
+                        val matched = mixers.firstOrNull {
+                            it.format.sampleRate == sampleRate && it.format.encoding == encoding
+                        } ?: mixers.firstOrNull {
+                            it.format.sampleRate == sampleRate
+                        } ?: AudioMixerAttributes.Builder(
+                            AudioFormat.Builder()
+                                .setSampleRate(sampleRate)
+                                .setEncoding(encoding)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                .build()
+                        ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+
+                        val mediaAttr = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                        val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
+                        Log.i("BitPerfect", "★ [Android 14+] Mixer switch to $sampleRate Hz: $success")
+                    } catch (e: Exception) {
+                        Log.e("BitPerfect", "Mixer attribute set error", e)
+                    }
+                }
+
+                var minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
+                if (minBuf <= 0) minBuf = sampleRate * 2 * bytesPerSample / 5
+
+                audioTrack = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .setFlags(AudioAttributes.FLAG_LOW_LATENCY)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(encoding)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBuf * 4)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+
+                targetDevice?.let { audioTrack?.setPreferredDevice(it) }
+
+                if (isVolumeLocked) {
+                    audioTrack?.setVolume(1.0f)
+                    lockSystemVolumeToMax()
+                }
+
+                audioTrack?.play()
+
+                if (isRateShift) {
+                    val preRollBytes = (sampleRate * 2 * bytesPerSample * 120) / 1000
+                    audioTrack?.write(ByteArray(preRollBytes), 0, preRollBytes, AudioTrack.WRITE_BLOCKING)
+                }
+
+            } else {
+                // ==================== Android 13以下 (C++ AAudio 排他モード) ====================
+                NativeAudioEngine.nativeClose()
+
+                val encodingCode = when (bitMode) {
+                    "32bit" -> 4  // Float
+                    "24bit" -> 21 // 24-bit Packed
+                    else -> 2     // 16-bit
+                }
+
+                val deviceId = targetDevice?.id ?: getUsbAudioDeviceId()
+                val resultMode = NativeAudioEngine.nativeOpen(sampleRate, 2, encodingCode, deviceId)
+                NativeAudioEngine.nativeStart()
+
+                if (isRateShift) {
+                    val preRollBytes = (sampleRate * 2 * bytesPerSample * 120) / 1000
+                    NativeAudioEngine.nativeWriteByteArray(ByteArray(preRollBytes), 0, preRollBytes)
+                }
+
+                Log.i("BitPerfect", "★ [Android 13-] AAudio Exclusive Opened: Rate=$sampleRate Hz, ResultMode=$resultMode")
             }
-
-            audioTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setFlags(AudioAttributes.FLAG_LOW_LATENCY)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(encoding)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build()
-                )
-                .setBufferSizeInBytes(minBuf * 4)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-
-            targetDevice?.let {
-                audioTrack?.setPreferredDevice(it)
-            }
-
-            if (isVolumeLocked) {
-                audioTrack?.setVolume(1.0f)
-                lockSystemVolumeToMax()
-            }
-
-            audioTrack?.play()
-
-            // ★重要: DACのPLLクロック安定化＆ハードウェアミュート解除待ちの無音プリロール
-            // 44.1k <-> 48k のシフト時は 120ms 分のゼロPCMを先行出力して曲頭欠けを完全防止
-            if (isRateShift) {
-                val preRollMs = 120
-                val silenceBytesCount = (sampleRate * 2 * bytesPerSample * preRollMs) / 1000
-                val silenceBuffer = ByteArray(silenceBytesCount)
-                audioTrack?.write(silenceBuffer, 0, silenceBuffer.size, AudioTrack.WRITE_BLOCKING)
-            }
-
-            Log.i("BitPerfect", "${sampleRate}Hz DIRECT AudioTrack Opened ($bitMode)")
         } catch (e: Exception) {
-            Log.e("BitPerfect", "AudioTrack init error", e)
+            Log.e("BitPerfect", "Audio Engine init error", e)
         } finally {
             audioLock.unlock()
         }
+    }
+
+    private fun getUsbAudioDeviceId(): Int {
+        targetDacDevice?.id?.let { if (it > 0) return it }
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        for (device in devices) {
+            if (device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+                return device.id
+            }
+        }
+        return 0
     }
 
     private fun startPlaybackLoop() {
@@ -460,15 +515,21 @@ class BitPerfectPlaybackService : Service() {
 
                     audioLock.lock()
                     try {
-                        audioTrack?.let { track ->
-                            if (track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
-                                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                                    track.play()
+                        if (isAndroid14Plus) {
+                            audioTrack?.let { track ->
+                                if (track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
+                                    if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                        track.play()
+                                    }
+                                    if (isVolumeLocked) {
+                                        track.setVolume(1.0f)
+                                    }
+                                    track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                                 }
-                                if (isVolumeLocked) {
-                                    track.setVolume(1.0f)
-                                }
-                                track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                            }
+                        } else {
+                            if (isCurrentlyPlaying) {
+                                NativeAudioEngine.nativeWriteByteArray(pcm, 0, pcm.size)
                             }
                         }
                     } finally {
@@ -514,9 +575,14 @@ class BitPerfectPlaybackService : Service() {
 
         audioLock.lock()
         try {
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
+            if (isAndroid14Plus) {
+                audioTrack?.stop()
+                audioTrack?.release()
+                audioTrack = null
+            } else {
+                NativeAudioEngine.nativeStop()
+                NativeAudioEngine.nativeClose()
+            }
         } catch (e: Exception) {}
         finally {
             audioLock.unlock()

@@ -1,4 +1,4 @@
-#include <jni.h>
+﻿#include <jni.h>
 #include "aaudio_engine.h"
 
 static AAudioEngine* g_engine = nullptr;
@@ -19,10 +19,12 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeOpen(
     if (!g_engine) return 0;
 
     aaudio_format_t format = AAUDIO_FORMAT_PCM_I16;
-    if (encoding == 4) {
+    if (encoding == 4) { // AudioFormat.ENCODING_PCM_FLOAT
         format = AAUDIO_FORMAT_PCM_FLOAT;
-    } else if (encoding == 2) {
+    } else if (encoding == 2) { // AudioFormat.ENCODING_PCM_16BIT
         format = AAUDIO_FORMAT_PCM_I16;
+    } else if (encoding == 21 || encoding == 3) { // 24-bit packed
+        format = AAUDIO_FORMAT_PCM_I24_PACKED;
     }
 
     return g_engine->openStream(sample_rate, channel_count, format, device_id);
@@ -46,6 +48,18 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeFlush(JNIEnv *env, jobje
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeClose(JNIEnv *env, jobject thiz) {
     if (g_engine) g_engine->closeStream();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeWriteByteArray(
+        JNIEnv *env, jobject thiz,
+        jbyteArray byte_array, jint offset, jint length) {
+    if (!g_engine || !byte_array || length <= 0) return 0;
+    jbyte* data = env->GetByteArrayElements(byte_array, nullptr);
+    if (!data) return 0;
+    size_t written = g_engine->write(reinterpret_cast<const uint8_t*>(data + offset), length);
+    env->ReleaseByteArrayElements(byte_array, data, JNI_ABORT);
+    return static_cast<jint>(written);
 }
 
 JNIEXPORT jint JNICALL

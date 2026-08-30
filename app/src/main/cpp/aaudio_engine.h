@@ -1,10 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <aaudio/AAudio.h>
 #include <atomic>
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <cstring>
 #include <android/log.h>
 
 #define LOG_TAG "BitPerfectEngine"
@@ -77,8 +78,6 @@ public:
     static void errorCallback(
         AAudioStream *stream, void *userData, aaudio_result_t error
     );
-
-    double phase_ = 0.0;
 
 private:
     AAudioStream* stream_ = nullptr;
