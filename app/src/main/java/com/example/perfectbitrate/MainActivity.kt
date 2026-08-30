@@ -1,324 +1,538 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
-import android.annotation.SuppressLint
+import com.example.perfectbitrate.R
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.SharedPreferences
+import android.graphics.Color
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
-import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioTrack
+import android.media.AudioPlaybackConfiguration
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
-import android.view.MotionEvent
-import android.webkit.ConsoleMessage
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.view.KeyEvent
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import org.json.JSONObject
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebExtension
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.abs
+import kotlin.math.log10
+import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var textStatus: TextView
-    private lateinit var webViewMusic: WebView
+    private lateinit var badgeDirect: TextView
+    private lateinit var textDacName: TextView
+    private lateinit var textRateBits: TextView
+    private lateinit var textCodec: TextView
+    private lateinit var textTransfer: TextView
+    private lateinit var textPeak: TextView
+    private lateinit var textBitDepth: TextView
+
+    private lateinit var geckoView: GeckoView
+    private lateinit var geckoSession: GeckoSession
+    private var geckoRuntime: GeckoRuntime? = null
     private lateinit var audioManager: AudioManager
-    private var audioTrack: AudioTrack? = null
-    private var currentSampleRate = 48000
+    private lateinit var spinnerBitDepth: Spinner
+    private lateinit var switchAdBlock: SwitchCompat
+    private lateinit var switchVolLock: SwitchCompat
+    private lateinit var prefs: SharedPreferences
+
+    private var playbackService: BitPerfectPlaybackService? = null
+    private var isServiceBound = false
+    private var activeWebExtensionPort: WebExtension.Port? = null
+
+    private val sampleRate = 48000
     private var pcmPacketCount = 0L
+    private var dacName = "未接続"
+    private var activeDacDevice: AudioDeviceInfo? = null
+    private var currentCodec = "OPUS 160kbps (48k)"
+
+    private var currentBitMode = "16bit"
+    private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Float)")
+    private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
+
+    private var maxPeakL = 0
+    private var maxPeakR = 0
+    private var maxPeakFloatL = 0f
+    private var maxPeakFloatR = 0f
+    private var bitActivityMask = 0
+    private var isAdBlockOn = true
+    private var isVolLockOn = false
+    private var isPlayingState = false
+
+    private var isOtherAppInterfering = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as BitPerfectPlaybackService.LocalBinder
+            playbackService = binder.getService()
+            isServiceBound = true
+            detectUsbDac()
+            playbackService?.isVolumeLocked = isVolLockOn
+            playbackService?.currentBitMode = currentBitMode
+            playbackService?.setDacDevice(activeDacDevice)
+
+            playbackService?.onCommandListener = { cmd ->
+                try {
+                    val jsonCmd = JSONObject().apply { put("command", cmd) }
+                    activeWebExtensionPort?.postMessage(jsonCmd)
+                } catch (e: Exception) {
+                    Log.e("BitPerfect", "Failed to send command", e)
+                }
+            }
+
+            playbackService?.onSeekListener = { pos ->
+                try {
+                    val jsonCmd = JSONObject().apply {
+                        put("command", "seek")
+                        put("position", pos)
+                    }
+                    activeWebExtensionPort?.postMessage(jsonCmd)
+                } catch (e: Exception) {
+                    Log.e("BitPerfect", "Failed to send seek", e)
+                }
+            }
+            Log.i("BitPerfect", "PlaybackService connected.")
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            playbackService = null
+            isServiceBound = false
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        textStatus = findViewById(R.id.textStatus)
-        webViewMusic = findViewById(R.id.webViewMusic)
+        badgeDirect = findViewById(R.id.badgeDirect)
+        textDacName = findViewById(R.id.textDacName)
+        textRateBits = findViewById(R.id.textRateBits)
+        textCodec = findViewById(R.id.textCodec)
+        textTransfer = findViewById(R.id.textTransfer)
+        textPeak = findViewById(R.id.textPeak)
+        textBitDepth = findViewById(R.id.textBitDepth)
+
+        geckoView = findViewById(R.id.geckoview)
+        spinnerBitDepth = findViewById(R.id.spinnerBitDepth)
+        switchAdBlock = findViewById(R.id.switchAdBlock)
+        switchVolLock = findViewById(R.id.switchVolLock)
         val btnReload = findViewById<Button>(R.id.btnReload)
+
+        prefs = getSharedPreferences("bp_settings", Context.MODE_PRIVATE)
+        isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
+        isVolLockOn = false
+        currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
+
+        switchAdBlock.isChecked = isAdBlockOn
+        switchVolLock.isChecked = isVolLockOn
+
+        val adapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
+        adapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerBitDepth.adapter = adapter
+
+        val initialIndex = bitModeValues.indexOf(currentBitMode).let { if (it >= 0) it else 0 }
+        spinnerBitDepth.setSelection(initialIndex)
+
+        spinnerBitDepth.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selectedMode = bitModeValues[position]
+                if (selectedMode != currentBitMode) {
+                    currentBitMode = selectedMode
+                    prefs.edit { putString("selected_bit_mode", selectedMode) }
+                    sendBitModeSetting(selectedMode)
+                    if (isPlayingState) {
+                        playbackService?.initAudioTrack(selectedMode, activeDacDevice)
+                    }
+                    bitActivityMask = 0
+                    maxPeakL = 0
+                    maxPeakR = 0
+                    maxPeakFloatL = 0f
+                    maxPeakFloatR = 0f
+                    updateStatus()
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
+            isAdBlockOn = isChecked
+            prefs.edit { putBoolean("ad_block_enabled", isChecked) }
+            sendAdBlockSetting(isChecked)
+        }
+
+        switchVolLock.setOnCheckedChangeListener { _, isChecked ->
+            isVolLockOn = isChecked
+            prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
+            playbackService?.isVolumeLocked = isChecked
+            if (isChecked) {
+                playbackService?.lockSystemVolumeToMax()
+            }
+            updateStatus()
+        }
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        // 初期ハードウェア DIRECT 出力設定 (48000Hz)
-        setupDirectAudioTrack(48000)
+        registerAudioPlaybackCallback()
 
-        setupWebView()
+        val serviceIntent = Intent(this, BitPerfectPlaybackService::class.java)
+        ContextCompat.startForegroundService(this, serviceIntent)
+        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+
+        registerAudioDeviceCallback()
+        setupGeckoView()
 
         btnReload.setOnClickListener {
+            reloadDirectStream()
+        }
+        btnReload.setOnLongClickListener {
+            reloadDirectStream()
+            true
+        }
+    }
+
+    private fun reloadDirectStream() {
+        Log.i("BitPerfect", "Reloading Direct Stream...")
+        runOnUiThread {
             pcmPacketCount = 0L
-            webViewMusic.reload()
+            bitActivityMask = 0
+            maxPeakL = 0
+            maxPeakR = 0
+            maxPeakFloatL = 0f
+            maxPeakFloatR = 0f
+            playbackService?.forceCloseDacStream()
+            playbackService?.resetBuffer()
+            geckoSession.reload()
+            updateStatus()
         }
     }
 
-    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-    private fun setupWebView() {
-        webViewMusic.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            allowFileAccess = true
-            allowContentAccess = true
-            // ★デスクトップ版 Chrome UA (制限なし・高音質ストリーム)
-            userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        }
+    private fun registerAudioPlaybackCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioManager.registerAudioPlaybackCallback(object : AudioManager.AudioPlaybackCallback() {
+                override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
+                    super.onPlaybackConfigChanged(configs)
+                    if (configs == null) return
 
-        CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webViewMusic, true)
+                    val activeConfigs = configs.filter { it.audioAttributes.usage != AudioAttributes.USAGE_UNKNOWN }
 
-        // 画面タップ時に AudioContext を確実にアクティブ化
-        webViewMusic.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_DOWN) {
-                webViewMusic.evaluateJavascript("if(window.__resumeAudio) window.__resumeAudio();", null)
-            }
-            false
-        }
+                    val otherInterfering = activeConfigs.size > 2 || activeConfigs.any { config ->
+                        val usage = config.audioAttributes.usage
+                        usage == AudioAttributes.USAGE_NOTIFICATION ||
+                        usage == AudioAttributes.USAGE_ALARM ||
+                        usage == AudioAttributes.USAGE_ASSISTANCE_SONIFICATION ||
+                        usage == AudioAttributes.USAGE_GAME ||
+                        usage == AudioAttributes.USAGE_VOICE_COMMUNICATION
+                    }
 
-        // Web Audio API とのブリッジ
-        webViewMusic.addJavascriptInterface(object {
-            @JavascriptInterface
-            fun onPcmData(base64Pcm: String, sampleRate: Int) {
-                try {
-                    val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
-                    handleIncomingPcm(pcmBytes, sampleRate)
-                } catch (e: Exception) {
-                    Log.e("WebAudioBridge", "Decode error: ${e.message}")
-                }
-            }
-
-            @JavascriptInterface
-            fun onLog(msg: String) {
-                Log.i("WebAudioJS", msg)
-                runOnUiThread {
-                    if (pcmPacketCount == 0L) {
-                        textStatus.text = "【状態】$msg"
+                    if (isOtherAppInterfering != otherInterfering) {
+                        isOtherAppInterfering = otherInterfering
+                        updateStatus()
                     }
                 }
-            }
-        }, "AndroidAudioBridge")
-
-        webViewMusic.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                Log.d("WebConsole", "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()}")
-                return true
-            }
-        }
-
-        webViewMusic.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                injectOptimizedWebAudioScript()
-            }
-        }
-
-        webViewMusic.loadUrl("https://music.youtube.com")
-    }
-
-    // ★ 0.05ms で処理が完了する超高速 Web Audio スクリプト
-    private fun injectOptimizedWebAudioScript() {
-        val hijackJs = """
-            (function() {
-                if (window.__pcmOptInjected) return;
-                window.__pcmOptInjected = true;
-
-                var audioCtx = null;
-                var hookedElements = new WeakSet();
-
-                window.__resumeAudio = function() {
-                    if (audioCtx && audioCtx.state === 'suspended') {
-                        audioCtx.resume();
-                    }
-                };
-
-                function getAudioContext() {
-                    if (!audioCtx) {
-                        var AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                        audioCtx = new AudioContextClass({ sampleRate: 48000 });
-                    }
-                    if (audioCtx.state === 'suspended') {
-                        audioCtx.resume();
-                    }
-                    return audioCtx;
-                }
-
-                function hookElement(element) {
-                    if (!element || hookedElements.has(element)) return;
-
-                    try {
-                        var ctx = getAudioContext();
-                        var source = ctx.createMediaElementSource(element);
-                        var processor = ctx.createScriptProcessor(4096, 2, 2);
-
-                        var muteGain = ctx.createGain();
-                        muteGain.gain.value = 0.0;
-
-                        processor.onaudioprocess = function(e) {
-                            var left = e.inputBuffer.getChannelData(0);
-                            var right = e.inputBuffer.getChannelData(1);
-                            var len = left.length;
-
-                            var pcm16 = new Int16Array(len * 2);
-                            for (var i = 0; i < len; i++) {
-                                var l = Math.max(-1, Math.min(1, left[i]));
-                                var r = Math.max(-1, Math.min(1, right[i]));
-                                pcm16[i * 2] = l < 0 ? l * 32768 : l * 32767;
-                                pcm16[i * 2 + 1] = r < 0 ? r * 32768 : r * 32767;
-                            }
-
-                            // ★超高速チャンク変換 (負荷ゼロ)
-                            var u8 = new Uint8Array(pcm16.buffer);
-                            var binary = "";
-                            var chunkSize = 8192;
-                            for (var k = 0; k < u8.length; k += chunkSize) {
-                                binary += String.fromCharCode.apply(null, u8.subarray(k, k + chunkSize));
-                            }
-
-                            if (window.AndroidAudioBridge) {
-                                window.AndroidAudioBridge.onPcmData(btoa(binary), ctx.sampleRate);
-                            }
-                        };
-
-                        source.connect(processor);
-                        processor.connect(muteGain);
-                        muteGain.connect(ctx.destination);
-
-                        hookedElements.add(element);
-
-                        if (window.AndroidAudioBridge) {
-                            window.AndroidAudioBridge.onLog("★ ハイジャック完了 (直通出力中)");
-                        }
-                    } catch(err) {
-                        if (window.AndroidAudioBridge) {
-                            window.AndroidAudioBridge.onLog("Hook: " + err.message);
-                        }
-                    }
-                }
-
-                document.addEventListener('play', function(e) {
-                    if (e.target && (e.target.tagName === 'VIDEO' || e.target.tagName === 'AUDIO')) {
-                        getAudioContext();
-                        hookElement(e.target);
-                    }
-                }, true);
-
-                document.addEventListener('playing', function(e) {
-                    if (e.target && (e.target.tagName === 'VIDEO' || e.target.tagName === 'AUDIO')) {
-                        getAudioContext();
-                        hookElement(e.target);
-                    }
-                }, true);
-
-                setInterval(function() {
-                    var el = document.querySelector('video') || document.querySelector('audio');
-                    if (el && !hookedElements.has(el)) {
-                        hookElement(el);
-                    }
-                }, 1000);
-            })();
-        """.trimIndent()
-
-        webViewMusic.evaluateJavascript(hijackJs, null)
-    }
-
-    private fun handleIncomingPcm(pcmBytes: ByteArray, sampleRate: Int) {
-        if (currentSampleRate != sampleRate || audioTrack == null) {
-            setupDirectAudioTrack(sampleRate)
-        }
-
-        // Direct AudioTrack へ PCM データを直接書き込み（DDCへ直通）
-        audioTrack?.write(pcmBytes, 0, pcmBytes.size)
-
-        pcmPacketCount++
-        if (pcmPacketCount % 20 == 0L) {
-            val usbDevice = getUsbAudioDevice()
-            runOnUiThread {
-                textStatus.text = "【Bit-Perfect 再生中】\n" +
-                        "・レート: $sampleRate Hz\n" +
-                        "・DAC: ${usbDevice?.productName ?: "Pamp DDC"}\n" +
-                        "・転送中: ${pcmPacketCount * 4096 / 1024} KB (直通出力)"
-            }
+            }, Handler(Looper.getMainLooper()))
         }
     }
 
-    private fun setupDirectAudioTrack(sampleRate: Int) {
-        currentSampleRate = sampleRate
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
+            playbackService?.lockSystemVolumeToMax()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun sendAdBlockSetting(enabled: Boolean) {
         try {
-            audioTrack?.stop()
-            audioTrack?.release()
-        } catch (e: Exception) {}
-        audioTrack = null
-
-        val usbDevice = getUsbAudioDevice()
-
-        // 1. Android 14/15 ハードウェア DIRECT 出力属性を設定
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && usbDevice != null) {
-            try {
-                val mixers = audioManager.getSupportedMixerAttributes(usbDevice)
-                val matched = mixers.firstOrNull {
-                    it.format.sampleRate == sampleRate && it.format.encoding == AudioFormat.ENCODING_PCM_16BIT
-                } ?: mixers.firstOrNull {
-                    it.format.sampleRate == sampleRate
-                }
-
-                if (matched != null) {
-                    val mediaAttr = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-
-                    audioManager.setPreferredMixerAttributes(mediaAttr, usbDevice, matched)
-                }
-            } catch (e: Exception) {
-                Log.e("DirectTrack", "Mixer error: ${e.message}")
+            val jsonCmd = JSONObject().apply {
+                put("command", "setAdBlock")
+                put("enabled", enabled)
             }
-        }
-
-        // 2. Direct AudioTrack を生成
-        val playbackAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-
-        val pcmFormat = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-            .build()
-
-        val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-        val bufferSize = if (minBuf > 0) minBuf * 4 else 8192
-
-        audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(playbackAttributes)
-            .setAudioFormat(pcmFormat)
-            .setBufferSizeInBytes(bufferSize)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-
-        audioTrack?.play()
+            activeWebExtensionPort?.postMessage(jsonCmd)
+        } catch (e: Exception) {}
     }
 
-    private fun getUsbAudioDevice(): AudioDeviceInfo? {
+    private fun sendBitModeSetting(mode: String) {
+        try {
+            val jsonCmd = JSONObject().apply {
+                put("command", "setBitMode")
+                put("mode", mode)
+            }
+            activeWebExtensionPort?.postMessage(jsonCmd)
+        } catch (e: Exception) {}
+    }
+
+    private fun registerAudioDeviceCallback() {
+        audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                detectUsbDac()
+                playbackService?.setDacDevice(activeDacDevice)
+            }
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                detectUsbDac()
+                playbackService?.setDacDevice(activeDacDevice)
+            }
+        }, Handler(Looper.getMainLooper()))
+    }
+
+    private fun detectUsbDac() {
         val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        activeDacDevice = null
+        dacName = "内蔵スピーカー"
         for (device in devices) {
-            if (device.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
-                device.type == AudioDeviceInfo.TYPE_USB_HEADSET
-            ) {
-                return device
+            if (device.type == AudioDeviceInfo.TYPE_USB_DEVICE || 
+                device.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+                activeDacDevice = device
+                dacName = device.productName.toString().replace("USB-Audio - ", "")
+                break
             }
         }
-        return null
+        updateStatus()
+    }
+
+    private fun analyzePcm(pcmBytes: ByteArray, bitMode: String) {
+        val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+        when (bitMode) {
+            "32bit" -> {
+                while (buffer.remaining() >= 8) {
+                    val sampleL = buffer.float
+                    val sampleR = buffer.float
+                    maxPeakFloatL = max(maxPeakFloatL, abs(sampleL))
+                    maxPeakFloatR = max(maxPeakFloatR, abs(sampleR))
+                }
+            }
+            "24bit" -> {
+                while (buffer.remaining() >= 6) {
+                    val b0L = buffer.get().toInt() and 0xFF
+                    val b1L = buffer.get().toInt() and 0xFF
+                    val b2L = buffer.get().toInt()
+                    val valL = (b2L shl 16) or (b1L shl 8) or b0L
+
+                    val b0R = buffer.get().toInt() and 0xFF
+                    val b1R = buffer.get().toInt() and 0xFF
+                    val b2R = buffer.get().toInt()
+                    val valR = (b2R shl 16) or (b1R shl 8) or b0R
+
+                    maxPeakL = max(maxPeakL, abs(valL))
+                    maxPeakR = max(maxPeakR, abs(valR))
+                    bitActivityMask = bitActivityMask or (valL and 0xFFFFFF) or (valR and 0xFFFFFF)
+                }
+            }
+            else -> {
+                while (buffer.remaining() >= 4) {
+                    val sampleL = buffer.short
+                    val sampleR = buffer.short
+                    maxPeakL = max(maxPeakL, abs(sampleL.toInt()))
+                    maxPeakR = max(maxPeakR, abs(sampleR.toInt()))
+                    val rawL = sampleL.toInt() and 0xFFFF
+                    val rawR = sampleR.toInt() and 0xFFFF
+                    bitActivityMask = bitActivityMask or rawL or rawR
+                }
+            }
+        }
+    }
+
+    private fun handleIncomingMessage(msg: JSONObject) {
+        when (msg.optString("type")) {
+            "pcm" -> {
+                val base64Pcm = msg.getString("pcm")
+                val bitMode = msg.optString("bitMode", currentBitMode)
+                val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
+                pcmPacketCount += pcmBytes.size
+                isPlayingState = true
+                analyzePcm(pcmBytes, bitMode)
+
+                playbackService?.pushPcm(pcmBytes, 48000, bitMode)
+                updateStatus()
+            }
+            "codec" -> {
+                currentCodec = msg.optString("codec", currentCodec)
+                playbackService?.updateCodec(currentCodec)
+                updateStatus()
+            }
+            "meta" -> {
+                val title = msg.optString("title", "YouTube Music")
+                val artist = msg.optString("artist", "")
+                val artwork = msg.optString("artwork", "")
+                playbackService?.updateMetadata(title, artist, artwork)
+            }
+            "progress" -> {
+                val current = msg.optLong("current", 0L)
+                val duration = msg.optLong("duration", 0L)
+                val isPlaying = msg.optBoolean("playing", isPlayingState)
+                isPlayingState = isPlaying
+                playbackService?.updateProgress(current, duration, isPlaying)
+                updateStatus()
+            }
+            "state" -> {
+                val isPlaying = msg.optBoolean("playing", true)
+                isPlayingState = isPlaying
+                if (!isPlaying) {
+                    maxPeakL = 0
+                    maxPeakR = 0
+                    maxPeakFloatL = 0f
+                    maxPeakFloatR = 0f
+                }
+                playbackService?.updatePlaybackState(isPlaying)
+                updateStatus()
+            }
+        }
+    }
+
+    private fun updateStatus() {
+        runOnUiThread {
+            val mb = pcmPacketCount / (1024.0 * 1024.0)
+
+            if (activeDacDevice != null) {
+                badgeDirect.text = "DIRECT STREAM"
+                badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
+                badgeDirect.setTextColor(Color.BLACK)
+            } else {
+                badgeDirect.text = "STANDARD MIX"
+                badgeDirect.setBackgroundResource(R.drawable.bg_badge_normal)
+                badgeDirect.setTextColor(Color.LTGRAY)
+            }
+            textDacName.text = dacName
+
+            val bitLabel = when (currentBitMode) {
+                "32bit" -> "32 bit Float"
+                "24bit" -> "24 bit"
+                else -> "16 bit"
+            }
+
+            textRateBits.text = "48.0 kHz / $bitLabel"
+            textCodec.text = currentCodec.uppercase()
+            textTransfer.text = String.format("%.1f MB", mb)
+
+            if (currentBitMode == "32bit") {
+                val peakDbfsL = if (maxPeakFloatL > 0f) String.format("%.1f", 20 * log10(maxPeakFloatL)) else "-inf"
+                val peakDbfsR = if (maxPeakFloatR > 0f) String.format("%.1f", 20 * log10(maxPeakFloatR)) else "-inf"
+                textPeak.text = "PEAK  L: ${peakDbfsL} dB  /  R: ${peakDbfsR} dB"
+                textBitDepth.text = "BIT: 32/32 ACTIVE"
+            } else if (currentBitMode == "24bit") {
+                val peakDbfsL = if (maxPeakL > 0) String.format("%.1f", 20 * log10(maxPeakL / 8388607.0)) else "-inf"
+                val peakDbfsR = if (maxPeakR > 0) String.format("%.1f", 20 * log10(maxPeakR / 8388607.0)) else "-inf"
+                val activeBits = Integer.bitCount(bitActivityMask).coerceAtMost(24)
+                textPeak.text = "PEAK  L: ${peakDbfsL} dB  /  R: ${peakDbfsR} dB"
+                textBitDepth.text = "BIT: $activeBits/24 ACTIVE"
+            } else {
+                val peakDbfsL = if (maxPeakL > 0) String.format("%.1f", 20 * log10(maxPeakL / 32767.0)) else "-inf"
+                val peakDbfsR = if (maxPeakR > 0) String.format("%.1f", 20 * log10(maxPeakR / 32767.0)) else "-inf"
+                val activeBits = Integer.bitCount(bitActivityMask and 0xFFFF).coerceAtMost(16)
+                textPeak.text = "PEAK  L: ${peakDbfsL} dB  /  R: ${peakDbfsR} dB"
+                textBitDepth.text = "BIT: $activeBits/16 ACTIVE"
+            }
+            textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
+        }
+    }
+
+    private fun setupGeckoView() {
+        val runtimeSettings = GeckoRuntimeSettings.Builder()
+            .consoleOutput(true)
+            .build()
+
+        geckoRuntime = GeckoRuntime.getDefault(this)
+
+        val sessionSettings = GeckoSessionSettings.Builder()
+            .usePrivateMode(false)
+            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
+            .allowJavascript(true)
+            .build()
+
+        geckoSession = GeckoSession(sessionSettings)
+        geckoRuntime?.let { runtime ->
+            geckoSession.open(runtime)
+            geckoView.setSession(geckoSession)
+
+            val extensionLocation = "resource://android/assets/yt_capture_extension/"
+            val extensionId = "yt_capture@example.com"
+
+            val messageDelegate = object : WebExtension.MessageDelegate {
+                override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
+                    if (message is JSONObject) {
+                        handleIncomingMessage(message)
+                    }
+                    return GeckoResult.fromValue(JSONObject())
+                }
+
+                override fun onConnect(port: WebExtension.Port) {
+                    activeWebExtensionPort = port
+                    sendAdBlockSetting(isAdBlockOn)
+                    sendBitModeSetting(currentBitMode)
+                    updateStatus()
+
+                    port.setDelegate(object : WebExtension.PortDelegate {
+                        override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                            if (message is JSONObject) {
+                                handleIncomingMessage(message)
+                            }
+                        }
+                        override fun onDisconnect(port: WebExtension.Port) {
+                            if (activeWebExtensionPort == port) activeWebExtensionPort = null
+                            updateStatus()
+                        }
+                    })
+                }
+            }
+
+            runtime.webExtensionController
+                .ensureBuiltIn(extensionLocation, extensionId)
+                .accept({ extension ->
+                    if (extension != null) {
+                        runOnUiThread {
+                            extension.setMessageDelegate(messageDelegate, "browser")
+                            geckoSession.webExtensionController.setMessageDelegate(extension, messageDelegate, "browser")
+                        }
+                    }
+                }, { e ->
+                    Log.e("BitPerfect", "WebExtension error", e)
+                })
+        }
+
+        geckoSession.loadUri("https://music.youtube.com")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        geckoSession.setActive(true)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        geckoSession.setActive(true)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            audioTrack?.stop()
-            audioTrack?.release()
-        } catch (e: Exception) {}
+        if (isServiceBound) {
+            unbindService(serviceConnection)
+            isServiceBound = false
+        }
+        geckoSession.close()
     }
 }

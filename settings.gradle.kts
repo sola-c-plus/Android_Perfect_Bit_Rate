@@ -1,5 +1,6 @@
-pluginManagement {
+﻿pluginManagement {
     repositories {
+        maven { url = uri("https://maven.mozilla.org/maven2/") }
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -14,9 +15,10 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        maven { url = uri("https://maven.mozilla.org/maven2/") }
         google()
         mavenCentral()
-        // JitPack リポジトリ
+        // JitPack 繝ｪ繝昴ず繝医Μ
         maven { url = uri("https://jitpack.io") }
     }
 }
