@@ -13,6 +13,7 @@ let audioCtx = null;
 let cachedSourceNode = null;
 let cachedVideoElement = null;
 let processor = null;
+let isVideoEventsHooked = false;
 
 const itagMap = {
     '251': { name: 'Opus 160kbps (最高音質 48k)', rate: 48000 },
@@ -23,6 +24,32 @@ const itagMap = {
     '256': { name: 'AAC 256kbps (HQ 44.1k)', rate: 44100 },
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
+
+// 超高速 Base64 エンコーダー (GCゴミを発生させず超低負荷)
+const b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function fastUint8ToBase64(bytes) {
+    let result = '';
+    const len = bytes.length;
+    const extraBytes = len % 3;
+    const mainLen = len - extraBytes;
+    for (let i = 0; i < mainLen; i += 3) {
+        const chunk = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+        result += b64chars[(chunk >> 18) & 63] +
+                  b64chars[(chunk >> 12) & 63] +
+                  b64chars[(chunk >> 6) & 63] +
+                  b64chars[chunk & 63];
+    }
+    if (extraBytes === 1) {
+        const chunk = bytes[mainLen];
+        result += b64chars[(chunk >> 2) & 63] + b64chars[(chunk << 4) & 63] + "==";
+    } else if (extraBytes === 2) {
+        const chunk = (bytes[mainLen] << 8) | bytes[mainLen + 1];
+        result += b64chars[(chunk >> 10) & 63] +
+                  b64chars[(chunk >> 4) & 63] +
+                  b64chars[(chunk << 2) & 63] + "=";
+    }
+    return result;
+}
 
 let adStyleElement = null;
 function updateAdBlockStyles(enable) {
@@ -51,12 +78,14 @@ updateAdBlockStyles(true);
 
 function safeAdSkip() {
     if (!adBlockEnabled) return;
-    const skipBtns = document.querySelectorAll('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button-container');
-    skipBtns.forEach(btn => { try { btn.click(); } catch(e) {} });
+    const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button');
+    if (skipBtn) {
+        try { skipBtn.click(); } catch(e) {}
+    }
 
     const player = document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
     const isAd = player?.classList.contains('ad-showing') || player?.classList.contains('ad-interrupting');
-    const video = document.querySelector('video');
+    const video = cachedVideoElement || document.querySelector('video');
 
     if (isAd && video) {
         video.playbackRate = 8.0;
@@ -67,15 +96,7 @@ function safeAdSkip() {
         video.playbackRate = 1.0;
     }
 }
-setInterval(safeAdSkip, 300);
-
-function forceFullVolume() {
-    const video = document.querySelector('video');
-    if (video && video.volume < 1.0) {
-        video.volume = 1.0;
-    }
-}
-setInterval(forceFullVolume, 1000);
+setInterval(safeAdSkip, 500);
 
 function scanStreamCodec() {
     let detectedName = "";
@@ -83,7 +104,9 @@ function scanStreamCodec() {
 
     try {
         const entries = performance.getEntriesByType('resource');
-        for (let i = entries.length - 1; i >= 0; i--) {
+        // 最新の15件のみを走査（メモリ肥大・CPU負荷防止）
+        const startIdx = Math.max(0, entries.length - 15);
+        for (let i = entries.length - 1; i >= startIdx; i--) {
             const url = entries[i].name;
             if (url.includes('videoplayback')) {
                 const matchItag = url.match(/[?&]itag=(\d+)/);
@@ -106,6 +129,10 @@ function scanStreamCodec() {
                 }
             }
         }
+        // 通信ログが溜まりすぎたらクリア
+        if (entries.length > 60) {
+            performance.clearResourceTimings();
+        }
     } catch(e) {}
 
     if (detectedName && (detectedName !== lastCodecName || detectedRate !== currentSampleRate)) {
@@ -123,7 +150,25 @@ function scanStreamCodec() {
         }
     }
 }
-setInterval(scanStreamCodec, 800);
+
+function hookVideoEvents(video) {
+    if (cachedVideoElement === video && isVideoEventsHooked) return;
+    cachedVideoElement = video;
+    isVideoEventsHooked = true;
+
+    video.addEventListener('play', () => {
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        scanStreamCodec();
+        if (port) port.postMessage({ type: "state", playing: true });
+    });
+    video.addEventListener('pause', () => {
+        if (audioCtx && audioCtx.state === 'running') audioCtx.suspend();
+        if (port) port.postMessage({ type: "state", playing: false });
+    });
+    video.addEventListener('loadstart', scanStreamCodec);
+    video.addEventListener('loadeddata', scanStreamCodec);
+    video.addEventListener('emptied', () => { lastCodecName = ""; scanStreamCodec(); });
+}
 
 function setupAudioPipeline() {
     const video = document.querySelector('video') || document.querySelector('audio');
@@ -138,16 +183,12 @@ function setupAudioPipeline() {
             });
         }
 
-        if (cachedVideoElement !== video || !cachedSourceNode) {
-            cachedVideoElement = video;
+        hookVideoEvents(video);
+
+        if (!cachedSourceNode) {
             try {
                 cachedSourceNode = audioCtx.createMediaElementSource(video);
             } catch(err) {}
-
-            // 曲が切り替わった瞬間に即座にコーデックを再スキャン
-            video.addEventListener('loadstart', scanStreamCodec);
-            video.addEventListener('loadeddata', scanStreamCodec);
-            video.addEventListener('emptied', () => { lastCodecName = ""; scanStreamCodec(); });
         }
 
         if (cachedSourceNode && !processor) {
@@ -225,17 +266,11 @@ function setupAudioPipeline() {
                     bytes = new Uint8Array(buffer);
                 }
 
-                let binary = '';
-                const chunkSize = 8192;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-                }
-
                 if (port) {
                     try {
                         port.postMessage({
                             type: "pcm",
-                            pcm: btoa(binary),
+                            pcm: fastUint8ToBase64(bytes),
                             sampleRate: currentSampleRate,
                             bitMode: currentBitMode
                         });
@@ -248,16 +283,6 @@ function setupAudioPipeline() {
             try { cachedSourceNode.disconnect(); } catch(e) {}
             cachedSourceNode.connect(processor);
         }
-
-        video.addEventListener('play', () => {
-            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-            scanStreamCodec();
-            if (port) port.postMessage({ type: "state", playing: true });
-        });
-        video.addEventListener('pause', () => {
-            if (audioCtx && audioCtx.state === 'running') audioCtx.suspend();
-            if (port) port.postMessage({ type: "state", playing: false });
-        });
     } catch(e) {
         console.error("[BitPerfect] Pipeline error", e);
     }
@@ -268,18 +293,20 @@ function connectNativePort() {
         port = browser.runtime.connectNative("browser");
         port.onMessage.addListener((msg) => {
             const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
-            const video = document.querySelector('video');
+            const video = cachedVideoElement || document.querySelector('video');
 
             if (cmd === 'play') {
                 if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
-                document.querySelector('#play-pause-button')?.click();
+                document.querySelector('#play-pause-button, .play-pause-button')?.click();
             } else if (cmd === 'pause') {
                 if (video) video.pause();
-                document.querySelector('#play-pause-button')?.click();
+                document.querySelector('#play-pause-button, .play-pause-button')?.click();
             } else if (cmd === 'next') {
-                document.querySelector('.next-button')?.click();
+                const nextBtn = document.querySelector('.next-button, [aria-label="次の曲"], [aria-label="Next track"]');
+                if (nextBtn) nextBtn.click();
             } else if (cmd === 'prev') {
-                document.querySelector('.previous-button')?.click();
+                const prevBtn = document.querySelector('.previous-button, [aria-label="前の曲"], [aria-label="Previous track"]');
+                if (prevBtn) prevBtn.click();
             } else if (cmd === 'seek' && msg.position !== undefined) {
                 if (video) video.currentTime = msg.position / 1000.0;
             } else if (cmd === 'setAdBlock' && msg.enabled !== undefined) {
@@ -296,7 +323,7 @@ function connectNativePort() {
 connectNativePort();
 
 function syncPlaybackProgress() {
-    const video = document.querySelector('video');
+    const video = cachedVideoElement || document.querySelector('video');
     if (video && port && !isNaN(video.duration) && video.duration > 0) {
         try {
             port.postMessage({
@@ -328,6 +355,6 @@ function checkMetadata() {
 }
 setInterval(checkMetadata, 1000);
 
-setInterval(setupAudioPipeline, 1000);
+setInterval(setupAudioPipeline, 2000);
 document.addEventListener('click', setupAudioPipeline);
 setupAudioPipeline();

@@ -87,6 +87,8 @@ class MainActivity : AppCompatActivity() {
     private var isPlayingState = false
 
     private var isOtherAppInterfering = false
+    private var lastUiUpdateTime = 0L
+    private val UI_UPDATE_INTERVAL_MS = 200L // 5回/秒にスロットリングしてメインスレッドの負荷を削減
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -371,7 +373,12 @@ class MainActivity : AppCompatActivity() {
                 analyzePcm(pcmBytes, bitMode)
 
                 playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
-                updateStatus()
+
+                val now = System.currentTimeMillis()
+                if (now - lastUiUpdateTime > UI_UPDATE_INTERVAL_MS) {
+                    lastUiUpdateTime = now
+                    updateStatus()
+                }
             }
             "codec" -> {
                 currentCodec = msg.optString("codec", currentCodec)
@@ -459,7 +466,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupGeckoView() {
         val runtimeSettings = GeckoRuntimeSettings.Builder()
-            .consoleOutput(true)
+            .consoleOutput(false) // ログ出力を無効化してGeckoのIPC負荷を削減
+            .aboutConfigEnabled(false)
             .build()
 
         geckoRuntime = GeckoRuntime.getDefault(this)
@@ -467,6 +475,7 @@ class MainActivity : AppCompatActivity() {
         val sessionSettings = GeckoSessionSettings.Builder()
             .usePrivateMode(false)
             .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
+            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .allowJavascript(true)
             .build()
 
