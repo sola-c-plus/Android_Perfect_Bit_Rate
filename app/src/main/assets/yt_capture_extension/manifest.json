@@ -1,0 +1,24 @@
+﻿{
+  "manifest_version": 2,
+  "name": "YT BitPerfect Capture",
+  "version": "1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "yt_capture@example.com"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://music.youtube.com/*", "*://*.youtube.com/*", "<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "<all_urls>"
+  ]
+}

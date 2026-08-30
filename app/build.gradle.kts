@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
@@ -53,6 +53,8 @@ android {
 }
 
 dependencies {
+    implementation("org.mozilla.geckoview:geckoview-omni:121.0.20231230165955")
+    implementation("androidx.media:media:1.7.0")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
@@ -61,7 +63,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-common:1.3.1")
 
-    // ★ JitPack 正式指定形式 (TeamNewPipe.NewPipeExtractor:extractor)
+    // 笘・JitPack 豁｣蠑乗欠螳壼ｽ｢蠑・(TeamNewPipe.NewPipeExtractor:extractor)
     implementation("com.github.TeamNewPipe.NewPipeExtractor:extractor:v0.24.6")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
