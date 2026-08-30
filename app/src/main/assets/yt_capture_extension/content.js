@@ -7,6 +7,7 @@ let lastTitle = "";
 let lastCodecName = "";
 let adBlockEnabled = true;
 let currentBitMode = "16bit";
+let currentSampleRate = 48000;
 
 let audioCtx = null;
 let cachedSourceNode = null;
@@ -14,13 +15,13 @@ let cachedVideoElement = null;
 let processor = null;
 
 const itagMap = {
-    '251': 'Opus 160kbps (最高音質 48k)',
-    '250': 'Opus 70kbps (48k)',
-    '249': 'Opus 50kbps (48k)',
-    '140': 'AAC 128kbps (44.1k)',
-    '141': 'AAC 256kbps (44.1k)',
-    '256': 'AAC 256kbps (HQ 44.1k)',
-    '258': 'AAC 384kbps (5.1ch 44.1k)'
+    '251': { name: 'Opus 160kbps (最高音質 48k)', rate: 48000 },
+    '250': { name: 'Opus 70kbps (48k)', rate: 48000 },
+    '249': { name: 'Opus 50kbps (48k)', rate: 48000 },
+    '140': { name: 'AAC 128kbps (44.1k)', rate: 44100 },
+    '141': { name: 'AAC 256kbps (44.1k)', rate: 44100 },
+    '256': { name: 'AAC 256kbps (HQ 44.1k)', rate: 44100 },
+    '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
 
 let adStyleElement = null;
@@ -78,6 +79,7 @@ setInterval(forceFullVolume, 1000);
 
 function scanStreamCodec() {
     let detectedName = "";
+    let detectedRate = 48000;
 
     try {
         const entries = performance.getEntriesByType('resource');
@@ -88,29 +90,34 @@ function scanStreamCodec() {
                 if (matchItag && matchItag[1]) {
                     const itag = matchItag[1];
                     if (itagMap[itag]) {
-                        detectedName = itagMap[itag];
+                        detectedName = itagMap[itag].name;
+                        detectedRate = itagMap[itag].rate;
                         break;
                     }
                 }
                 if (url.includes('mime=audio%2Fwebm') || url.includes('mime=audio/webm')) {
                     detectedName = 'Opus 160kbps (WebM 48k)';
+                    detectedRate = 48000;
                     break;
                 } else if (url.includes('mime=audio%2Fmp4') || url.includes('mime=audio/mp4')) {
                     detectedName = 'AAC (MP4 44.1k)';
+                    detectedRate = 44100;
                     break;
                 }
             }
         }
     } catch(e) {}
 
-    if (detectedName && (detectedName !== lastCodecName)) {
+    if (detectedName && (detectedName !== lastCodecName || detectedRate !== currentSampleRate)) {
         lastCodecName = detectedName;
+        currentSampleRate = detectedRate;
+
         if (port) {
             try {
                 port.postMessage({
                     type: "codec",
                     codec: detectedName,
-                    sampleRate: 48000
+                    sampleRate: currentSampleRate
                 });
             } catch(e) {}
         }
@@ -133,11 +140,12 @@ function setupAudioPipeline() {
 
         if (cachedVideoElement !== video || !cachedSourceNode) {
             cachedVideoElement = video;
-            cachedSourceNode = audioCtx.createMediaElementSource(video);
-            scanStreamCodec();
+            try {
+                cachedSourceNode = audioCtx.createMediaElementSource(video);
+            } catch(err) {}
         }
 
-        if (!processor) {
+        if (cachedSourceNode && !processor) {
             processor = audioCtx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
                 if (video.paused || video.ended) {
@@ -146,9 +154,29 @@ function setupAudioPipeline() {
 
                 if (audioCtx.state === 'suspended') audioCtx.resume();
 
-                const left = e.inputBuffer.getChannelData(0);
-                const right = e.inputBuffer.getChannelData(1);
-                const len = left.length;
+                const inL = e.inputBuffer.getChannelData(0);
+                const inR = e.inputBuffer.getChannelData(1);
+                const inLen = inL.length;
+
+                let left = inL;
+                let right = inR;
+                let len = inLen;
+
+                // 44.1kHz音源の場合は、正確な44.1kHz PCMフレーム（44100/48000）へ変換
+                if (currentSampleRate === 44100) {
+                    len = Math.floor(inLen * (44100 / 48000));
+                    left = new Float32Array(len);
+                    right = new Float32Array(len);
+                    const ratio = 48000 / 44100;
+                    for (let i = 0; i < len; i++) {
+                        const pos = i * ratio;
+                        const idx = Math.floor(pos);
+                        const frac = pos - idx;
+                        const nextIdx = Math.min(idx + 1, inLen - 1);
+                        left[i] = inL[idx] * (1 - frac) + inL[nextIdx] * frac;
+                        right[i] = inR[idx] * (1 - frac) + inR[nextIdx] * frac;
+                    }
+                }
 
                 let bytes = null;
 
@@ -204,7 +232,7 @@ function setupAudioPipeline() {
                         port.postMessage({
                             type: "pcm",
                             pcm: btoa(binary),
-                            sampleRate: 48000,
+                            sampleRate: currentSampleRate,
                             bitMode: currentBitMode
                         });
                     } catch(err) {
@@ -212,10 +240,10 @@ function setupAudioPipeline() {
                     }
                 }
             };
-        }
 
-        try { cachedSourceNode.disconnect(); } catch(e) {}
-        cachedSourceNode.connect(processor);
+            try { cachedSourceNode.disconnect(); } catch(e) {}
+            cachedSourceNode.connect(processor);
+        }
 
         video.addEventListener('play', () => {
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();

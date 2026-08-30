@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity() {
     private var isServiceBound = false
     private var activeWebExtensionPort: WebExtension.Port? = null
 
-    private val sampleRate = 48000
+    private var currentSampleRate = 48000
     private var pcmPacketCount = 0L
     private var dacName = "未接続"
     private var activeDacDevice: AudioDeviceInfo? = null
@@ -167,7 +167,7 @@ class MainActivity : AppCompatActivity() {
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
                     sendBitModeSetting(selectedMode)
                     if (isPlayingState) {
-                        playbackService?.initAudioTrack(selectedMode, activeDacDevice)
+                        playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeDacDevice)
                     }
                     bitActivityMask = 0
                     maxPeakL = 0
@@ -362,16 +362,21 @@ class MainActivity : AppCompatActivity() {
             "pcm" -> {
                 val base64Pcm = msg.getString("pcm")
                 val bitMode = msg.optString("bitMode", currentBitMode)
+                val sampleRate = msg.optInt("sampleRate", currentSampleRate)
+                if (sampleRate > 0) currentSampleRate = sampleRate
+
                 val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
                 pcmPacketCount += pcmBytes.size
                 isPlayingState = true
                 analyzePcm(pcmBytes, bitMode)
 
-                playbackService?.pushPcm(pcmBytes, 48000, bitMode)
+                playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
                 updateStatus()
             }
             "codec" -> {
                 currentCodec = msg.optString("codec", currentCodec)
+                val sampleRate = msg.optInt("sampleRate", currentSampleRate)
+                if (sampleRate > 0) currentSampleRate = sampleRate
                 playbackService?.updateCodec(currentCodec)
                 updateStatus()
             }
@@ -425,7 +430,8 @@ class MainActivity : AppCompatActivity() {
                 else -> "16 bit"
             }
 
-            textRateBits.text = "48.0 kHz / $bitLabel"
+            val rateStr = String.format(java.util.Locale.US, "%.1f", currentSampleRate / 1000.0)
+            textRateBits.text = "$rateStr kHz / $bitLabel"
             textCodec.text = currentCodec.uppercase()
             textTransfer.text = String.format("%.1f MB", mb)
 
