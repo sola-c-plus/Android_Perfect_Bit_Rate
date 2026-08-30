@@ -123,7 +123,7 @@ function scanStreamCodec() {
         }
     }
 }
-setInterval(scanStreamCodec, 1000);
+setInterval(scanStreamCodec, 800);
 
 function setupAudioPipeline() {
     const video = document.querySelector('video') || document.querySelector('audio');
@@ -143,6 +143,11 @@ function setupAudioPipeline() {
             try {
                 cachedSourceNode = audioCtx.createMediaElementSource(video);
             } catch(err) {}
+
+            // 曲が切り替わった瞬間に即座にコーデックを再スキャン
+            video.addEventListener('loadstart', scanStreamCodec);
+            video.addEventListener('loadeddata', scanStreamCodec);
+            video.addEventListener('emptied', () => { lastCodecName = ""; scanStreamCodec(); });
         }
 
         if (cachedSourceNode && !processor) {
@@ -162,7 +167,6 @@ function setupAudioPipeline() {
                 let right = inR;
                 let len = inLen;
 
-                // 44.1kHz音源の場合は、正確な44.1kHz PCMフレーム（44100/48000）へ変換
                 if (currentSampleRate === 44100) {
                     len = Math.floor(inLen * (44100 / 48000));
                     left = new Float32Array(len);

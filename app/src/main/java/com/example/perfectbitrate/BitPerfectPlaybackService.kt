@@ -133,11 +133,13 @@ class BitPerfectPlaybackService : Service() {
             isCurrentlyPlaying = true
         }
 
-        if (sampleRate != currentSampleRate || bitMode != currentBitMode || audioTrack == null) {
+        val rateOrModeChanged = (sampleRate != currentSampleRate || bitMode != currentBitMode || audioTrack == null)
+
+        if (rateOrModeChanged) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
             pcmQueue.clear()
-            initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice)
+            initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = true)
         }
 
         if (pcmQueue.remainingCapacity() > 0) {
@@ -152,7 +154,7 @@ class BitPerfectPlaybackService : Service() {
     fun setDacDevice(device: AudioDeviceInfo?) {
         targetDacDevice = device
         if (isCurrentlyPlaying) {
-            initAudioTrack(currentBitMode, currentSampleRate, device)
+            initAudioTrack(currentBitMode, currentSampleRate, device, isRateShift = false)
         }
     }
 
@@ -254,7 +256,7 @@ class BitPerfectPlaybackService : Service() {
             audioLock.lock()
             try {
                 if (audioTrack == null) {
-                    initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice)
+                    initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = false)
                 }
             } finally {
                 audioLock.unlock()
@@ -334,7 +336,12 @@ class BitPerfectPlaybackService : Service() {
         startForeground(1001, notification)
     }
 
-    fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
+    fun initAudioTrack(
+        bitMode: String,
+        sampleRate: Int = currentSampleRate,
+        targetDevice: AudioDeviceInfo? = null,
+        isRateShift: Boolean = false
+    ) {
         audioLock.lock()
         try {
             audioTrack?.let {
@@ -360,7 +367,7 @@ class BitPerfectPlaybackService : Service() {
                 else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
-            // Android 14+ (UPSIDE_DOWN_CAKE): USB DAC の物理クロックを sampleRate (44.1k / 48k) に切り替え
+            // Android 14+ (UPSIDE_DOWN_CAKE): USB DAC の物理クロックを切り替え
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && targetDevice != null) {
                 try {
                     val mixers = audioManager.getSupportedMixerAttributes(targetDevice)
@@ -381,7 +388,7 @@ class BitPerfectPlaybackService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                     val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
-                    Log.i("BitPerfect", "★ Mixer switch to $sampleRate Hz ($bitMode): success=$success")
+                    Log.i("BitPerfect", "★ Mixer switch to $sampleRate Hz: $success")
                 } catch (e: Exception) {
                     Log.e("BitPerfect", "Mixer attribute set error", e)
                 }
@@ -426,6 +433,16 @@ class BitPerfectPlaybackService : Service() {
             }
 
             audioTrack?.play()
+
+            // ★重要: DACのPLLクロック安定化＆ハードウェアミュート解除待ちの無音プリロール
+            // 44.1k <-> 48k のシフト時は 120ms 分のゼロPCMを先行出力して曲頭欠けを完全防止
+            if (isRateShift) {
+                val preRollMs = 120
+                val silenceBytesCount = (sampleRate * 2 * bytesPerSample * preRollMs) / 1000
+                val silenceBuffer = ByteArray(silenceBytesCount)
+                audioTrack?.write(silenceBuffer, 0, silenceBuffer.size, AudioTrack.WRITE_BLOCKING)
+            }
+
             Log.i("BitPerfect", "${sampleRate}Hz DIRECT AudioTrack Opened ($bitMode)")
         } catch (e: Exception) {
             Log.e("BitPerfect", "AudioTrack init error", e)
