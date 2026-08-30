@@ -107,6 +107,16 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(dbL, dbR)
             }
 
+            // DAC切断通知を受けたら即座にスイッチOFF＆音量0
+            playbackService?.onDacDisconnectedListener = {
+                runOnUiThread {
+                    isVolLockOn = false
+                    switchVolLock.isChecked = false
+                    prefs.edit { putBoolean("vol_lock_enabled", false) }
+                    detectUsbDac()
+                }
+            }
+
             playbackService?.onCommandListener = { cmd ->
                 try {
                     val jsonCmd = JSONObject().apply { put("command", cmd) }
@@ -196,7 +206,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            // DACが接続されている時だけ0dBを有効化
             if (isChecked && activeDacDevice == null) {
                 switchVolLock.isChecked = false
                 return@setOnCheckedChangeListener
@@ -330,13 +339,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ★DACが未接続になったら0dBスイッチを自動OFF & 音量安全復帰
-        if (activeDacDevice == null && isVolLockOn) {
-            isVolLockOn = false
-            switchVolLock.isChecked = false
-            prefs.edit { putBoolean("vol_lock_enabled", false) }
+        // DACが抜けた場合は即座に音量0＆0dBスイッチOFF
+        if (activeDacDevice == null) {
+            if (isVolLockOn) {
+                isVolLockOn = false
+                switchVolLock.isChecked = false
+                prefs.edit { putBoolean("vol_lock_enabled", false) }
+            }
             playbackService?.isVolumeLocked = false
-            playbackService?.restoreOriginalVolume()
+            playbackService?.muteVolumeToZero()
         }
 
         updateStatus()
