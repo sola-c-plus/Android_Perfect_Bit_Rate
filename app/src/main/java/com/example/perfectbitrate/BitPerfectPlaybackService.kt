@@ -38,6 +38,7 @@ class BitPerfectPlaybackService : Service() {
     private lateinit var audioManager: AudioManager
     var currentSampleRate = 48000
     var currentBitMode = "16bit"
+    var targetBitMode = "16bit"
     private var targetDacDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
@@ -47,7 +48,6 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    // Android 14 (API 34) 以上かどうかの判定
     private val isAndroid14Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
 
     var isVolumeLocked = false
@@ -137,9 +137,19 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    fun setTargetMode(mode: String) {
+        targetBitMode = mode
+        pcmQueue.clear()
+    }
+
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, bitMode: String) {
         if (!isCurrentlyPlaying) {
             isCurrentlyPlaying = true
+        }
+
+        // 目的のビットモードと異なる古い過渡パケットは破棄
+        if (targetBitMode.isNotEmpty() && bitMode != targetBitMode) {
+            return
         }
 
         val rateOrModeChanged = (sampleRate != currentSampleRate || bitMode != currentBitMode || 
@@ -148,6 +158,7 @@ class BitPerfectPlaybackService : Service() {
         if (rateOrModeChanged) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
+            targetBitMode = bitMode
             pcmQueue.clear()
             initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = true)
         }
@@ -357,7 +368,6 @@ class BitPerfectPlaybackService : Service() {
         startForeground(1001, notification)
     }
 
-    // MainActivityなど互換性のためのオーバーロード
     fun initAudioTrack(
         bitMode: String = currentBitMode,
         sampleRate: Int = currentSampleRate,
@@ -379,6 +389,7 @@ class BitPerfectPlaybackService : Service() {
         audioLock.lock()
         try {
             currentBitMode = bitMode
+            targetBitMode = bitMode
             currentSampleRate = sampleRate
 
             val bytesPerSample = when (bitMode) {
@@ -425,7 +436,7 @@ class BitPerfectPlaybackService : Service() {
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                         val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
-                        Log.i("BitPerfect", "★ [Android 14+] Mixer switch to $sampleRate Hz: $success")
+                        Log.i("BitPerfect", "★ [Android 14+] Mixer switch to $sampleRate Hz ($bitMode): $success")
                     } catch (e: Exception) {
                         Log.e("BitPerfect", "Mixer attribute set error", e)
                     }
@@ -486,7 +497,7 @@ class BitPerfectPlaybackService : Service() {
                     NativeAudioEngine.nativeWriteByteArray(ByteArray(preRollBytes), 0, preRollBytes)
                 }
 
-                Log.i("BitPerfect", "★ [Android 13-] AAudio Exclusive Opened: Rate=$sampleRate Hz, ResultMode=$resultMode")
+                Log.i("BitPerfect", "★ [Android 13-] AAudio Exclusive Opened: Rate=$sampleRate Hz, Mode=$resultMode")
             }
         } catch (e: Exception) {
             Log.e("BitPerfect", "Audio Engine init error", e)

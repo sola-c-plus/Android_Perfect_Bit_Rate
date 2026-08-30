@@ -74,6 +74,7 @@ class MainActivity : AppCompatActivity() {
     private var currentCodec = "OPUS 160kbps (48k)"
 
     private var currentBitMode = "16bit"
+    private var lastAnalyzedBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Float)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
 
@@ -88,7 +89,7 @@ class MainActivity : AppCompatActivity() {
 
     private var isOtherAppInterfering = false
     private var lastUiUpdateTime = 0L
-    private val UI_UPDATE_INTERVAL_MS = 200L // 5回/秒にスロットリングしてメインスレッドの負荷を削減
+    private val UI_UPDATE_INTERVAL_MS = 200L
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -98,6 +99,7 @@ class MainActivity : AppCompatActivity() {
             detectUsbDac()
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
+            playbackService?.targetBitMode = currentBitMode
             playbackService?.setDacDevice(activeDacDevice)
 
             playbackService?.onCommandListener = { cmd ->
@@ -150,6 +152,7 @@ class MainActivity : AppCompatActivity() {
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
+        lastAnalyzedBitMode = currentBitMode
 
         switchAdBlock.isChecked = isAdBlockOn
         switchVolLock.isChecked = isVolLockOn
@@ -167,10 +170,11 @@ class MainActivity : AppCompatActivity() {
                 if (selectedMode != currentBitMode) {
                     currentBitMode = selectedMode
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
+                    
+                    // サービス側にターゲットビット深度を同期通知
+                    playbackService?.setTargetMode(selectedMode)
                     sendBitModeSetting(selectedMode)
-                    if (isPlayingState) {
-                        playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeDacDevice)
-                    }
+
                     bitActivityMask = 0
                     maxPeakL = 0
                     maxPeakR = 0
@@ -318,6 +322,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun analyzePcm(pcmBytes: ByteArray, bitMode: String) {
+        if (bitMode != lastAnalyzedBitMode) {
+            lastAnalyzedBitMode = bitMode
+            bitActivityMask = 0
+            maxPeakL = 0
+            maxPeakR = 0
+            maxPeakFloatL = 0f
+            maxPeakFloatR = 0f
+        }
+
         val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
         when (bitMode) {
             "32bit" -> {
@@ -466,7 +479,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupGeckoView() {
         val runtimeSettings = GeckoRuntimeSettings.Builder()
-            .consoleOutput(false) // ログ出力を無効化してGeckoのIPC負荷を削減
+            .consoleOutput(false)
             .aboutConfigEnabled(false)
             .build()
 

@@ -25,7 +25,6 @@ const itagMap = {
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
 
-// 超高速 Base64 エンコーダー (GCゴミを発生させず超低負荷)
 const b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 function fastUint8ToBase64(bytes) {
     let result = '';
@@ -104,7 +103,6 @@ function scanStreamCodec() {
 
     try {
         const entries = performance.getEntriesByType('resource');
-        // 最新の15件のみを走査（メモリ肥大・CPU負荷防止）
         const startIdx = Math.max(0, entries.length - 15);
         for (let i = entries.length - 1; i >= startIdx; i--) {
             const url = entries[i].name;
@@ -129,7 +127,6 @@ function scanStreamCodec() {
                 }
             }
         }
-        // 通信ログが溜まりすぎたらクリア
         if (entries.length > 60) {
             performance.clearResourceTimings();
         }
@@ -223,9 +220,10 @@ function setupAudioPipeline() {
                     }
                 }
 
+                const activeMode = currentBitMode;
                 let bytes = null;
 
-                if (currentBitMode === "32bit") {
+                if (activeMode === "32bit") {
                     const buffer = new ArrayBuffer(len * 8);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -233,7 +231,7 @@ function setupAudioPipeline() {
                         view.setFloat32(i * 8 + 4, right[i], true);
                     }
                     bytes = new Uint8Array(buffer);
-                } else if (currentBitMode === "24bit") {
+                } else if (activeMode === "24bit") {
                     const buffer = new ArrayBuffer(len * 6);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -272,7 +270,7 @@ function setupAudioPipeline() {
                             type: "pcm",
                             pcm: fastUint8ToBase64(bytes),
                             sampleRate: currentSampleRate,
-                            bitMode: currentBitMode
+                            bitMode: activeMode
                         });
                     } catch(err) {
                         connectNativePort();
@@ -295,7 +293,9 @@ function connectNativePort() {
             const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
             const video = cachedVideoElement || document.querySelector('video');
 
-            if (cmd === 'play') {
+            if (cmd === 'setBitMode' && msg.mode !== undefined) {
+                currentBitMode = msg.mode;
+            } else if (cmd === 'play') {
                 if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
                 document.querySelector('#play-pause-button, .play-pause-button')?.click();
             } else if (cmd === 'pause') {
@@ -312,8 +312,6 @@ function connectNativePort() {
             } else if (cmd === 'setAdBlock' && msg.enabled !== undefined) {
                 adBlockEnabled = msg.enabled;
                 updateAdBlockStyles(msg.enabled);
-            } else if (cmd === 'setBitMode' && msg.mode !== undefined) {
-                currentBitMode = msg.mode;
             }
         });
     } catch(e) {
