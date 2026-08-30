@@ -46,6 +46,9 @@ class BitPerfectPlaybackService : Service() {
     private var activeOutputDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
+    // デバイス切り替え・トラック生成を非同期で安全に行うエグゼキュータ
+    private val trackExecutor = Executors.newSingleThreadExecutor()
+
     val pcmQueue = LinkedBlockingQueue<ByteArray>(20)
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
@@ -82,7 +85,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // USB DAC または Bluetooth イヤホンが切断された瞬間に即時音量ゼロ化
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
@@ -175,7 +177,9 @@ class BitPerfectPlaybackService : Service() {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
             pcmQueue.clear()
-            initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+            trackExecutor.execute {
+                initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+            }
         }
 
         if (pcmQueue.remainingCapacity() > 0) {
@@ -187,6 +191,7 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
     }
 
+    // ★非同期で安全にデバイスを切り替え（メインスレッドを1ミリ秒も止めない）
     fun setOutputDevice(device: AudioDeviceInfo?) {
         activeOutputDevice = device
         
@@ -195,12 +200,13 @@ class BitPerfectPlaybackService : Service() {
             muteVolumeToZero()
         }
 
-        if (isCurrentlyPlaying) {
-            initAudioTrack(currentBitMode, currentSampleRate, device)
+        trackExecutor.execute {
+            if (isCurrentlyPlaying) {
+                initAudioTrack(currentBitMode, currentSampleRate, device)
+            }
         }
     }
 
-    // 互換性エイリアス
     fun setDacDevice(device: AudioDeviceInfo?) = setOutputDevice(device)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -261,19 +267,21 @@ class BitPerfectPlaybackService : Service() {
     fun forceCloseDacStream() {
         isCurrentlyPlaying = false
         pcmQueue.clear()
-        audioLock.lock()
-        try {
-            audioTrack?.let { track ->
-                try {
-                    track.pause()
-                    track.flush()
-                    track.stop()
-                    track.release()
-                } catch (e: Exception) {}
+        trackExecutor.execute {
+            audioLock.lock()
+            try {
+                audioTrack?.let { track ->
+                    try {
+                        track.pause()
+                        track.flush()
+                        track.stop()
+                        track.release()
+                    } catch (e: Exception) {}
+                }
+                audioTrack = null
+            } finally {
+                audioLock.unlock()
             }
-            audioTrack = null
-        } finally {
-            audioLock.unlock()
         }
         updateNotification()
     }
@@ -298,13 +306,15 @@ class BitPerfectPlaybackService : Service() {
         if (!isPlaying) {
             forceCloseDacStream()
         } else {
-            audioLock.lock()
-            try {
-                if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-                    initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+            trackExecutor.execute {
+                audioLock.lock()
+                try {
+                    if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+                        initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+                    }
+                } finally {
+                    audioLock.unlock()
                 }
-            } finally {
-                audioLock.unlock()
             }
         }
 
@@ -390,7 +400,12 @@ class BitPerfectPlaybackService : Service() {
     fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
         audioLock.lock()
         try {
-            audioTrack?.let {
+            // 古いトラックを安全に退避して破棄
+            val oldTrack = audioTrack
+            audioTrack = null
+            pcmQueue.clear()
+
+            oldTrack?.let {
                 try {
                     it.pause()
                     it.flush()
@@ -398,7 +413,6 @@ class BitPerfectPlaybackService : Service() {
                     it.release()
                 } catch (e: Exception) {}
             }
-            audioTrack = null
 
             currentBitMode = bitMode
             currentSampleRate = sampleRate
@@ -414,7 +428,7 @@ class BitPerfectPlaybackService : Service() {
                 else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
-            // USB DAC接続時のみ Android 14+ ハードウェアクロックロックを実行
+            // USB DAC接続時のみ Android 14+ ハードウェアクロックロック
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                 try {
                     val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -451,7 +465,7 @@ class BitPerfectPlaybackService : Service() {
                 minBuf = sampleRate * 2 * bytesPerSample / 5
             }
 
-            audioTrack = AudioTrack.Builder()
+            val newTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -470,18 +484,19 @@ class BitPerfectPlaybackService : Service() {
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
-            // ターゲット機器（USB DAC または Bluetooth）を優先ルーティング
             targetDevice?.let {
-                audioTrack?.setPreferredDevice(it)
+                newTrack.setPreferredDevice(it)
             }
 
             if (isVolumeLocked && isUsbDevice(targetDevice)) {
-                audioTrack?.setVolume(1.0f)
+                newTrack.setVolume(1.0f)
                 lockSystemVolumeToMax()
             }
 
-            audioTrack?.play()
-            Log.i("BitPerfect", "${sampleRate}Hz AudioTrack Opened ($bitMode) -> ${targetDevice?.productName ?: "Default"}")
+            newTrack.play()
+            audioTrack = newTrack
+
+            Log.i("BitPerfect", "★ ${sampleRate}Hz AudioTrack Started -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
             Log.e("BitPerfect", "AudioTrack init error", e)
         } finally {
@@ -489,6 +504,7 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★重要: track.write の間は audioLock を握らない！これでデッドロックを完全に排除
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
@@ -498,21 +514,22 @@ class BitPerfectPlaybackService : Service() {
 
                     analyzeAndDispatchPeak(pcm, currentBitMode)
 
+                    var track: AudioTrack? = null
                     audioLock.lock()
                     try {
-                        audioTrack?.let { track ->
-                            if (track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
-                                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                                    track.play()
-                                }
-                                if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
-                                    track.setVolume(1.0f)
-                                }
-                                track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
-                            }
-                        }
+                        track = audioTrack
                     } finally {
                         audioLock.unlock()
+                    }
+
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
+                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                            try { track.play() } catch (e: Exception) {}
+                        }
+                        if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
+                            track.setVolume(1.0f)
+                        }
+                        track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                     }
                 } catch (e: InterruptedException) {
                     break
@@ -609,14 +626,16 @@ class BitPerfectPlaybackService : Service() {
             mediaSession.release()
         } catch (e: Exception) {}
 
-        audioLock.lock()
-        try {
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
-        } catch (e: Exception) {}
-        finally {
-            audioLock.unlock()
+        trackExecutor.execute {
+            audioLock.lock()
+            try {
+                audioTrack?.stop()
+                audioTrack?.release()
+                audioTrack = null
+            } catch (e: Exception) {}
+            finally {
+                audioLock.unlock()
+            }
         }
 
         if (wakeLock?.isHeld == true) {
