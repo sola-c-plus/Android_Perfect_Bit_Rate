@@ -1,6 +1,8 @@
-﻿Object.defineProperty(document, 'hidden', { value: false, writable: false });
-Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
-document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
+﻿try {
+    Object.defineProperty(document, 'hidden', { value: false, writable: false });
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
+    document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
+} catch(e) {}
 
 let port = null;
 let lastTitle = "";
@@ -24,31 +26,6 @@ const itagMap = {
     '256': { name: 'AAC 256kbps (HQ 44.1k)', rate: 44100 },
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
-
-const b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-function fastUint8ToBase64(bytes) {
-    let result = '';
-    const len = bytes.length;
-    const extraBytes = len % 3;
-    const mainLen = len - extraBytes;
-    for (let i = 0; i < mainLen; i += 3) {
-        const chunk = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
-        result += b64chars[(chunk >> 18) & 63] +
-                  b64chars[(chunk >> 12) & 63] +
-                  b64chars[(chunk >> 6) & 63] +
-                  b64chars[chunk & 63];
-    }
-    if (extraBytes === 1) {
-        const chunk = bytes[mainLen];
-        result += b64chars[(chunk >> 2) & 63] + b64chars[(chunk << 4) & 63] + "==";
-    } else if (extraBytes === 2) {
-        const chunk = (bytes[mainLen] << 8) | bytes[mainLen + 1];
-        result += b64chars[(chunk >> 10) & 63] +
-                  b64chars[(chunk >> 4) & 63] +
-                  b64chars[(chunk << 2) & 63] + "=";
-    }
-    return result;
-}
 
 let adStyleElement = null;
 function updateAdBlockStyles(enable) {
@@ -97,6 +74,14 @@ function safeAdSkip() {
 }
 setInterval(safeAdSkip, 500);
 
+function forceFullVolume() {
+    const video = cachedVideoElement || document.querySelector('video');
+    if (video && video.volume < 1.0) {
+        video.volume = 1.0;
+    }
+}
+setInterval(forceFullVolume, 1000);
+
 function scanStreamCodec() {
     let detectedName = "";
     let detectedRate = 48000;
@@ -136,17 +121,14 @@ function scanStreamCodec() {
         lastCodecName = detectedName;
         currentSampleRate = detectedRate;
 
-        if (port) {
-            try {
-                port.postMessage({
-                    type: "codec",
-                    codec: detectedName,
-                    sampleRate: currentSampleRate
-                });
-            } catch(e) {}
-        }
+        postNativeMessage({
+            type: "codec",
+            codec: detectedName,
+            sampleRate: currentSampleRate
+        });
     }
 }
+setInterval(scanStreamCodec, 1000);
 
 function hookVideoEvents(video) {
     if (cachedVideoElement === video && isVideoEventsHooked) return;
@@ -154,13 +136,13 @@ function hookVideoEvents(video) {
     isVideoEventsHooked = true;
 
     video.addEventListener('play', () => {
-        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
         scanStreamCodec();
-        if (port) port.postMessage({ type: "state", playing: true });
+        postNativeMessage({ type: "state", playing: true });
     });
     video.addEventListener('pause', () => {
-        if (audioCtx && audioCtx.state === 'running') audioCtx.suspend();
-        if (port) port.postMessage({ type: "state", playing: false });
+        if (audioCtx && audioCtx.state === 'running') audioCtx.suspend().catch(() => {});
+        postNativeMessage({ type: "state", playing: false });
     });
     video.addEventListener('loadstart', scanStreamCodec);
     video.addEventListener('loadeddata', scanStreamCodec);
@@ -185,7 +167,15 @@ function setupAudioPipeline() {
         if (!cachedSourceNode) {
             try {
                 cachedSourceNode = audioCtx.createMediaElementSource(video);
-            } catch(err) {}
+            } catch(err) {
+                try {
+                    const stream = video.mozCaptureStream ? video.mozCaptureStream() : (video.captureStream ? video.captureStream() : null);
+                    if (stream) {
+                        cachedSourceNode = audioCtx.createMediaStreamSource(stream);
+                    }
+                } catch(err2) {}
+            }
+            scanStreamCodec();
         }
 
         if (cachedSourceNode && !processor) {
@@ -195,7 +185,7 @@ function setupAudioPipeline() {
                     return;
                 }
 
-                if (audioCtx.state === 'suspended') audioCtx.resume();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 
                 const inL = e.inputBuffer.getChannelData(0);
                 const inR = e.inputBuffer.getChannelData(1);
@@ -220,10 +210,9 @@ function setupAudioPipeline() {
                     }
                 }
 
-                const activeMode = currentBitMode;
                 let bytes = null;
 
-                if (activeMode === "32bit") {
+                if (currentBitMode === "32bit") {
                     const buffer = new ArrayBuffer(len * 8);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -231,7 +220,7 @@ function setupAudioPipeline() {
                         view.setFloat32(i * 8 + 4, right[i], true);
                     }
                     bytes = new Uint8Array(buffer);
-                } else if (activeMode === "24bit") {
+                } else if (currentBitMode === "24bit") {
                     const buffer = new ArrayBuffer(len * 6);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -264,18 +253,18 @@ function setupAudioPipeline() {
                     bytes = new Uint8Array(buffer);
                 }
 
-                if (port) {
-                    try {
-                        port.postMessage({
-                            type: "pcm",
-                            pcm: fastUint8ToBase64(bytes),
-                            sampleRate: currentSampleRate,
-                            bitMode: activeMode
-                        });
-                    } catch(err) {
-                        connectNativePort();
-                    }
+                let binary = '';
+                const chunkSize = 8192;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
                 }
+
+                postNativeMessage({
+                    type: "pcm",
+                    pcm: btoa(binary),
+                    sampleRate: currentSampleRate,
+                    bitMode: currentBitMode
+                });
             };
 
             try { cachedSourceNode.disconnect(); } catch(e) {}
@@ -286,51 +275,68 @@ function setupAudioPipeline() {
     }
 }
 
+function handleNativeMessage(msg) {
+    const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
+    const video = cachedVideoElement || document.querySelector('video');
+
+    if (cmd === 'play') {
+        if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
+        document.querySelector('#play-pause-button')?.click();
+    } else if (cmd === 'pause') {
+        if (video) video.pause();
+        document.querySelector('#play-pause-button')?.click();
+    } else if (cmd === 'next') {
+        document.querySelector('.next-button')?.click();
+    } else if (cmd === 'prev') {
+        document.querySelector('.previous-button')?.click();
+    } else if (cmd === 'seek' && msg.position !== undefined) {
+        if (video) video.currentTime = msg.position / 1000.0;
+    } else if (cmd === 'setAdBlock' && msg.enabled !== undefined) {
+        adBlockEnabled = msg.enabled;
+        updateAdBlockStyles(msg.enabled);
+    } else if (cmd === 'setBitMode' && msg.mode !== undefined) {
+        currentBitMode = msg.mode;
+    }
+}
+
 function connectNativePort() {
     try {
         port = browser.runtime.connectNative("browser");
-        port.onMessage.addListener((msg) => {
-            const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
-            const video = cachedVideoElement || document.querySelector('video');
-
-            if (cmd === 'setBitMode' && msg.mode !== undefined) {
-                currentBitMode = msg.mode;
-            } else if (cmd === 'play') {
-                if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
-                document.querySelector('#play-pause-button, .play-pause-button')?.click();
-            } else if (cmd === 'pause') {
-                if (video) video.pause();
-                document.querySelector('#play-pause-button, .play-pause-button')?.click();
-            } else if (cmd === 'next') {
-                const nextBtn = document.querySelector('.next-button, [aria-label="次の曲"], [aria-label="Next track"]');
-                if (nextBtn) nextBtn.click();
-            } else if (cmd === 'prev') {
-                const prevBtn = document.querySelector('.previous-button, [aria-label="前の曲"], [aria-label="Previous track"]');
-                if (prevBtn) prevBtn.click();
-            } else if (cmd === 'seek' && msg.position !== undefined) {
-                if (video) video.currentTime = msg.position / 1000.0;
-            } else if (cmd === 'setAdBlock' && msg.enabled !== undefined) {
-                adBlockEnabled = msg.enabled;
-                updateAdBlockStyles(msg.enabled);
-            }
+        port.onMessage.addListener(handleNativeMessage);
+        port.onDisconnect.addListener(() => {
+            port = null;
+            setTimeout(connectNativePort, 1000);
         });
     } catch(e) {
+        port = null;
         setTimeout(connectNativePort, 1000);
     }
 }
 connectNativePort();
 
+function postNativeMessage(data) {
+    if (!port) {
+        connectNativePort();
+    }
+    if (port) {
+        try {
+            port.postMessage(data);
+        } catch(e) {
+            port = null;
+            connectNativePort();
+        }
+    }
+}
+
 function syncPlaybackProgress() {
     const video = cachedVideoElement || document.querySelector('video');
-    if (video && port && !isNaN(video.duration) && video.duration > 0) {
-        try {
-            port.postMessage({
-                type: "progress",
-                current: Math.floor(video.currentTime * 1000),
-                duration: Math.floor(video.duration * 1000),
-                playing: !video.paused
-            });
-        } catch(e) {}
+    if (video && !isNaN(video.duration) && video.duration > 0) {
+        postNativeMessage({
+            type: "progress",
+            current: Math.floor(video.currentTime * 1000),
+            duration: Math.floor(video.duration * 1000),
+            playing: !video.paused
+        });
     }
 }
 setInterval(syncPlaybackProgress, 1000);
@@ -339,20 +345,16 @@ function checkMetadata() {
     if (navigator.mediaSession && navigator.mediaSession.metadata) {
         const meta = navigator.mediaSession.metadata;
         let artworkUrl = (meta.artwork && meta.artwork.length > 0) ? meta.artwork[meta.artwork.length - 1].src : "";
-        if (port) {
-            try {
-                port.postMessage({
-                    type: "meta",
-                    title: meta.title || "YouTube Music",
-                    artist: meta.artist || "",
-                    artwork: artworkUrl
-                });
-            } catch(e) {}
-        }
+        postNativeMessage({
+            type: "meta",
+            title: meta.title || "YouTube Music",
+            artist: meta.artist || "",
+            artwork: artworkUrl
+        });
     }
 }
 setInterval(checkMetadata, 1000);
 
-setInterval(setupAudioPipeline, 2000);
+setInterval(setupAudioPipeline, 1000);
 document.addEventListener('click', setupAudioPipeline);
 setupAudioPipeline();

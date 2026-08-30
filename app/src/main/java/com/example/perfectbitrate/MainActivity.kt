@@ -38,11 +38,6 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.math.abs
-import kotlin.math.log10
-import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
 
@@ -53,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textTransfer: TextView
     private lateinit var textPeak: TextView
     private lateinit var textBitDepth: TextView
+    private var walkmanLevelMeter: WalkmanLevelMeterView? = null
 
     private lateinit var geckoView: GeckoView
     private lateinit var geckoSession: GeckoSession
@@ -74,22 +70,26 @@ class MainActivity : AppCompatActivity() {
     private var currentCodec = "OPUS 160kbps (48k)"
 
     private var currentBitMode = "16bit"
-    private var lastAnalyzedBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Float)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
 
-    private var maxPeakL = 0
-    private var maxPeakR = 0
-    private var maxPeakFloatL = 0f
-    private var maxPeakFloatR = 0f
+    private var peakDbL = -60f
+    private var peakDbR = -60f
     private var bitActivityMask = 0
     private var isAdBlockOn = true
     private var isVolLockOn = false
     private var isPlayingState = false
 
     private var isOtherAppInterfering = false
-    private var lastUiUpdateTime = 0L
-    private val UI_UPDATE_INTERVAL_MS = 200L
+
+    // メインスレッドの負荷を激減させる 250ms スロットリングタイマー
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val uiUpdateRunnable = object : Runnable {
+        override fun run() {
+            updateStatus()
+            uiHandler.postDelayed(this, 250)
+        }
+    }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -99,8 +99,15 @@ class MainActivity : AppCompatActivity() {
             detectUsbDac()
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
-            playbackService?.targetBitMode = currentBitMode
             playbackService?.setDacDevice(activeDacDevice)
+
+            // バックグラウンドからのピーク値通知をメーターへ直接転送
+            playbackService?.onPeakListener = { dbL, dbR, mask ->
+                peakDbL = dbL
+                peakDbR = dbR
+                bitActivityMask = bitActivityMask or mask
+                walkmanLevelMeter?.setLevels(dbL, dbR)
+            }
 
             playbackService?.onCommandListener = { cmd ->
                 try {
@@ -141,6 +148,7 @@ class MainActivity : AppCompatActivity() {
         textTransfer = findViewById(R.id.textTransfer)
         textPeak = findViewById(R.id.textPeak)
         textBitDepth = findViewById(R.id.textBitDepth)
+        walkmanLevelMeter = findViewById(R.id.walkmanLevelMeter)
 
         geckoView = findViewById(R.id.geckoview)
         spinnerBitDepth = findViewById(R.id.spinnerBitDepth)
@@ -152,7 +160,6 @@ class MainActivity : AppCompatActivity() {
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
-        lastAnalyzedBitMode = currentBitMode
 
         switchAdBlock.isChecked = isAdBlockOn
         switchVolLock.isChecked = isVolLockOn
@@ -170,16 +177,14 @@ class MainActivity : AppCompatActivity() {
                 if (selectedMode != currentBitMode) {
                     currentBitMode = selectedMode
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
-                    
-                    // サービス側にターゲットビット深度を同期通知
-                    playbackService?.setTargetMode(selectedMode)
                     sendBitModeSetting(selectedMode)
-
+                    if (isPlayingState) {
+                        playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeDacDevice)
+                    }
                     bitActivityMask = 0
-                    maxPeakL = 0
-                    maxPeakR = 0
-                    maxPeakFloatL = 0f
-                    maxPeakFloatR = 0f
+                    peakDbL = -60f
+                    peakDbR = -60f
+                    walkmanLevelMeter?.reset()
                     updateStatus()
                 }
             }
@@ -220,6 +225,9 @@ class MainActivity : AppCompatActivity() {
             reloadDirectStream()
             true
         }
+
+        // 定期UI更新の開始
+        uiHandler.post(uiUpdateRunnable)
     }
 
     private fun reloadDirectStream() {
@@ -227,10 +235,9 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             pcmPacketCount = 0L
             bitActivityMask = 0
-            maxPeakL = 0
-            maxPeakR = 0
-            maxPeakFloatL = 0f
-            maxPeakFloatR = 0f
+            peakDbL = -60f
+            peakDbR = -60f
+            walkmanLevelMeter?.reset()
             playbackService?.forceCloseDacStream()
             playbackService?.resetBuffer()
             geckoSession.reload()
@@ -321,57 +328,6 @@ class MainActivity : AppCompatActivity() {
         updateStatus()
     }
 
-    private fun analyzePcm(pcmBytes: ByteArray, bitMode: String) {
-        if (bitMode != lastAnalyzedBitMode) {
-            lastAnalyzedBitMode = bitMode
-            bitActivityMask = 0
-            maxPeakL = 0
-            maxPeakR = 0
-            maxPeakFloatL = 0f
-            maxPeakFloatR = 0f
-        }
-
-        val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
-        when (bitMode) {
-            "32bit" -> {
-                while (buffer.remaining() >= 8) {
-                    val sampleL = buffer.float
-                    val sampleR = buffer.float
-                    maxPeakFloatL = max(maxPeakFloatL, abs(sampleL))
-                    maxPeakFloatR = max(maxPeakFloatR, abs(sampleR))
-                }
-            }
-            "24bit" -> {
-                while (buffer.remaining() >= 6) {
-                    val b0L = buffer.get().toInt() and 0xFF
-                    val b1L = buffer.get().toInt() and 0xFF
-                    val b2L = buffer.get().toInt()
-                    val valL = (b2L shl 16) or (b1L shl 8) or b0L
-
-                    val b0R = buffer.get().toInt() and 0xFF
-                    val b1R = buffer.get().toInt() and 0xFF
-                    val b2R = buffer.get().toInt()
-                    val valR = (b2R shl 16) or (b1R shl 8) or b0R
-
-                    maxPeakL = max(maxPeakL, abs(valL))
-                    maxPeakR = max(maxPeakR, abs(valR))
-                    bitActivityMask = bitActivityMask or (valL and 0xFFFFFF) or (valR and 0xFFFFFF)
-                }
-            }
-            else -> {
-                while (buffer.remaining() >= 4) {
-                    val sampleL = buffer.short
-                    val sampleR = buffer.short
-                    maxPeakL = max(maxPeakL, abs(sampleL.toInt()))
-                    maxPeakR = max(maxPeakR, abs(sampleR.toInt()))
-                    val rawL = sampleL.toInt() and 0xFFFF
-                    val rawR = sampleR.toInt() and 0xFFFF
-                    bitActivityMask = bitActivityMask or rawL or rawR
-                }
-            }
-        }
-    }
-
     private fun handleIncomingMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "pcm" -> {
@@ -383,22 +339,15 @@ class MainActivity : AppCompatActivity() {
                 val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
                 pcmPacketCount += pcmBytes.size
                 isPlayingState = true
-                analyzePcm(pcmBytes, bitMode)
 
+                // UIスレッドでは重い計算を行わず、即座にサービスへ引き渡し
                 playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
-
-                val now = System.currentTimeMillis()
-                if (now - lastUiUpdateTime > UI_UPDATE_INTERVAL_MS) {
-                    lastUiUpdateTime = now
-                    updateStatus()
-                }
             }
             "codec" -> {
                 currentCodec = msg.optString("codec", currentCodec)
                 val sampleRate = msg.optInt("sampleRate", currentSampleRate)
                 if (sampleRate > 0) currentSampleRate = sampleRate
                 playbackService?.updateCodec(currentCodec)
-                updateStatus()
             }
             "meta" -> {
                 val title = msg.optString("title", "YouTube Music")
@@ -412,69 +361,53 @@ class MainActivity : AppCompatActivity() {
                 val isPlaying = msg.optBoolean("playing", isPlayingState)
                 isPlayingState = isPlaying
                 playbackService?.updateProgress(current, duration, isPlaying)
-                updateStatus()
             }
             "state" -> {
                 val isPlaying = msg.optBoolean("playing", true)
                 isPlayingState = isPlaying
                 if (!isPlaying) {
-                    maxPeakL = 0
-                    maxPeakR = 0
-                    maxPeakFloatL = 0f
-                    maxPeakFloatR = 0f
+                    peakDbL = -60f
+                    peakDbR = -60f
+                    walkmanLevelMeter?.reset()
                 }
                 playbackService?.updatePlaybackState(isPlaying)
-                updateStatus()
             }
         }
     }
 
     private fun updateStatus() {
-        runOnUiThread {
-            val mb = pcmPacketCount / (1024.0 * 1024.0)
+        val mb = pcmPacketCount / (1024.0 * 1024.0)
 
-            if (activeDacDevice != null) {
-                badgeDirect.text = "DIRECT STREAM"
-                badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
-                badgeDirect.setTextColor(Color.BLACK)
-            } else {
-                badgeDirect.text = "STANDARD MIX"
-                badgeDirect.setBackgroundResource(R.drawable.bg_badge_normal)
-                badgeDirect.setTextColor(Color.LTGRAY)
-            }
-            textDacName.text = dacName
-
-            val bitLabel = when (currentBitMode) {
-                "32bit" -> "32 bit Float"
-                "24bit" -> "24 bit"
-                else -> "16 bit"
-            }
-
-            val rateStr = String.format(java.util.Locale.US, "%.1f", currentSampleRate / 1000.0)
-            textRateBits.text = "$rateStr kHz / $bitLabel"
-            textCodec.text = currentCodec.uppercase()
-            textTransfer.text = String.format("%.1f MB", mb)
-
-            if (currentBitMode == "32bit") {
-                val peakDbfsL = if (maxPeakFloatL > 0f) String.format("%.1f", 20 * log10(maxPeakFloatL)) else "-inf"
-                val peakDbfsR = if (maxPeakFloatR > 0f) String.format("%.1f", 20 * log10(maxPeakFloatR)) else "-inf"
-                textPeak.text = "PEAK  L: ${peakDbfsL} dB  /  R: ${peakDbfsR} dB"
-                textBitDepth.text = "BIT: 32/32 ACTIVE"
-            } else if (currentBitMode == "24bit") {
-                val peakDbfsL = if (maxPeakL > 0) String.format("%.1f", 20 * log10(maxPeakL / 8388607.0)) else "-inf"
-                val peakDbfsR = if (maxPeakR > 0) String.format("%.1f", 20 * log10(maxPeakR / 8388607.0)) else "-inf"
-                val activeBits = Integer.bitCount(bitActivityMask).coerceAtMost(24)
-                textPeak.text = "PEAK  L: ${peakDbfsL} dB  /  R: ${peakDbfsR} dB"
-                textBitDepth.text = "BIT: $activeBits/24 ACTIVE"
-            } else {
-                val peakDbfsL = if (maxPeakL > 0) String.format("%.1f", 20 * log10(maxPeakL / 32767.0)) else "-inf"
-                val peakDbfsR = if (maxPeakR > 0) String.format("%.1f", 20 * log10(maxPeakR / 32767.0)) else "-inf"
-                val activeBits = Integer.bitCount(bitActivityMask and 0xFFFF).coerceAtMost(16)
-                textPeak.text = "PEAK  L: ${peakDbfsL} dB  /  R: ${peakDbfsR} dB"
-                textBitDepth.text = "BIT: $activeBits/16 ACTIVE"
-            }
-            textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
+        if (activeDacDevice != null) {
+            badgeDirect.text = "DIRECT STREAM"
+            badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
+            badgeDirect.setTextColor(Color.BLACK)
+        } else {
+            badgeDirect.text = "STANDARD MIX"
+            badgeDirect.setBackgroundResource(R.drawable.bg_badge_normal)
+            badgeDirect.setTextColor(Color.LTGRAY)
         }
+        textDacName.text = dacName
+
+        val bitLabel = when (currentBitMode) {
+            "32bit" -> "32 bit Float"
+            "24bit" -> "24 bit"
+            else -> "16 bit"
+        }
+
+        val rateStr = String.format(java.util.Locale.US, "%.1f", currentSampleRate / 1000.0)
+        textRateBits.text = "$rateStr kHz / $bitLabel"
+        textCodec.text = currentCodec.uppercase()
+        textTransfer.text = String.format("%.1f MB", mb)
+
+        val peakTextL = if (peakDbL > -55f) String.format("%.1f", peakDbL) else "-inf"
+        val peakTextR = if (peakDbR > -55f) String.format("%.1f", peakDbR) else "-inf"
+        textPeak.text = "PEAK  L: ${peakTextL} dB  /  R: ${peakTextR} dB"
+
+        val maxBits = if (currentBitMode == "32bit") 32 else (if (currentBitMode == "24bit") 24 else 16)
+        val activeBits = Integer.bitCount(bitActivityMask).coerceAtMost(maxBits)
+        textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
+        textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
     }
 
     private fun setupGeckoView() {
@@ -512,7 +445,6 @@ class MainActivity : AppCompatActivity() {
                     activeWebExtensionPort = port
                     sendAdBlockSetting(isAdBlockOn)
                     sendBitModeSetting(currentBitMode)
-                    updateStatus()
 
                     port.setDelegate(object : WebExtension.PortDelegate {
                         override fun onPortMessage(message: Any, port: WebExtension.Port) {
@@ -522,7 +454,6 @@ class MainActivity : AppCompatActivity() {
                         }
                         override fun onDisconnect(port: WebExtension.Port) {
                             if (activeWebExtensionPort == port) activeWebExtensionPort = null
-                            updateStatus()
                         }
                     })
                 }
@@ -535,14 +466,16 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             extension.setMessageDelegate(messageDelegate, "browser")
                             geckoSession.webExtensionController.setMessageDelegate(extension, messageDelegate, "browser")
+                            geckoSession.loadUri("https://music.youtube.com")
                         }
                     }
                 }, { e ->
                     Log.e("BitPerfect", "WebExtension error", e)
+                    runOnUiThread {
+                        geckoSession.loadUri("https://music.youtube.com")
+                    }
                 })
         }
-
-        geckoSession.loadUri("https://music.youtube.com")
     }
 
     override fun onPause() {
@@ -557,6 +490,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        uiHandler.removeCallbacks(uiUpdateRunnable)
         if (isServiceBound) {
             unbindService(serviceConnection)
             isServiceBound = false

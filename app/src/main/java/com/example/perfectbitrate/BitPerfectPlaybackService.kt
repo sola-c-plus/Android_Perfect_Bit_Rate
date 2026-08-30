@@ -27,9 +27,14 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.locks.ReentrantLock
+import kotlin.math.abs
+import kotlin.math.log10
+import kotlin.math.max
 
 class BitPerfectPlaybackService : Service() {
 
@@ -38,17 +43,18 @@ class BitPerfectPlaybackService : Service() {
     private lateinit var audioManager: AudioManager
     var currentSampleRate = 48000
     var currentBitMode = "16bit"
-    var targetBitMode = "16bit"
     private var targetDacDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
     private var originalSystemVolume = -1
 
-    val pcmQueue = LinkedBlockingQueue<ByteArray>(500)
+    // キュー容量を20（約1秒分）に最適化し、遅延とメモリ滞留を防止
+    val pcmQueue = LinkedBlockingQueue<ByteArray>(20)
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    private val isAndroid14Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+    // バックグラウンド計算されたピークをメインUIへ渡すコールバック
+    var onPeakListener: ((Float, Float, Int) -> Unit)? = null
 
     var isVolumeLocked = false
         set(value) {
@@ -92,12 +98,6 @@ class BitPerfectPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
 
-        try {
-            NativeAudioEngine.nativeInit()
-        } catch (e: Exception) {
-            Log.e("BitPerfect", "Native init error", e)
-        }
-
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         originalSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
 
@@ -137,30 +137,21 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    fun setTargetMode(mode: String) {
-        targetBitMode = mode
-        pcmQueue.clear()
-    }
-
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, bitMode: String) {
         if (!isCurrentlyPlaying) {
             isCurrentlyPlaying = true
         }
 
-        // 目的のビットモードと異なる古い過渡パケットは破棄
-        if (targetBitMode.isNotEmpty() && bitMode != targetBitMode) {
-            return
-        }
+        val needsRecreate = (sampleRate != currentSampleRate || 
+                             bitMode != currentBitMode || 
+                             audioTrack == null || 
+                             audioTrack?.state != AudioTrack.STATE_INITIALIZED)
 
-        val rateOrModeChanged = (sampleRate != currentSampleRate || bitMode != currentBitMode || 
-            (isAndroid14Plus && audioTrack == null))
-
-        if (rateOrModeChanged) {
+        if (needsRecreate) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
-            targetBitMode = bitMode
             pcmQueue.clear()
-            initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = true)
+            initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice)
         }
 
         if (pcmQueue.remainingCapacity() > 0) {
@@ -175,7 +166,7 @@ class BitPerfectPlaybackService : Service() {
     fun setDacDevice(device: AudioDeviceInfo?) {
         targetDacDevice = device
         if (isCurrentlyPlaying) {
-            initAudioEngine(currentBitMode, currentSampleRate, device, isRateShift = false)
+            initAudioTrack(currentBitMode, currentSampleRate, device)
         }
     }
 
@@ -239,20 +230,15 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
         audioLock.lock()
         try {
-            if (isAndroid14Plus) {
-                audioTrack?.let { track ->
-                    try {
-                        track.pause()
-                        track.flush()
-                        track.stop()
-                        track.release()
-                    } catch (e: Exception) {}
-                }
-                audioTrack = null
-            } else {
-                NativeAudioEngine.nativeStop()
-                NativeAudioEngine.nativeClose()
+            audioTrack?.let { track ->
+                try {
+                    track.pause()
+                    track.flush()
+                    track.stop()
+                    track.release()
+                } catch (e: Exception) {}
             }
+            audioTrack = null
         } finally {
             audioLock.unlock()
         }
@@ -281,12 +267,8 @@ class BitPerfectPlaybackService : Service() {
         } else {
             audioLock.lock()
             try {
-                if (isAndroid14Plus) {
-                    if (audioTrack == null) {
-                        initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = false)
-                    }
-                } else {
-                    initAudioEngine(currentBitMode, currentSampleRate, targetDacDevice, isRateShift = false)
+                if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+                    initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice)
                 }
             } finally {
                 audioLock.unlock()
@@ -344,12 +326,10 @@ class BitPerfectPlaybackService : Service() {
             else -> "16bit"
         }
 
-        val modeLabel = if (isAndroid14Plus) "DIRECT" else "AAUDIO EXCLUSIVE"
-
         val notification = NotificationCompat.Builder(this, "bitperfect_service_channel")
             .setContentTitle(currentTitle)
             .setContentText("$currentArtist | $currentCodec")
-            .setSubText("${currentSampleRate}Hz $bitStr $modeLabel")
+            .setSubText("${currentSampleRate}Hz $bitStr DIRECT")
             .setLargeIcon(currentArtwork)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .addAction(android.R.drawable.ic_media_previous, "前へ", prevIntent)
@@ -368,153 +348,103 @@ class BitPerfectPlaybackService : Service() {
         startForeground(1001, notification)
     }
 
-    fun initAudioTrack(
-        bitMode: String = currentBitMode,
-        sampleRate: Int = currentSampleRate,
-        targetDevice: AudioDeviceInfo? = targetDacDevice
-    ) {
-        initAudioEngine(bitMode, sampleRate, targetDevice, isRateShift = false)
-    }
-
-    fun initAudioTrack(bitMode: String, targetDevice: AudioDeviceInfo?) {
-        initAudioEngine(bitMode, currentSampleRate, targetDevice, isRateShift = false)
-    }
-
-    fun initAudioEngine(
-        bitMode: String,
-        sampleRate: Int = currentSampleRate,
-        targetDevice: AudioDeviceInfo? = null,
-        isRateShift: Boolean = false
-    ) {
+    fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
         audioLock.lock()
         try {
+            audioTrack?.let {
+                try {
+                    it.pause()
+                    it.flush()
+                    it.stop()
+                    it.release()
+                } catch (e: Exception) {}
+            }
+            audioTrack = null
+
             currentBitMode = bitMode
-            targetBitMode = bitMode
             currentSampleRate = sampleRate
+
+            val encoding = when (bitMode) {
+                "32bit" -> AudioFormat.ENCODING_PCM_FLOAT
+                "24bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    AudioFormat.ENCODING_PCM_24BIT_PACKED
+                } else {
+                    AudioFormat.ENCODING_PCM_16BIT
+                }
+                else -> AudioFormat.ENCODING_PCM_16BIT
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && targetDevice != null) {
+                try {
+                    val mixers = audioManager.getSupportedMixerAttributes(targetDevice)
+                    val matched = mixers.firstOrNull {
+                        it.format.sampleRate == sampleRate && it.format.encoding == encoding
+                    } ?: mixers.firstOrNull {
+                        it.format.sampleRate == sampleRate
+                    } ?: AudioMixerAttributes.Builder(
+                        AudioFormat.Builder()
+                            .setSampleRate(sampleRate)
+                            .setEncoding(encoding)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .build()
+                    ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+
+                    val mediaAttr = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                    val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
+                    Log.i("BitPerfect", "★ Mixer switch to $sampleRate Hz: $success")
+                } catch (e: Exception) {
+                    Log.e("BitPerfect", "Mixer attribute set error", e)
+                }
+            }
 
             val bytesPerSample = when (bitMode) {
                 "32bit" -> 4
                 "24bit" -> 3
                 else -> 2
             }
-
-            if (isAndroid14Plus) {
-                // ==================== Android 14+ (AudioTrack + preferredMixer) ====================
-                audioTrack?.let {
-                    try {
-                        it.pause()
-                        it.flush()
-                        it.stop()
-                        it.release()
-                    } catch (e: Exception) {}
-                }
-                audioTrack = null
-
-                val encoding = when (bitMode) {
-                    "32bit" -> AudioFormat.ENCODING_PCM_FLOAT
-                    "24bit" -> AudioFormat.ENCODING_PCM_24BIT_PACKED
-                    else -> AudioFormat.ENCODING_PCM_16BIT
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && targetDevice != null) {
-                    try {
-                        val mixers = audioManager.getSupportedMixerAttributes(targetDevice)
-                        val matched = mixers.firstOrNull {
-                            it.format.sampleRate == sampleRate && it.format.encoding == encoding
-                        } ?: mixers.firstOrNull {
-                            it.format.sampleRate == sampleRate
-                        } ?: AudioMixerAttributes.Builder(
-                            AudioFormat.Builder()
-                                .setSampleRate(sampleRate)
-                                .setEncoding(encoding)
-                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                                .build()
-                        ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
-
-                        val mediaAttr = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                        val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
-                        Log.i("BitPerfect", "★ [Android 14+] Mixer switch to $sampleRate Hz ($bitMode): $success")
-                    } catch (e: Exception) {
-                        Log.e("BitPerfect", "Mixer attribute set error", e)
-                    }
-                }
-
-                var minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
-                if (minBuf <= 0) minBuf = sampleRate * 2 * bytesPerSample / 5
-
-                audioTrack = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .setFlags(AudioAttributes.FLAG_LOW_LATENCY)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(encoding)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(minBuf * 4)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-
-                targetDevice?.let { audioTrack?.setPreferredDevice(it) }
-
-                if (isVolumeLocked) {
-                    audioTrack?.setVolume(1.0f)
-                    lockSystemVolumeToMax()
-                }
-
-                audioTrack?.play()
-
-                if (isRateShift) {
-                    val preRollBytes = (sampleRate * 2 * bytesPerSample * 120) / 1000
-                    audioTrack?.write(ByteArray(preRollBytes), 0, preRollBytes, AudioTrack.WRITE_BLOCKING)
-                }
-
-            } else {
-                // ==================== Android 13以下 (C++ AAudio 排他モード) ====================
-                NativeAudioEngine.nativeClose()
-
-                val encodingCode = when (bitMode) {
-                    "32bit" -> 4  // Float
-                    "24bit" -> 21 // 24-bit Packed
-                    else -> 2     // 16-bit
-                }
-
-                val deviceId = targetDevice?.id ?: getUsbAudioDeviceId()
-                val resultMode = NativeAudioEngine.nativeOpen(sampleRate, 2, encodingCode, deviceId)
-                NativeAudioEngine.nativeStart()
-
-                if (isRateShift) {
-                    val preRollBytes = (sampleRate * 2 * bytesPerSample * 120) / 1000
-                    NativeAudioEngine.nativeWriteByteArray(ByteArray(preRollBytes), 0, preRollBytes)
-                }
-
-                Log.i("BitPerfect", "★ [Android 13-] AAudio Exclusive Opened: Rate=$sampleRate Hz, Mode=$resultMode")
+            var minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
+            if (minBuf <= 0) {
+                minBuf = sampleRate * 2 * bytesPerSample / 5
             }
+
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setFlags(AudioAttributes.FLAG_LOW_LATENCY)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(encoding)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build()
+                )
+                .setBufferSizeInBytes(minBuf * 4)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+
+            targetDevice?.let {
+                audioTrack?.setPreferredDevice(it)
+            }
+
+            if (isVolumeLocked) {
+                audioTrack?.setVolume(1.0f)
+                lockSystemVolumeToMax()
+            }
+
+            audioTrack?.play()
+            Log.i("BitPerfect", "${sampleRate}Hz DIRECT AudioTrack Opened ($bitMode)")
         } catch (e: Exception) {
-            Log.e("BitPerfect", "Audio Engine init error", e)
+            Log.e("BitPerfect", "AudioTrack init error", e)
         } finally {
             audioLock.unlock()
         }
-    }
-
-    private fun getUsbAudioDeviceId(): Int {
-        targetDacDevice?.id?.let { if (it > 0) return it }
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        for (device in devices) {
-            if (device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
-                return device.id
-            }
-        }
-        return 0
     }
 
     private fun startPlaybackLoop() {
@@ -524,23 +454,20 @@ class BitPerfectPlaybackService : Service() {
                 try {
                     val pcm = pcmQueue.take()
 
+                    // バックグラウンドスレッドでピークを高速計算
+                    analyzeAndDispatchPeak(pcm, currentBitMode)
+
                     audioLock.lock()
                     try {
-                        if (isAndroid14Plus) {
-                            audioTrack?.let { track ->
-                                if (track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
-                                    if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                                        track.play()
-                                    }
-                                    if (isVolumeLocked) {
-                                        track.setVolume(1.0f)
-                                    }
-                                    track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                        audioTrack?.let { track ->
+                            if (track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
+                                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                    track.play()
                                 }
-                            }
-                        } else {
-                            if (isCurrentlyPlaying) {
-                                NativeAudioEngine.nativeWriteByteArray(pcm, 0, pcm.size)
+                                if (isVolumeLocked) {
+                                    track.setVolume(1.0f)
+                                }
+                                track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                             }
                         }
                     } finally {
@@ -556,6 +483,65 @@ class BitPerfectPlaybackService : Service() {
             priority = Thread.MAX_PRIORITY
             start()
         }
+    }
+
+    // バックグラウンドで高速実行されるピーク計算（メインUIを一切ブロックしない）
+    private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String) {
+        val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+        var instantPeakL = -60f
+        var instantPeakR = -60f
+        var bitMask = 0
+
+        when (bitMode) {
+            "32bit" -> {
+                var maxL = 0f
+                var maxR = 0f
+                while (buffer.remaining() >= 8) {
+                    val sL = abs(buffer.float)
+                    val sR = abs(buffer.float)
+                    if (sL > maxL) maxL = sL
+                    if (sR > maxR) maxR = sR
+                }
+                instantPeakL = if (maxL > 0f) 20 * log10(maxL) else -60f
+                instantPeakR = if (maxR > 0f) 20 * log10(maxR) else -60f
+            }
+            "24bit" -> {
+                var maxL = 0
+                var maxR = 0
+                while (buffer.remaining() >= 6) {
+                    val b0L = buffer.get().toInt() and 0xFF
+                    val b1L = buffer.get().toInt() and 0xFF
+                    val b2L = buffer.get().toInt()
+                    val valL = abs((b2L shl 16) or (b1L shl 8) or b0L)
+
+                    val b0R = buffer.get().toInt() and 0xFF
+                    val b1R = buffer.get().toInt() and 0xFF
+                    val b2R = buffer.get().toInt()
+                    val valR = abs((b2R shl 16) or (b1R shl 8) or b0R)
+
+                    if (valL > maxL) maxL = valL
+                    if (valR > maxR) maxR = valR
+                    bitMask = bitMask or (valL and 0xFFFFFF) or (valR and 0xFFFFFF)
+                }
+                instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
+                instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
+            }
+            else -> {
+                var maxL = 0
+                var maxR = 0
+                while (buffer.remaining() >= 4) {
+                    val valL = abs(buffer.short.toInt())
+                    val valR = abs(buffer.short.toInt())
+                    if (valL > maxL) maxL = valL
+                    if (valR > maxR) maxR = valR
+                    bitMask = bitMask or (valL and 0xFFFF) or (valR and 0xFFFF)
+                }
+                instantPeakL = if (maxL > 0) 20 * log10(maxL / 32767.0f) else -60f
+                instantPeakR = if (maxR > 0) 20 * log10(maxR / 32767.0f) else -60f
+            }
+        }
+
+        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask)
     }
 
     private fun createNotificationChannel() {
@@ -586,14 +572,9 @@ class BitPerfectPlaybackService : Service() {
 
         audioLock.lock()
         try {
-            if (isAndroid14Plus) {
-                audioTrack?.stop()
-                audioTrack?.release()
-                audioTrack = null
-            } else {
-                NativeAudioEngine.nativeStop()
-                NativeAudioEngine.nativeClose()
-            }
+            audioTrack?.stop()
+            audioTrack?.release()
+            audioTrack = null
         } catch (e: Exception) {}
         finally {
             audioLock.unlock()
