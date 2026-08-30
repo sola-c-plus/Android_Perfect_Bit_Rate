@@ -20,36 +20,45 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private val density = resources.displayMetrics.density
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#888888")
+        color = Color.parseColor("#777777")
         textSize = 7.5f * density
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#AAAAAA")
+        color = Color.parseColor("#999999")
         textSize = 8.5f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
 
     private val scaleLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#2A2A2A")
+        color = Color.parseColor("#222222")
         strokeWidth = 1.0f * density
     }
 
+    // バー本体: 白色
     private val segActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E5A93C") // Walkman Signature Gold
+        color = Color.parseColor("#FFFFFF")
         style = Paint.Style.FILL
     }
 
+    // Peakホールド: ウォークマン・ゴールド
+    private val segPeakPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#E5A93C")
+        style = Paint.Style.FILL
+    }
+
+    // 0dB超過クリップ: レッド
     private val segClipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FF4444") // 0dB Over Clip Red
+        color = Color.parseColor("#FF4444")
         style = Paint.Style.FILL
     }
 
+    // 消灯グリッド: ダークグレー
     private val segInactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#1C1C1C") // 消灯グリッド
+        color = Color.parseColor("#141414")
         style = Paint.Style.FILL
     }
 
@@ -68,10 +77,29 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var currentDbL = -60f
     private var currentDbR = -60f
 
+    // Peak Hold 管理
+    private var peakHoldDbL = -60f
+    private var peakHoldDbR = -60f
+    private var peakHoldTimeL = 0L
+    private var peakHoldTimeR = 0L
+    private val PEAK_HOLD_MS = 800L
+    private val PEAK_DECAY_RATE = 40f
+
     private var lastDrawTime = 0L
     private val decayRateDbPerSec = 75f
 
-    private val rectF = RectF()
+    // 描画高速化用キャッシュ
+    private var numSegments = 0
+    private var segRectsL = arrayOf<RectF>()
+    private var segRectsR = arrayOf<RectF>()
+    private var scaleTickX = FloatArray(dbScale.size)
+    private var meterLeft = 0f
+    private var meterRight = 0f
+    private var scaleY = 0f
+    private var scaleLineY = 0f
+    private var barL_Top = 0f
+    private var barHeight = 0f
+    private var barR_Top = 0f
 
     fun setLevels(dbL: Float, dbR: Float) {
         val safeL = if (dbL.isNaN() || dbL.isInfinite()) -60f else dbL.coerceIn(-60f, 6f)
@@ -80,8 +108,21 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         targetDbL = safeL
         targetDbR = safeR
 
+        val now = System.currentTimeMillis()
+
         if (targetDbL > currentDbL) currentDbL = targetDbL
         if (targetDbR > currentDbR) currentDbR = targetDbR
+
+        // Peak Hold L
+        if (targetDbL >= peakHoldDbL) {
+            peakHoldDbL = targetDbL
+            peakHoldTimeL = now
+        }
+        // Peak Hold R
+        if (targetDbR >= peakHoldDbR) {
+            peakHoldDbR = targetDbR
+            peakHoldTimeR = now
+        }
 
         postInvalidateOnAnimation()
     }
@@ -91,7 +132,50 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         targetDbR = -60f
         currentDbL = -60f
         currentDbR = -60f
+        peakHoldDbL = -60f
+        peakHoldDbR = -60f
         postInvalidateOnAnimation()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w <= 0 || h <= 0) return
+
+        val wf = w.toFloat()
+        val labelWidth = 14f * density
+        meterLeft = labelWidth + 4f * density
+        meterRight = wf - 4f * density
+        val meterWidth = meterRight - meterLeft
+
+        scaleY = 7.5f * density
+        scaleLineY = scaleY + 3f * density
+
+        barL_Top = scaleLineY + 2.5f * density
+        barHeight = 2.8f * density
+        barR_Top = barL_Top + barHeight + 2.5f * density
+
+        // 目盛り位置の事前計算
+        for (i in dbScale.indices) {
+            val frac = dbToFraction(dbScale[i].second)
+            scaleTickX[i] = meterLeft + meterWidth * frac
+        }
+
+        // セグメント矩形の事前計算（描画時のGCと負荷を完全排除）
+        val segWidth = 2.2f * density
+        val segGap = 1.2f * density
+        val totalSegStep = segWidth + segGap
+        numSegments = (meterWidth / totalSegStep).toInt()
+
+        val rectsL = ArrayList<RectF>(numSegments)
+        val rectsR = ArrayList<RectF>(numSegments)
+
+        for (i in 0 until numSegments) {
+            val segX = meterLeft + i * totalSegStep
+            rectsL.add(RectF(segX, barL_Top, segX + segWidth, barL_Top + barHeight))
+            rectsR.add(RectF(segX, barR_Top, segX + segWidth, barR_Top + barHeight))
+        }
+        segRectsL = rectsL.toTypedArray()
+        segRectsR = rectsR.toTypedArray()
     }
 
     private fun dbToFraction(db: Float): Float {
@@ -109,6 +193,7 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (numSegments <= 0) return
 
         val now = System.currentTimeMillis()
         if (lastDrawTime > 0L) {
@@ -119,63 +204,60 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
             if (currentDbR > targetDbR) {
                 currentDbR = max(targetDbR, currentDbR - decayRateDbPerSec * dt)
             }
+
+            if (now - peakHoldTimeL > PEAK_HOLD_MS && peakHoldDbL > -55f) {
+                peakHoldDbL = max(-60f, peakHoldDbL - PEAK_DECAY_RATE * dt)
+            }
+            if (now - peakHoldTimeR > PEAK_HOLD_MS && peakHoldDbR > -55f) {
+                peakHoldDbR = max(-60f, peakHoldDbR - PEAK_DECAY_RATE * dt)
+            }
         }
         lastDrawTime = now
 
-        val w = width.toFloat()
-        val labelWidth = 14f * density
-        val meterLeft = labelWidth + 4f * density
-        val meterRight = w - 4f * density
-        val meterWidth = meterRight - meterLeft
-
-        val scaleY = 7.5f * density
-        val scaleLineY = scaleY + 3f * density
-
-        val barL_Top = scaleLineY + 2.5f * density
-        val barHeight = 2.8f * density
-        val barR_Top = barL_Top + barHeight + 2.5f * density
-
-        for (item in dbScale) {
-            val frac = dbToFraction(item.second)
-            val x = meterLeft + meterWidth * frac
-            canvas.drawText(item.first, x, scaleY, textPaint)
+        // 1. 目盛り文字と刻み線
+        for (i in dbScale.indices) {
+            val x = scaleTickX[i]
+            canvas.drawText(dbScale[i].first, x, scaleY, textPaint)
             canvas.drawLine(x, scaleLineY - 1.5f * density, x, scaleLineY + 1.5f * density, scaleLinePaint)
         }
         canvas.drawLine(meterLeft, scaleLineY, meterRight, scaleLineY, scaleLinePaint)
 
+        // 2. "L" と "R" ラベル
         canvas.drawText("L", 0f, barL_Top + barHeight - 0.5f * density, labelPaint)
         canvas.drawText("R", 0f, barR_Top + barHeight - 0.5f * density, labelPaint)
 
-        val segWidth = 2.2f * density
-        val segGap = 1.2f * density
-        val totalSegStep = segWidth + segGap
-        val numSegments = (meterWidth / totalSegStep).toInt()
+        // 3. インデックス算出
+        val activeIdxL = (dbToFraction(currentDbL) * numSegments).toInt()
+        val activeIdxR = (dbToFraction(currentDbR) * numSegments).toInt()
 
-        val fracL = dbToFraction(currentDbL)
-        val fracR = dbToFraction(currentDbR)
+        val peakIdxL = (dbToFraction(peakHoldDbL) * numSegments).toInt().coerceIn(0, numSegments - 1)
+        val peakIdxR = (dbToFraction(peakHoldDbR) * numSegments).toInt().coerceIn(0, numSegments - 1)
 
+        val clipIdx = (0.96f * numSegments).toInt()
+
+        // 4. Lチャンネルの描画（白バー ＋ ゴールドPeak）
         for (i in 0 until numSegments) {
-            val segX = meterLeft + i * totalSegStep
-            val segFrac = i.toFloat() / numSegments.toFloat()
-
-            rectF.set(segX, barL_Top, segX + segWidth, barL_Top + barHeight)
-            val paintL = when {
-                segFrac <= fracL && segFrac >= 0.96f -> segClipPaint
-                segFrac <= fracL -> segActivePaint
+            val paint = when {
+                i >= clipIdx && i <= activeIdxL -> segClipPaint
+                i == peakIdxL && peakHoldDbL > -48f -> segPeakPaint // ★Peakはゴールド
+                i <= activeIdxL -> segActivePaint                  // ★バー本体は白
                 else -> segInactivePaint
             }
-            canvas.drawRoundRect(rectF, 0.5f * density, 0.5f * density, paintL)
-
-            rectF.set(segX, barR_Top, segX + segWidth, barR_Top + barHeight)
-            val paintR = when {
-                segFrac <= fracR && segFrac >= 0.96f -> segClipPaint
-                segFrac <= fracR -> segActivePaint
-                else -> segInactivePaint
-            }
-            canvas.drawRoundRect(rectF, 0.5f * density, 0.5f * density, paintR)
+            canvas.drawRoundRect(segRectsL[i], 0.5f * density, 0.5f * density, paint)
         }
 
-        if (currentDbL > -55f || currentDbR > -55f || targetDbL > -55f || targetDbR > -55f) {
+        // 5. Rチャンネルの描画（白バー ＋ ゴールドPeak）
+        for (i in 0 until numSegments) {
+            val paint = when {
+                i >= clipIdx && i <= activeIdxR -> segClipPaint
+                i == peakIdxR && peakHoldDbR > -48f -> segPeakPaint // ★Peakはゴールド
+                i <= activeIdxR -> segActivePaint                  // ★バー本体は白
+                else -> segInactivePaint
+            }
+            canvas.drawRoundRect(segRectsR[i], 0.5f * density, 0.5f * density, paint)
+        }
+
+        if (currentDbL > -55f || currentDbR > -55f || peakHoldDbL > -55f || peakHoldDbR > -55f) {
             postInvalidateOnAnimation()
         }
     }

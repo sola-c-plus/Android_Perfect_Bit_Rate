@@ -82,12 +82,12 @@ class MainActivity : AppCompatActivity() {
 
     private var isOtherAppInterfering = false
 
-    // メインスレッドの負荷を激減させる 250ms スロットリングタイマー
+    // メインスレッド負荷を完全になくす 300ms のスマート更新タイマー
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             updateStatus()
-            uiHandler.postDelayed(this, 250)
+            uiHandler.postDelayed(this, 300)
         }
     }
 
@@ -101,7 +101,6 @@ class MainActivity : AppCompatActivity() {
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setDacDevice(activeDacDevice)
 
-            // バックグラウンドからのピーク値通知をメーターへ直接転送
             playbackService?.onPeakListener = { dbL, dbR, mask ->
                 peakDbL = dbL
                 peakDbR = dbR
@@ -226,7 +225,6 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
-        // 定期UI更新の開始
         uiHandler.post(uiUpdateRunnable)
     }
 
@@ -340,7 +338,7 @@ class MainActivity : AppCompatActivity() {
                 pcmPacketCount += pcmBytes.size
                 isPlayingState = true
 
-                // UIスレッドでは重い計算を行わず、即座にサービスへ引き渡し
+                // UIスレッドは何も計算せず、最速でサービスへ流す
                 playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
             }
             "codec" -> {
