@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- Bluetooth デバイス名取得・出力用 -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
         android:allowBackup="true"

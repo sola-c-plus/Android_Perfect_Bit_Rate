@@ -43,7 +43,7 @@ class BitPerfectPlaybackService : Service() {
     private lateinit var audioManager: AudioManager
     var currentSampleRate = 48000
     var currentBitMode = "16bit"
-    private var targetDacDevice: AudioDeviceInfo? = null
+    private var activeOutputDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
     val pcmQueue = LinkedBlockingQueue<ByteArray>(20)
@@ -51,7 +51,7 @@ class BitPerfectPlaybackService : Service() {
     private var playbackThread: Thread? = null
 
     var onPeakListener: ((Float, Float, Int) -> Unit)? = null
-    var onDacDisconnectedListener: (() -> Unit)? = null
+    var onDeviceDisconnectedListener: (() -> Unit)? = null
 
     var isVolumeLocked = false
         set(value) {
@@ -76,20 +76,21 @@ class BitPerfectPlaybackService : Service() {
 
     private val volumeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (isVolumeLocked && hasUsbDacConnected()) {
+            if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
                 lockSystemVolumeToMax()
             }
         }
     }
 
+    // USB DAC または Bluetooth イヤホンが切断された瞬間に即時音量ゼロ化
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                Log.w("BitPerfect", "★ DAC unplugged: Set volume to 0 immediately.")
+                Log.w("BitPerfect", "★ Audio output disconnected! Muting volume to 0.")
                 isVolumeLocked = false
                 muteVolumeToZero()
                 forceCloseDacStream()
-                onDacDisconnectedListener?.invoke()
+                onDeviceDisconnectedListener?.invoke()
             }
         }
     }
@@ -123,14 +124,25 @@ class BitPerfectPlaybackService : Service() {
         updateNotification()
     }
 
-    private fun hasUsbDacConnected(): Boolean {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        return devices.any { it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+    fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
+        if (device == null) return false
+        return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
+    }
+
+    fun isBluetoothDevice(device: AudioDeviceInfo?): Boolean {
+        if (device == null) return false
+        return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+               (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (
+                   device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                   device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+                   device.type == AudioDeviceInfo.TYPE_BLE_BROADCAST
+               )) ||
+               device.type == AudioDeviceInfo.TYPE_HEARING_AID
     }
 
     fun lockSystemVolumeToMax() {
         try {
-            if (hasUsbDacConnected()) {
+            if (isUsbDevice(activeOutputDevice)) {
                 val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
                 audioTrack?.setVolume(1.0f)
@@ -163,7 +175,7 @@ class BitPerfectPlaybackService : Service() {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
             pcmQueue.clear()
-            initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice)
+            initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
         }
 
         if (pcmQueue.remainingCapacity() > 0) {
@@ -175,8 +187,8 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
     }
 
-    fun setDacDevice(device: AudioDeviceInfo?) {
-        targetDacDevice = device
+    fun setOutputDevice(device: AudioDeviceInfo?) {
+        activeOutputDevice = device
         
         if (device == null) {
             isVolumeLocked = false
@@ -187,6 +199,9 @@ class BitPerfectPlaybackService : Service() {
             initAudioTrack(currentBitMode, currentSampleRate, device)
         }
     }
+
+    // 互換性エイリアス
+    fun setDacDevice(device: AudioDeviceInfo?) = setOutputDevice(device)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -286,7 +301,7 @@ class BitPerfectPlaybackService : Service() {
             audioLock.lock()
             try {
                 if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-                    initAudioTrack(currentBitMode, currentSampleRate, targetDacDevice)
+                    initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
                 }
             } finally {
                 audioLock.unlock()
@@ -344,10 +359,16 @@ class BitPerfectPlaybackService : Service() {
             else -> "16bit"
         }
 
+        val deviceLabel = when {
+            isUsbDevice(activeOutputDevice) -> "DIRECT"
+            isBluetoothDevice(activeOutputDevice) -> "BLUETOOTH"
+            else -> "SPEAKER"
+        }
+
         val notification = NotificationCompat.Builder(this, "bitperfect_service_channel")
             .setContentTitle(currentTitle)
             .setContentText("$currentArtist | $currentCodec")
-            .setSubText("${currentSampleRate}Hz $bitStr DIRECT")
+            .setSubText("${currentSampleRate}Hz $bitStr $deviceLabel")
             .setLargeIcon(currentArtwork)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .addAction(android.R.drawable.ic_media_previous, "前へ", prevIntent)
@@ -381,6 +402,7 @@ class BitPerfectPlaybackService : Service() {
 
             currentBitMode = bitMode
             currentSampleRate = sampleRate
+            activeOutputDevice = targetDevice
 
             val encoding = when (bitMode) {
                 "32bit" -> AudioFormat.ENCODING_PCM_FLOAT
@@ -392,9 +414,10 @@ class BitPerfectPlaybackService : Service() {
                 else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && targetDevice != null) {
+            // USB DAC接続時のみ Android 14+ ハードウェアクロックロックを実行
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                 try {
-                    val mixers = audioManager.getSupportedMixerAttributes(targetDevice)
+                    val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
                     val matched = mixers.firstOrNull {
                         it.format.sampleRate == sampleRate && it.format.encoding == encoding
                     } ?: mixers.firstOrNull {
@@ -447,17 +470,18 @@ class BitPerfectPlaybackService : Service() {
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
+            // ターゲット機器（USB DAC または Bluetooth）を優先ルーティング
             targetDevice?.let {
                 audioTrack?.setPreferredDevice(it)
             }
 
-            if (isVolumeLocked && hasUsbDacConnected()) {
+            if (isVolumeLocked && isUsbDevice(targetDevice)) {
                 audioTrack?.setVolume(1.0f)
                 lockSystemVolumeToMax()
             }
 
             audioTrack?.play()
-            Log.i("BitPerfect", "${sampleRate}Hz DIRECT AudioTrack Opened ($bitMode)")
+            Log.i("BitPerfect", "${sampleRate}Hz AudioTrack Opened ($bitMode) -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
             Log.e("BitPerfect", "AudioTrack init error", e)
         } finally {
@@ -472,7 +496,6 @@ class BitPerfectPlaybackService : Service() {
                 try {
                     val pcm = pcmQueue.take()
 
-                    // 原音そのままの True Peak を計算（しっかり0dBまで届く）
                     analyzeAndDispatchPeak(pcm, currentBitMode)
 
                     audioLock.lock()
@@ -482,7 +505,7 @@ class BitPerfectPlaybackService : Service() {
                                 if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                                     track.play()
                                 }
-                                if (isVolumeLocked && hasUsbDacConnected()) {
+                                if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
                                     track.setVolume(1.0f)
                                 }
                                 track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
@@ -503,7 +526,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★True Peak（真のピーク）で計算。音源のピークが100%正確に0dBに到達
     private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String) {
         val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
         var instantPeakL = -60f

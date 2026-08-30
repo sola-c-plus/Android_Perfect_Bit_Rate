@@ -65,8 +65,8 @@ class MainActivity : AppCompatActivity() {
 
     private var currentSampleRate = 48000
     private var pcmPacketCount = 0L
-    private var dacName = "未接続"
-    private var activeDacDevice: AudioDeviceInfo? = null
+    private var outputDeviceName = "内蔵スピーカー"
+    private var activeOutputDevice: AudioDeviceInfo? = null
     private var currentCodec = "OPUS 160kbps (48k)"
 
     private var currentBitMode = "16bit"
@@ -95,10 +95,10 @@ class MainActivity : AppCompatActivity() {
             val binder = service as BitPerfectPlaybackService.LocalBinder
             playbackService = binder.getService()
             isServiceBound = true
-            detectUsbDac()
+            detectAudioOutputDevice()
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
-            playbackService?.setDacDevice(activeDacDevice)
+            playbackService?.setOutputDevice(activeOutputDevice)
 
             playbackService?.onPeakListener = { dbL, dbR, mask ->
                 peakDbL = dbL
@@ -107,13 +107,12 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(dbL, dbR)
             }
 
-            // DAC切断通知を受けたら即座にスイッチOFF＆音量0
-            playbackService?.onDacDisconnectedListener = {
+            playbackService?.onDeviceDisconnectedListener = {
                 runOnUiThread {
                     isVolLockOn = false
                     switchVolLock.isChecked = false
                     prefs.edit { putBoolean("vol_lock_enabled", false) }
-                    detectUsbDac()
+                    detectAudioOutputDevice()
                 }
             }
 
@@ -187,7 +186,7 @@ class MainActivity : AppCompatActivity() {
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
                     sendBitModeSetting(selectedMode)
                     if (isPlayingState) {
-                        playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeDacDevice)
+                        playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeOutputDevice)
                     }
                     bitActivityMask = 0
                     peakDbL = -60f
@@ -206,7 +205,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && activeDacDevice == null) {
+            // USB DAC接続時のみ0dBを許可
+            val isUsb = activeOutputDevice?.let { dev ->
+                dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET
+            } ?: false
+
+            if (isChecked && !isUsb) {
                 switchVolLock.isChecked = false
                 return@setOnCheckedChangeListener
             }
@@ -285,7 +289,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            if (activeDacDevice != null) {
+            val isUsb = activeOutputDevice?.let { dev ->
+                dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET
+            } ?: false
+            if (isUsb) {
                 playbackService?.lockSystemVolumeToMax()
                 return true
             }
@@ -316,31 +323,56 @@ class MainActivity : AppCompatActivity() {
     private fun registerAudioDeviceCallback() {
         audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                detectUsbDac()
-                playbackService?.setDacDevice(activeDacDevice)
+                detectAudioOutputDevice()
+                playbackService?.setOutputDevice(activeOutputDevice)
             }
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                detectUsbDac()
-                playbackService?.setDacDevice(activeDacDevice)
+                detectAudioOutputDevice()
+                playbackService?.setOutputDevice(activeOutputDevice)
             }
         }, Handler(Looper.getMainLooper()))
     }
 
-    private fun detectUsbDac() {
+    // 優先度判定: USB DAC ＞ Bluetooth ＞ 内蔵スピーカー
+    private fun detectAudioOutputDevice() {
         val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        activeDacDevice = null
-        dacName = "内蔵スピーカー"
+        
+        var usbDevice: AudioDeviceInfo? = null
+        var btDevice: AudioDeviceInfo? = null
+
         for (device in devices) {
-            if (device.type == AudioDeviceInfo.TYPE_USB_DEVICE || 
-                device.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
-                activeDacDevice = device
-                dacName = device.productName.toString().replace("USB-Audio - ", "")
+            if (device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+                usbDevice = device
                 break
+            } else if (device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                       (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (
+                           device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                           device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER
+                       )) ||
+                       device.type == AudioDeviceInfo.TYPE_HEARING_AID) {
+                if (btDevice == null) btDevice = device
             }
         }
 
-        // DACが抜けた場合は即座に音量0＆0dBスイッチOFF
-        if (activeDacDevice == null) {
+        if (usbDevice != null) {
+            activeOutputDevice = usbDevice
+            outputDeviceName = usbDevice.productName.toString().replace("USB-Audio - ", "")
+        } else if (btDevice != null) {
+            activeOutputDevice = btDevice
+            val rawName = btDevice.productName.toString()
+            outputDeviceName = if (rawName.isNotEmpty()) rawName else "Bluetooth Audio"
+            
+            // Bluetooth接続時は0dBロックを解除
+            if (isVolLockOn) {
+                isVolLockOn = false
+                switchVolLock.isChecked = false
+                prefs.edit { putBoolean("vol_lock_enabled", false) }
+            }
+        } else {
+            activeOutputDevice = null
+            outputDeviceName = "内蔵スピーカー"
+            
+            // スピーカー時は0dBをOFFにして音量0
             if (isVolLockOn) {
                 isVolLockOn = false
                 switchVolLock.isChecked = false
@@ -402,16 +434,24 @@ class MainActivity : AppCompatActivity() {
     private fun updateStatus() {
         val mb = pcmPacketCount / (1024.0 * 1024.0)
 
-        if (activeDacDevice != null) {
-            badgeDirect.text = "DIRECT STREAM"
-            badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
-            badgeDirect.setTextColor(Color.BLACK)
+        val dev = activeOutputDevice
+        if (dev != null) {
+            if (dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+                badgeDirect.text = "DIRECT STREAM"
+                badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
+                badgeDirect.setTextColor(Color.BLACK)
+            } else {
+                // Bluetooth接続時
+                badgeDirect.text = "BLUETOOTH"
+                badgeDirect.setBackgroundResource(R.drawable.bg_badge_bluetooth)
+                badgeDirect.setTextColor(Color.BLACK)
+            }
         } else {
             badgeDirect.text = "STANDARD MIX"
             badgeDirect.setBackgroundResource(R.drawable.bg_badge_normal)
             badgeDirect.setTextColor(Color.LTGRAY)
         }
-        textDacName.text = dacName
+        textDacName.text = outputDeviceName
 
         val bitLabel = when (currentBitMode) {
             "32bit" -> "32 bit Float"
