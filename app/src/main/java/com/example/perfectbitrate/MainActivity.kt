@@ -1,9 +1,15 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
-import com.example.perfectbitrate.R
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.graphics.Color
@@ -68,6 +74,10 @@ class MainActivity : AppCompatActivity() {
     private var outputDeviceName = "内蔵スピーカー"
     private var activeOutputDevice: AudioDeviceInfo? = null
     private var currentCodec = "OPUS 160kbps (48k)"
+    private var currentBtCodecName = ""
+
+    private var bluetoothA2dp: BluetoothA2dp? = null
+    private var bluetoothAdapter: BluetoothAdapter? = null
 
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Float)")
@@ -80,13 +90,18 @@ class MainActivity : AppCompatActivity() {
     private var isVolLockOn = false
     private var isPlayingState = false
 
-    private var isOtherAppInterfering = false
-
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             updateStatus()
             uiHandler.postDelayed(this, 300)
+        }
+    }
+
+    private val btReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            fetchBluetoothCodec()
+            detectAudioOutputDevice()
         }
     }
 
@@ -136,7 +151,6 @@ class MainActivity : AppCompatActivity() {
                     Log.e("BitPerfect", "Failed to send seek", e)
                 }
             }
-            Log.i("BitPerfect", "PlaybackService connected.")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             playbackService = null
@@ -185,9 +199,7 @@ class MainActivity : AppCompatActivity() {
                     currentBitMode = selectedMode
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
                     sendBitModeSetting(selectedMode)
-                    if (isPlayingState) {
-                        playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeOutputDevice)
-                    }
+                    playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeOutputDevice)
                     bitActivityMask = 0
                     peakDbL = -60f
                     peakDbR = -60f
@@ -205,7 +217,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            // USB DAC接続時のみ0dBを許可
             val isUsb = activeOutputDevice?.let { dev ->
                 dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET
             } ?: false
@@ -225,7 +236,7 @@ class MainActivity : AppCompatActivity() {
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        registerAudioPlaybackCallback()
+        setupBluetoothTracker()
 
         val serviceIntent = Intent(this, BitPerfectPlaybackService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
@@ -237,53 +248,151 @@ class MainActivity : AppCompatActivity() {
         btnReload.setOnClickListener {
             reloadDirectStream()
         }
-        btnReload.setOnLongClickListener {
-            reloadDirectStream()
-            true
-        }
 
         uiHandler.post(uiUpdateRunnable)
     }
 
+    private fun setupBluetoothTracker() {
+        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        bluetoothAdapter = btManager?.adapter
+        bluetoothAdapter?.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+                if (profile == BluetoothProfile.A2DP) {
+                    bluetoothA2dp = proxy as? BluetoothA2dp
+                    fetchBluetoothCodec()
+                }
+            }
+            override fun onServiceDisconnected(profile: Int) {
+                if (profile == BluetoothProfile.A2DP) {
+                    bluetoothA2dp = null
+                }
+            }
+        }, BluetoothProfile.A2DP)
+
+        val filter = IntentFilter().apply {
+            addAction("android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED")
+            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+        }
+        try {
+            registerReceiver(btReceiver, filter)
+        } catch (e: Exception) {}
+    }
+
+    private fun fetchBluetoothCodec() {
+        val a2dp = bluetoothA2dp ?: return
+        try {
+            val devices = a2dp.connectedDevices
+            if (devices.isEmpty()) {
+                currentBtCodecName = ""
+                return
+            }
+            val activeDev = devices[0]
+            val getCodecStatusMethod = a2dp.javaClass.getMethod("getCodecStatus", BluetoothDevice::class.java)
+            val codecStatus = getCodecStatusMethod.invoke(a2dp, activeDev)
+            if (codecStatus != null) {
+                val getCodecConfigMethod = codecStatus.javaClass.getMethod("getCodecConfig")
+                val codecConfig = getCodecConfigMethod.invoke(codecStatus)
+                if (codecConfig != null) {
+                    currentBtCodecName = parseComprehensiveCodec(codecConfig, codecStatus)
+                    Log.i("BitPerfect", "★ Bluetooth Codec Detected: $currentBtCodecName")
+                }
+            }
+        } catch (e: Exception) {
+            currentBtCodecName = "BT HD Audio"
+        }
+    }
+
+    // ★すべての Bluetooth コーデック（aptX Adaptive / Lossless / TWS+ / LHDC / SSC等）に対応
+    private fun parseComprehensiveCodec(codecConfig: Any, codecStatus: Any): String {
+        try {
+            // 1. getCodecName() メソッドからの直接取得を試みる
+            try {
+                val getNameMethod = codecConfig.javaClass.getMethod("getCodecName")
+                val nameObj = getNameMethod.invoke(codecConfig)
+                if (nameObj is String && nameObj.isNotEmpty() && !nameObj.contains("INVALID", true) && !nameObj.contains("UNKNOWN", true)) {
+                    return formatCodecName(nameObj)
+                }
+            } catch (e: Exception) {}
+
+            // 2. toString() による詳細文字列スキャン（AptX Adaptive, LHDC, Samsung Scalable 等を検出）
+            val fullStr = "${codecConfig} ${codecStatus}".lowercase()
+            when {
+                fullStr.contains("lossless") -> return "aptX Lossless"
+                fullStr.contains("adaptive") || fullStr.contains("aptx-ad") || fullStr.contains("aptx_ad") -> return "aptX Adaptive"
+                fullStr.contains("twsp") || fullStr.contains("tws+") || fullStr.contains("aptx-tws") -> return "aptX TWS+"
+                fullStr.contains("lhdc-v5") || fullStr.contains("lhdc v5") -> return "LHDC V5"
+                fullStr.contains("lhdc") -> return "LHDC"
+                fullStr.contains("llac") -> return "LLAC"
+                fullStr.contains("seamless") || fullStr.contains("ssc-uhq") -> return "Samsung Seamless"
+                fullStr.contains("scalable") || fullStr.contains("ssc") -> return "Samsung Scalable"
+                fullStr.contains("l2hc") -> return "L2HC"
+                fullStr.contains("lc3") -> return "LC3 (LE Audio)"
+                fullStr.contains("ldac") -> return "LDAC"
+                fullStr.contains("aptx hd") || fullStr.contains("aptx-hd") || fullStr.contains("aptx_hd") -> return "aptX HD"
+                fullStr.contains("aptx") -> return "aptX"
+                fullStr.contains("opus") -> return "Opus"
+                fullStr.contains("aac") -> return "AAC"
+                fullStr.contains("sbc") -> return "SBC"
+            }
+
+            // 3. getCodecType() 数値によるフォールバック判定
+            val getTypeMethod = codecConfig.javaClass.getMethod("getCodecType")
+            val type = getTypeMethod.invoke(codecConfig) as Int
+            return when (type) {
+                0 -> "SBC"
+                1 -> "AAC"
+                2 -> "aptX"
+                3 -> "aptX HD"
+                4 -> "LDAC"
+                5 -> "LC3 / aptX Adaptive"
+                6 -> "Opus"
+                7 -> "aptX Adaptive"
+                8 -> "aptX TWS+"
+                else -> "BT Codec ($type)"
+            }
+        } catch (e: Exception) {
+            return "Bluetooth Audio"
+        }
+    }
+
+    private fun formatCodecName(raw: String): String {
+        val lower = raw.lowercase()
+        return when {
+            lower.contains("adaptive") -> "aptX Adaptive"
+            lower.contains("lossless") -> "aptX Lossless"
+            lower.contains("twsp") || lower.contains("tws") -> "aptX TWS+"
+            lower.contains("hd") && lower.contains("aptx") -> "aptX HD"
+            lower.contains("aptx") -> "aptX"
+            lower.contains("ldac") -> "LDAC"
+            lower.contains("lhdc") -> "LHDC"
+            lower.contains("llac") -> "LLAC"
+            lower.contains("seamless") -> "Samsung Seamless"
+            lower.contains("scalable") || lower.contains("ssc") -> "Samsung Scalable"
+            lower.contains("l2hc") -> "L2HC"
+            lower.contains("lc3") -> "LC3"
+            lower.contains("opus") -> "Opus"
+            lower.contains("aac") -> "AAC"
+            lower.contains("sbc") -> "SBC"
+            else -> raw
+        }
+    }
+
     private fun reloadDirectStream() {
-        Log.i("BitPerfect", "Reloading Direct Stream...")
         runOnUiThread {
             pcmPacketCount = 0L
             bitActivityMask = 0
             peakDbL = -60f
             peakDbR = -60f
             walkmanLevelMeter?.reset()
-            playbackService?.forceCloseDacStream()
             playbackService?.resetBuffer()
+            playbackService?.initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+            try {
+                activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
+            } catch (e: Exception) {}
             geckoSession.reload()
             updateStatus()
-        }
-    }
-
-    private fun registerAudioPlaybackCallback() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioManager.registerAudioPlaybackCallback(object : AudioManager.AudioPlaybackCallback() {
-                override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
-                    super.onPlaybackConfigChanged(configs)
-                    if (configs == null) return
-
-                    val activeConfigs = configs.filter { it.audioAttributes.usage != AudioAttributes.USAGE_UNKNOWN }
-
-                    val otherInterfering = activeConfigs.size > 2 || activeConfigs.any { config ->
-                        val usage = config.audioAttributes.usage
-                        usage == AudioAttributes.USAGE_NOTIFICATION ||
-                        usage == AudioAttributes.USAGE_ALARM ||
-                        usage == AudioAttributes.USAGE_ASSISTANCE_SONIFICATION ||
-                        usage == AudioAttributes.USAGE_GAME ||
-                        usage == AudioAttributes.USAGE_VOICE_COMMUNICATION
-                    }
-
-                    if (isOtherAppInterfering != otherInterfering) {
-                        isOtherAppInterfering = otherInterfering
-                        updateStatus()
-                    }
-                }
-            }, Handler(Looper.getMainLooper()))
         }
     }
 
@@ -325,18 +434,21 @@ class MainActivity : AppCompatActivity() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
                 detectAudioOutputDevice()
                 playbackService?.setOutputDevice(activeOutputDevice)
+                fetchBluetoothCodec()
+                try {
+                    activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
+                } catch (e: Exception) {}
             }
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
                 detectAudioOutputDevice()
                 playbackService?.setOutputDevice(activeOutputDevice)
+                fetchBluetoothCodec()
             }
         }, Handler(Looper.getMainLooper()))
     }
 
-    // 優先度判定: USB DAC ＞ Bluetooth ＞ 内蔵スピーカー
     private fun detectAudioOutputDevice() {
         val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        
         var usbDevice: AudioDeviceInfo? = null
         var btDevice: AudioDeviceInfo? = null
 
@@ -362,7 +474,6 @@ class MainActivity : AppCompatActivity() {
             val rawName = btDevice.productName.toString()
             outputDeviceName = if (rawName.isNotEmpty()) rawName else "Bluetooth Audio"
             
-            // Bluetooth接続時は0dBロックを解除
             if (isVolLockOn) {
                 isVolLockOn = false
                 switchVolLock.isChecked = false
@@ -372,7 +483,6 @@ class MainActivity : AppCompatActivity() {
             activeOutputDevice = null
             outputDeviceName = "内蔵スピーカー"
             
-            // スピーカー時は0dBをOFFにして音量0
             if (isVolLockOn) {
                 isVolLockOn = false
                 switchVolLock.isChecked = false
@@ -440,16 +550,23 @@ class MainActivity : AppCompatActivity() {
                 badgeDirect.text = "DIRECT STREAM"
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
                 badgeDirect.setTextColor(Color.BLACK)
+                textCodec.text = currentCodec.uppercase()
             } else {
-                // Bluetooth接続時
-                badgeDirect.text = "BLUETOOTH"
+                val btCodecBadge = if (currentBtCodecName.isNotEmpty()) "BT [$currentBtCodecName]" else "BLUETOOTH"
+                badgeDirect.text = btCodecBadge
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_bluetooth)
                 badgeDirect.setTextColor(Color.BLACK)
+                textCodec.text = if (currentBtCodecName.isNotEmpty()) {
+                    "$currentBtCodecName | ${currentCodec.uppercase()}"
+                } else {
+                    currentCodec.uppercase()
+                }
             }
         } else {
             badgeDirect.text = "STANDARD MIX"
             badgeDirect.setBackgroundResource(R.drawable.bg_badge_normal)
             badgeDirect.setTextColor(Color.LTGRAY)
+            textCodec.text = currentCodec.uppercase()
         }
         textDacName.text = outputDeviceName
 
@@ -461,7 +578,6 @@ class MainActivity : AppCompatActivity() {
 
         val rateStr = String.format(java.util.Locale.US, "%.1f", currentSampleRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
-        textCodec.text = currentCodec.uppercase()
         textTransfer.text = String.format("%.1f MB", mb)
 
         val peakTextL = if (peakDbL > -55f) String.format("%.1f", peakDbL) else "-inf"
@@ -555,6 +671,10 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         uiHandler.removeCallbacks(uiUpdateRunnable)
+        try {
+            unregisterReceiver(btReceiver)
+        } catch (e: Exception) {}
+        bluetoothAdapter?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
         if (isServiceBound) {
             unbindService(serviceConnection)
             isServiceBound = false

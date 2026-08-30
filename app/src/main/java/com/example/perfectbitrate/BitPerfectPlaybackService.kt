@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -43,13 +43,12 @@ class BitPerfectPlaybackService : Service() {
     private lateinit var audioManager: AudioManager
     var currentSampleRate = 48000
     var currentBitMode = "16bit"
-    private var activeOutputDevice: AudioDeviceInfo? = null
+    var activeOutputDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
-    // デバイス切り替え・トラック生成を非同期で安全に行うエグゼキュータ
     private val trackExecutor = Executors.newSingleThreadExecutor()
 
-    val pcmQueue = LinkedBlockingQueue<ByteArray>(20)
+    val pcmQueue = LinkedBlockingQueue<ByteArray>(60)
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
@@ -88,7 +87,7 @@ class BitPerfectPlaybackService : Service() {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                Log.w("BitPerfect", "★ Audio output disconnected! Muting volume to 0.")
+                Log.w("BitPerfect", "★ Audio output disconnected! Resetting stream.")
                 isVolumeLocked = false
                 muteVolumeToZero()
                 forceCloseDacStream()
@@ -164,9 +163,7 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, bitMode: String) {
-        if (!isCurrentlyPlaying) {
-            isCurrentlyPlaying = true
-        }
+        isCurrentlyPlaying = true
 
         val needsRecreate = (sampleRate != currentSampleRate || 
                              bitMode != currentBitMode || 
@@ -176,13 +173,13 @@ class BitPerfectPlaybackService : Service() {
         if (needsRecreate) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
-            pcmQueue.clear()
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
             }
         }
 
-        if (pcmQueue.remainingCapacity() > 0) {
+        if (!pcmQueue.offer(pcmBytes)) {
+            pcmQueue.poll()
             pcmQueue.offer(pcmBytes)
         }
     }
@@ -191,23 +188,21 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
     }
 
-    // ★非同期で安全にデバイスを切り替え（メインスレッドを1ミリ秒も止めない）
     fun setOutputDevice(device: AudioDeviceInfo?) {
+        val changed = (activeOutputDevice?.id != device?.id)
         activeOutputDevice = device
-        
+
         if (device == null) {
             isVolumeLocked = false
             muteVolumeToZero()
         }
 
-        trackExecutor.execute {
-            if (isCurrentlyPlaying) {
+        if (changed || audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+            trackExecutor.execute {
                 initAudioTrack(currentBitMode, currentSampleRate, device)
             }
         }
     }
-
-    fun setDacDevice(device: AudioDeviceInfo?) = setOutputDevice(device)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -265,7 +260,6 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun forceCloseDacStream() {
-        isCurrentlyPlaying = false
         pcmQueue.clear()
         trackExecutor.execute {
             audioLock.lock()
@@ -400,10 +394,8 @@ class BitPerfectPlaybackService : Service() {
     fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
         audioLock.lock()
         try {
-            // 古いトラックを安全に退避して破棄
             val oldTrack = audioTrack
             audioTrack = null
-            pcmQueue.clear()
 
             oldTrack?.let {
                 try {
@@ -428,7 +420,6 @@ class BitPerfectPlaybackService : Service() {
                 else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
-            // USB DAC接続時のみ Android 14+ ハードウェアクロックロック
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                 try {
                     val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -448,8 +439,7 @@ class BitPerfectPlaybackService : Service() {
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
-                    val success = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
-                    Log.i("BitPerfect", "★ Mixer switch to $sampleRate Hz: $success")
+                    audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
                 } catch (e: Exception) {
                     Log.e("BitPerfect", "Mixer attribute set error", e)
                 }
@@ -460,17 +450,16 @@ class BitPerfectPlaybackService : Service() {
                 "24bit" -> 3
                 else -> 2
             }
-            var minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
-            if (minBuf <= 0) {
-                minBuf = sampleRate * 2 * bytesPerSample / 5
-            }
+
+            val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
+            val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms ジッター吸収用バッファ
+            val bufferSize = max(minBuf * 4, desiredBuf)
 
             val newTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setFlags(AudioAttributes.FLAG_LOW_LATENCY)
                         .build()
                 )
                 .setAudioFormat(
@@ -480,7 +469,7 @@ class BitPerfectPlaybackService : Service() {
                         .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                         .build()
                 )
-                .setBufferSizeInBytes(minBuf * 4)
+                .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
@@ -496,7 +485,7 @@ class BitPerfectPlaybackService : Service() {
             newTrack.play()
             audioTrack = newTrack
 
-            Log.i("BitPerfect", "★ ${sampleRate}Hz AudioTrack Started -> ${targetDevice?.productName ?: "Default"}")
+            Log.i("BitPerfect", "★ AudioTrack Started: ${sampleRate}Hz, Buffer=$bufferSize bytes -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
             Log.e("BitPerfect", "AudioTrack init error", e)
         } finally {
@@ -504,7 +493,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★重要: track.write の間は audioLock を握らない！これでデッドロックを完全に排除
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
@@ -522,7 +510,7 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
@@ -583,7 +571,7 @@ class BitPerfectPlaybackService : Service() {
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
             }
-            else -> { // 16bit
+            else -> {
                 var maxL = 0
                 var maxR = 0
                 while (buffer.remaining() >= 4) {

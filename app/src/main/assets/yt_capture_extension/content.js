@@ -1,4 +1,4 @@
-﻿try {
+try {
     Object.defineProperty(document, 'hidden', { value: false, writable: false });
     Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
     document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
@@ -88,18 +88,15 @@ function scanStreamCodec() {
 
     try {
         const entries = performance.getEntriesByType('resource');
-        const startIdx = Math.max(0, entries.length - 15);
+        const startIdx = Math.max(0, entries.length - 20);
         for (let i = entries.length - 1; i >= startIdx; i--) {
             const url = entries[i].name;
             if (url.includes('videoplayback')) {
                 const matchItag = url.match(/[?&]itag=(\d+)/);
-                if (matchItag && matchItag[1]) {
-                    const itag = matchItag[1];
-                    if (itagMap[itag]) {
-                        detectedName = itagMap[itag].name;
-                        detectedRate = itagMap[itag].rate;
-                        break;
-                    }
+                if (matchItag && matchItag[1] && itagMap[matchItag[1]]) {
+                    detectedName = itagMap[matchItag[1]].name;
+                    detectedRate = itagMap[matchItag[1]].rate;
+                    break;
                 }
                 if (url.includes('mime=audio%2Fwebm') || url.includes('mime=audio/webm')) {
                     detectedName = 'Opus 160kbps (WebM 48k)';
@@ -130,18 +127,26 @@ function scanStreamCodec() {
 }
 setInterval(scanStreamCodec, 1000);
 
+function ensureAudioRunning() {
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+    }
+}
+
 function hookVideoEvents(video) {
     if (cachedVideoElement === video && isVideoEventsHooked) return;
     cachedVideoElement = video;
     isVideoEventsHooked = true;
 
-    video.addEventListener('play', () => {
-        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    const onPlay = () => {
+        ensureAudioRunning();
         scanStreamCodec();
         postNativeMessage({ type: "state", playing: true });
-    });
+    };
+
+    video.addEventListener('play', onPlay);
+    video.addEventListener('playing', onPlay);
     video.addEventListener('pause', () => {
-        if (audioCtx && audioCtx.state === 'running') audioCtx.suspend().catch(() => {});
         postNativeMessage({ type: "state", playing: false });
     });
     video.addEventListener('loadstart', scanStreamCodec);
@@ -154,26 +159,24 @@ function setupAudioPipeline() {
     if (!video) return;
 
     try {
-        if (!audioCtx) {
+        if (!audioCtx || audioCtx.state === 'closed') {
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             audioCtx = new AudioContextClass({
-                sampleRate: 48000,
                 latencyHint: 'playback'
             });
         }
 
+        ensureAudioRunning();
         hookVideoEvents(video);
 
         if (!cachedSourceNode) {
             try {
                 cachedSourceNode = audioCtx.createMediaElementSource(video);
             } catch(err) {
-                try {
-                    const stream = video.mozCaptureStream ? video.mozCaptureStream() : (video.captureStream ? video.captureStream() : null);
-                    if (stream) {
-                        cachedSourceNode = audioCtx.createMediaStreamSource(stream);
-                    }
-                } catch(err2) {}
+                const stream = video.mozCaptureStream ? video.mozCaptureStream() : (video.captureStream ? video.captureStream() : null);
+                if (stream) {
+                    cachedSourceNode = audioCtx.createMediaStreamSource(stream);
+                }
             }
             scanStreamCodec();
         }
@@ -181,25 +184,23 @@ function setupAudioPipeline() {
         if (cachedSourceNode && !processor) {
             processor = audioCtx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
-                if (video.paused || video.ended) {
-                    return;
-                }
-
-                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+                if (video.paused || video.ended) return;
+                ensureAudioRunning();
 
                 const inL = e.inputBuffer.getChannelData(0);
                 const inR = e.inputBuffer.getChannelData(1);
                 const inLen = inL.length;
+                const srcRate = audioCtx.sampleRate || 48000;
 
                 let left = inL;
                 let right = inR;
                 let len = inLen;
 
-                if (currentSampleRate === 44100) {
-                    len = Math.floor(inLen * (44100 / 48000));
+                if (srcRate !== currentSampleRate) {
+                    const ratio = srcRate / currentSampleRate;
+                    len = Math.floor(inLen / ratio);
                     left = new Float32Array(len);
                     right = new Float32Array(len);
-                    const ratio = 48000 / 44100;
                     for (let i = 0; i < len; i++) {
                         const pos = i * ratio;
                         const idx = Math.floor(pos);
@@ -254,7 +255,7 @@ function setupAudioPipeline() {
                 }
 
                 let binary = '';
-                const chunkSize = 8192;
+                const chunkSize = 16384;
                 for (let i = 0; i < bytes.length; i += chunkSize) {
                     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
                 }
@@ -280,11 +281,15 @@ function handleNativeMessage(msg) {
     const video = cachedVideoElement || document.querySelector('video');
 
     if (cmd === 'play') {
+        ensureAudioRunning();
         if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
         document.querySelector('#play-pause-button')?.click();
     } else if (cmd === 'pause') {
         if (video) video.pause();
         document.querySelector('#play-pause-button')?.click();
+    } else if (cmd === 'resume_audio') {
+        ensureAudioRunning();
+        setupAudioPipeline();
     } else if (cmd === 'next') {
         document.querySelector('.next-button')?.click();
     } else if (cmd === 'prev') {
@@ -355,6 +360,9 @@ function checkMetadata() {
 }
 setInterval(checkMetadata, 1000);
 
-setInterval(setupAudioPipeline, 1000);
-document.addEventListener('click', setupAudioPipeline);
+setInterval(setupAudioPipeline, 1500);
+document.addEventListener('click', () => {
+    ensureAudioRunning();
+    setupAudioPipeline();
+});
 setupAudioPipeline();
