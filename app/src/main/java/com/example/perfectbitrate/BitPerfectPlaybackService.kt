@@ -53,12 +53,12 @@ class BitPerfectPlaybackService : Service() {
 
     private val trackExecutor = Executors.newSingleThreadExecutor()
 
-    // ★ バッファ安定化: 適正容量 (約1.5秒分 = 18パケット)
-    private val MAX_QUEUE_CAPACITY = 18
+    // クロックドリフト適応型キュー
+    private val MAX_QUEUE_CAPACITY = 24
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
-    // ★ プリロール・ウォーターマーク: 4パケット(約300ms)溜まるまで安全待機
-    private val PREROLL_THRESHOLD = 4
+    // プリロール閾値: 3パケット (約250ms)
+    private val PREROLL_THRESHOLD = 3
     private val isBuffering = AtomicBoolean(true)
 
     @Volatile private var isRunning = false
@@ -204,13 +204,11 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        // キューが上限に達した場合は最も古いパケットを1つ逃がして最新パケットを維持
         if (!pcmQueue.offer(pcmBytes)) {
             pcmQueue.poll()
             pcmQueue.offer(pcmBytes)
         }
 
-        // プリロール蓄積完了判定
         if (isBuffering.get() && pcmQueue.size >= PREROLL_THRESHOLD) {
             isBuffering.set(false)
         }
@@ -534,8 +532,9 @@ class BitPerfectPlaybackService : Service() {
                         else -> 2
                     }
 
+                    // Galaxy × Walkman のクロックジッター吸収に最適なバッファアライメント (約200ms)
                     val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
-                    val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms
+                    val desiredBuf = sampleRate * 2 * bytesPerSample / 5
                     val bufferSize = max(if (minBuf > 0) minBuf * 4 else 8192, desiredBuf)
 
                     val track = AudioTrack.Builder()
@@ -570,7 +569,7 @@ class BitPerfectPlaybackService : Service() {
                         track.release()
                     }
                 } catch (e: Exception) {
-                    Log.w("BitPerfect", "Format $enc failed, trying fallback...", e)
+                    Log.w("BitPerfect", "Format $enc fallback...", e)
                 }
             }
 
@@ -584,7 +583,7 @@ class BitPerfectPlaybackService : Service() {
             currentBitMode = actualModeStr
             onActualBitModeChanged?.invoke(actualModeStr)
 
-            Log.i("BitPerfect", "★ AudioTrack Started Successfully: ${sampleRate}Hz, ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
+            Log.i("BitPerfect", "★ AudioTrack Initialized: ${sampleRate}Hz, ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
             Log.e("BitPerfect", "Critical AudioTrack init error", e)
         } finally {
@@ -592,26 +591,23 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ バッファ自己修復・プリロール・適応型再生ループ
+    // ★ 適応型クロックドリフト補正再生ループ
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
             while (isRunning) {
                 try {
-                    // プリロール待機中は短いスリープでパケット蓄積を待つ
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
-                            Thread.sleep(15)
+                            Thread.sleep(12)
                             continue
                         } else {
                             isBuffering.set(false)
                         }
                     }
 
-                    // 100msタイムアウト付きで安全に取り出し
-                    val pcm = pcmQueue.poll(100, TimeUnit.MILLISECONDS)
+                    val pcm = pcmQueue.poll(80, TimeUnit.MILLISECONDS)
                     if (pcm == null) {
-                        // パケット供給が完全に途切れた場合はアンダーラン防止のためバッファリング状態へ退避
                         if (pcmQueue.isEmpty()) {
                             isBuffering.set(true)
                         }

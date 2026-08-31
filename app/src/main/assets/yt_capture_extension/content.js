@@ -1,4 +1,3 @@
-// iframeガード
 if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
@@ -184,6 +183,7 @@ function setupAudioPipeline() {
         }
 
         if (cachedSourceNode && !processor) {
+            // バッファサイズ 4096 (約85ms/フレーム)
             processor = audioCtx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
                 if (video.paused || video.ended) return;
