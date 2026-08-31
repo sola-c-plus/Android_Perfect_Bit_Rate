@@ -90,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private var peakDbR = -60f
     private var bitActivityMask = 0
     private var lastBitResetTime = 0L
+    private var lastPcmTime = 0L
     private var isAdBlockOn = true
     private var isVolLockOn = false
     private var isPlayingState = false
@@ -97,8 +98,16 @@ class MainActivity : AppCompatActivity() {
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
+            val now = System.currentTimeMillis()
+            // PCM受信が400ms以上途絶えた、または非再生時は確実にゼロに落とす
+            if (now - lastPcmTime > 400L || !isPlayingState) {
+                peakDbL = -60f
+                peakDbR = -60f
+                bitActivityMask = 0
+                walkmanLevelMeter?.setLevels(-60f, -60f)
+            }
             updateStatus()
-            uiHandler.postDelayed(this, 150)
+            uiHandler.postDelayed(this, 100)
         }
     }
 
@@ -151,6 +160,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             playbackService?.onPeakListener = { dbL, dbR, mask ->
+                lastPcmTime = System.currentTimeMillis()
                 peakDbL = dbL
                 peakDbR = dbR
                 bitActivityMask = bitActivityMask or mask
@@ -576,6 +586,7 @@ class MainActivity : AppCompatActivity() {
                 val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
                 pcmPacketCount += pcmBytes.size
                 isPlayingState = true
+                lastPcmTime = System.currentTimeMillis()
 
                 playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
             }
@@ -654,12 +665,13 @@ class MainActivity : AppCompatActivity() {
         textRateBits.text = "$rateStr kHz / $bitLabel"
         textTransfer.text = String.format("%.1f MB", mb)
 
-        val peakTextL = if (peakDbL > -55f) String.format("%.1f", peakDbL) else "-inf"
-        val peakTextR = if (peakDbR > -55f) String.format("%.1f", peakDbR) else "-inf"
+        // ★ 停止時または -50dB 以下は即座に "-inf" を表示
+        val peakTextL = if (peakDbL > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbL) else "-inf"
+        val peakTextR = if (peakDbR > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbR) else "-inf"
         textPeak.text = "PEAK  L: ${peakTextL} dB  /  R: ${peakTextR} dB"
 
         val maxBits = if (currentBitMode == "32bit") 32 else (if (currentBitMode == "24bit") 24 else 16)
-        val activeBits = Integer.bitCount(bitActivityMask).coerceIn(if (isPlayingState && pcmPacketCount > 0) 1 else 0, maxBits)
+        val activeBits = if (!isPlayingState || (peakDbL <= -50f && peakDbR <= -50f)) 0 else Integer.bitCount(bitActivityMask).coerceIn(0, maxBits)
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
         textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
 

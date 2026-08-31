@@ -9,7 +9,6 @@ import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
 import kotlin.math.max
-import kotlin.math.min
 
 class WalkmanLevelMeterView @JvmOverloads constructor(
     context: Context,
@@ -85,10 +84,10 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var peakHoldTimeL = 0L
     private var peakHoldTimeR = 0L
     private val PEAK_HOLD_MS = 750L
-    private val PEAK_DECAY_RATE = 50f
+    private val PEAK_DECAY_RATE = 60f
 
     private var lastDrawTime = 0L
-    private val decayRateDbPerSec = 130f
+    private val decayRateDbPerSec = 140f
 
     private var numSegments = 0
     private var segRectsL = arrayOf<RectF>()
@@ -135,7 +134,10 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         currentDbR = -60f
         peakHoldDbL = -60f
         peakHoldDbR = -60f
-        postInvalidateOnAnimation()
+        peakHoldTimeL = 0L
+        peakHoldTimeR = 0L
+        lastDrawTime = 0L
+        postInvalidate()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -210,10 +212,10 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
                 currentDbR = max(targetDbR, currentDbR - decayRateDbPerSec * dt)
             }
 
-            if (now - peakHoldTimeL > PEAK_HOLD_MS && peakHoldDbL > -55f) {
+            if (now - peakHoldTimeL > PEAK_HOLD_MS && peakHoldDbL > -60f) {
                 peakHoldDbL = max(-60f, peakHoldDbL - PEAK_DECAY_RATE * dt)
             }
-            if (now - peakHoldTimeR > PEAK_HOLD_MS && peakHoldDbR > -55f) {
+            if (now - peakHoldTimeR > PEAK_HOLD_MS && peakHoldDbR > -60f) {
                 peakHoldDbR = max(-60f, peakHoldDbR - PEAK_DECAY_RATE * dt)
             }
         }
@@ -234,36 +236,49 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         canvas.drawText("L", 0f, lCenterY, labelPaint)
         canvas.drawText("R", 0f, rCenterY, labelPaint)
 
-        val activeIdxL = (dbToFraction(currentDbL) * numSegments).toInt().coerceIn(0, numSegments)
-        val activeIdxR = (dbToFraction(currentDbR) * numSegments).toInt().coerceIn(0, numSegments)
+        val activeCountL = if (currentDbL <= -49.5f) 0 else (dbToFraction(currentDbL) * numSegments).toInt().coerceIn(0, numSegments)
+        val activeCountR = if (currentDbR <= -49.5f) 0 else (dbToFraction(currentDbR) * numSegments).toInt().coerceIn(0, numSegments)
 
-        val peakIdxL = (dbToFraction(peakHoldDbL) * numSegments).toInt().coerceIn(0, numSegments - 1)
-        val peakIdxR = (dbToFraction(peakHoldDbR) * numSegments).toInt().coerceIn(0, numSegments - 1)
+        val peakIdxL = if (peakHoldDbL <= -48f) -1 else (dbToFraction(peakHoldDbL) * numSegments).toInt().coerceIn(0, numSegments - 1)
+        val peakIdxR = if (peakHoldDbR <= -48f) -1 else (dbToFraction(peakHoldDbR) * numSegments).toInt().coerceIn(0, numSegments - 1)
 
         val clipIdx = (0.96f * numSegments).toInt()
 
+        // Lチャンネル描画
         for (i in 0 until numSegments) {
             val paint = when {
-                i >= clipIdx && i <= activeIdxL -> segClipPaint
                 i == peakIdxL && peakHoldDbL > -48f -> segPeakPaint
-                i <= activeIdxL -> segActivePaint
+                i >= clipIdx && i < activeCountL -> segClipPaint
+                i < activeCountL -> segActivePaint
                 else -> segInactivePaint
             }
             canvas.drawRoundRect(segRectsL[i], 0.5f * density, 0.5f * density, paint)
         }
 
+        // Rチャンネル描画
         for (i in 0 until numSegments) {
             val paint = when {
-                i >= clipIdx && i <= activeIdxR -> segClipPaint
                 i == peakIdxR && peakHoldDbR > -48f -> segPeakPaint
-                i <= activeIdxR -> segActivePaint
+                i >= clipIdx && i < activeCountR -> segClipPaint
+                i < activeCountR -> segActivePaint
                 else -> segInactivePaint
             }
             canvas.drawRoundRect(segRectsR[i], 0.5f * density, 0.5f * density, paint)
         }
 
-        if (currentDbL > -55f || currentDbR > -55f || peakHoldDbL > -55f || peakHoldDbR > -55f) {
+        // ★ 完全に -60dB (完全消灯) に下がりきるまで確実にアニメーションを継続
+        val isStillDecaying = (currentDbL > targetDbL + 0.1f) ||
+                              (currentDbR > targetDbR + 0.1f) ||
+                              (peakHoldDbL > targetDbL + 0.1f) ||
+                              (peakHoldDbR > targetDbR + 0.1f)
+
+        if (isStillDecaying) {
             postInvalidateOnAnimation()
+        } else {
+            currentDbL = targetDbL
+            currentDbR = targetDbR
+            peakHoldDbL = targetDbL
+            peakHoldDbR = targetDbR
         }
     }
 }
