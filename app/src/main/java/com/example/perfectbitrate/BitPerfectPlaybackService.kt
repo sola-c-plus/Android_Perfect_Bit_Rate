@@ -53,12 +53,12 @@ class BitPerfectPlaybackService : Service() {
 
     private val trackExecutor = Executors.newSingleThreadExecutor()
 
-    // クロックドリフト適応型キュー
-    private val MAX_QUEUE_CAPACITY = 24
+    // 画面遷移時の描画スパイク(200-300ms)を完全に耐え抜く最適クッション容量
+    private val MAX_QUEUE_CAPACITY = 28
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
-    // プリロール閾値: 3パケット (約250ms)
-    private val PREROLL_THRESHOLD = 3
+    // プリロール閾値: 5パケット (約420ms分の安全マージン)
+    private val PREROLL_THRESHOLD = 5
     private val isBuffering = AtomicBoolean(true)
 
     @Volatile private var isRunning = false
@@ -532,9 +532,8 @@ class BitPerfectPlaybackService : Service() {
                         else -> 2
                     }
 
-                    // Galaxy × Walkman のクロックジッター吸収に最適なバッファアライメント (約200ms)
                     val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
-                    val desiredBuf = sampleRate * 2 * bytesPerSample / 5
+                    val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms
                     val bufferSize = max(if (minBuf > 0) minBuf * 4 else 8192, desiredBuf)
 
                     val track = AudioTrack.Builder()
@@ -591,22 +590,23 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ 適応型クロックドリフト補正再生ループ
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
             while (isRunning) {
                 try {
+                    // プリロール待機（約420ms分蓄積されるまで待つ）
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
-                            Thread.sleep(12)
+                            Thread.sleep(15)
                             continue
                         } else {
                             isBuffering.set(false)
                         }
                     }
 
-                    val pcm = pcmQueue.poll(80, TimeUnit.MILLISECONDS)
+                    // 画面遷移スパイク時も余裕を持って取り出す
+                    val pcm = pcmQueue.poll(150, TimeUnit.MILLISECONDS)
                     if (pcm == null) {
                         if (pcmQueue.isEmpty()) {
                             isBuffering.set(true)

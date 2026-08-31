@@ -75,7 +75,7 @@ function safeAdSkip() {
         video.playbackRate = 1.0;
     }
 }
-setInterval(safeAdSkip, 500);
+setInterval(safeAdSkip, 1000);
 
 function forceFullVolume() {
     const video = cachedVideoElement || document.querySelector('video');
@@ -83,15 +83,16 @@ function forceFullVolume() {
         video.volume = 1.0;
     }
 }
-setInterval(forceFullVolume, 1000);
+setInterval(forceFullVolume, 2000);
 
+// 画面遷移時の描画負荷を邪魔しないようスキャン頻度と負荷を最適化
 function scanStreamCodec() {
     let detectedName = "";
     let detectedRate = 48000;
 
     try {
         const entries = performance.getEntriesByType('resource');
-        const startIdx = Math.max(0, entries.length - 20);
+        const startIdx = Math.max(0, entries.length - 15);
         for (let i = entries.length - 1; i >= startIdx; i--) {
             const url = entries[i].name;
             if (url.includes('videoplayback')) {
@@ -112,7 +113,7 @@ function scanStreamCodec() {
                 }
             }
         }
-        if (entries.length > 60) {
+        if (entries.length > 40) {
             performance.clearResourceTimings();
         }
     } catch(e) {}
@@ -128,7 +129,7 @@ function scanStreamCodec() {
         });
     }
 }
-setInterval(scanStreamCodec, 1000);
+setInterval(scanStreamCodec, 2000);
 
 function ensureAudioRunning() {
     if (audioCtx && audioCtx.state === 'suspended') {
@@ -183,7 +184,6 @@ function setupAudioPipeline() {
         }
 
         if (cachedSourceNode && !processor) {
-            // バッファサイズ 4096 (約85ms/フレーム)
             processor = audioCtx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
                 if (video.paused || video.ended) return;
@@ -367,9 +367,9 @@ function checkMetadata() {
         });
     }
 }
-setInterval(checkMetadata, 1000);
+setInterval(checkMetadata, 1500);
 
-setInterval(setupAudioPipeline, 1500);
+setInterval(setupAudioPipeline, 2000);
 document.addEventListener('click', () => {
     ensureAudioRunning();
     setupAudioPipeline();
