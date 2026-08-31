@@ -34,6 +34,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.abs
 import kotlin.math.log10
@@ -51,7 +53,14 @@ class BitPerfectPlaybackService : Service() {
 
     private val trackExecutor = Executors.newSingleThreadExecutor()
 
-    val pcmQueue = LinkedBlockingQueue<ByteArray>(60)
+    // ★ バッファ安定化: 適正容量 (約1.5秒分 = 18パケット)
+    private val MAX_QUEUE_CAPACITY = 18
+    val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
+    
+    // ★ プリロール・ウォーターマーク: 4パケット(約300ms)溜まるまで安全待機
+    private val PREROLL_THRESHOLD = 4
+    private val isBuffering = AtomicBoolean(true)
+
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
@@ -189,18 +198,26 @@ class BitPerfectPlaybackService : Service() {
         if (needsRecreate) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
+            isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
             }
         }
 
+        // キューが上限に達した場合は最も古いパケットを1つ逃がして最新パケットを維持
         if (!pcmQueue.offer(pcmBytes)) {
             pcmQueue.poll()
             pcmQueue.offer(pcmBytes)
         }
+
+        // プリロール蓄積完了判定
+        if (isBuffering.get() && pcmQueue.size >= PREROLL_THRESHOLD) {
+            isBuffering.set(false)
+        }
     }
 
     fun resetBuffer() {
+        isBuffering.set(true)
         pcmQueue.clear()
     }
 
@@ -214,6 +231,7 @@ class BitPerfectPlaybackService : Service() {
         }
 
         if (changed || audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+            isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, currentSampleRate, device)
             }
@@ -251,7 +269,7 @@ class BitPerfectPlaybackService : Service() {
 
         mediaSession = MediaSessionCompat(this, "BitPerfectMediaSession").apply {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
-            setSessionActivity(sessionActivityPendingIntent) // ★ Galaxy Now Bar 表示に必須
+            setSessionActivity(sessionActivityPendingIntent)
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() { onCommandListener?.invoke("play") }
                 override fun onPause() {
@@ -291,6 +309,7 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun forceCloseDacStream() {
+        isBuffering.set(true)
         pcmQueue.clear()
         trackExecutor.execute {
             audioLock.lock()
@@ -321,7 +340,6 @@ class BitPerfectPlaybackService : Service() {
                 PlaybackStateCompat.ACTION_SEEK_TO or
                 PlaybackStateCompat.ACTION_PLAY_PAUSE
 
-        // ★ SystemClock.elapsedRealtime() を渡すことで Galaxy Now Bar のプログレスバーをリアルタイム同期
         mediaSession.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
@@ -425,7 +443,7 @@ class BitPerfectPlaybackService : Service() {
             .setLargeIcon(currentArtwork)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(contentPendingIntent)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT) // ★ Galaxy Now Bar / ライブ通知に必須
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .addAction(android.R.drawable.ic_media_previous, "前へ", prevIntent)
             .addAction(playPauseIcon, if (isCurrentlyPlaying) "一時停止" else "再生", playPauseIntent)
             .addAction(android.R.drawable.ic_media_next, "次へ", nextIntent)
@@ -453,6 +471,7 @@ class BitPerfectPlaybackService : Service() {
             val oldTrack = audioTrack
             audioTrack = null
             pcmQueue.clear()
+            isBuffering.set(true)
 
             oldTrack?.let {
                 try {
@@ -573,12 +592,31 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★ バッファ自己修復・プリロール・適応型再生ループ
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
             while (isRunning) {
                 try {
-                    val pcm = pcmQueue.take()
+                    // プリロール待機中は短いスリープでパケット蓄積を待つ
+                    if (isBuffering.get()) {
+                        if (pcmQueue.size < PREROLL_THRESHOLD) {
+                            Thread.sleep(15)
+                            continue
+                        } else {
+                            isBuffering.set(false)
+                        }
+                    }
+
+                    // 100msタイムアウト付きで安全に取り出し
+                    val pcm = pcmQueue.poll(100, TimeUnit.MILLISECONDS)
+                    if (pcm == null) {
+                        // パケット供給が完全に途切れた場合はアンダーラン防止のためバッファリング状態へ退避
+                        if (pcmQueue.isEmpty()) {
+                            isBuffering.set(true)
+                        }
+                        continue
+                    }
 
                     analyzeAndDispatchPeak(pcm, currentBitMode)
 
