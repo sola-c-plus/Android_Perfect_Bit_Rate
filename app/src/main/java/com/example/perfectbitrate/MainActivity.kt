@@ -210,7 +210,10 @@ class MainActivity : AppCompatActivity() {
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
 
         switchAdBlock.isChecked = isAdBlockOn
-        switchVolLock.isChecked = isVolLockOn
+        switchVolLock.isChecked = false
+        
+        // 初期状態は安全のためグレーアウト
+        updateVolLockSwitchUi(false)
 
         val adapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
         adapter.setDropDownViewResource(R.layout.item_spinner_dap)
@@ -244,9 +247,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            val isUsb = activeOutputDevice?.let { dev ->
-                dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET
-            } ?: false
+            val isUsb = isUsbDevice(activeOutputDevice)
 
             if (isChecked && !isUsb) {
                 switchVolLock.isChecked = false
@@ -278,6 +279,30 @@ class MainActivity : AppCompatActivity() {
         }
 
         uiHandler.post(uiUpdateRunnable)
+    }
+
+    private fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
+        if (device == null) return false
+        return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
+    }
+
+    // ★ 0dBスイッチの有効/無効＆グレーアウトUI制御
+    private fun updateVolLockSwitchUi(isUsb: Boolean) {
+        if (isUsb) {
+            switchVolLock.isEnabled = true
+            switchVolLock.alpha = 1.0f
+            switchVolLock.setTextColor(Color.parseColor("#CCCCCC"))
+        } else {
+            if (switchVolLock.isChecked) {
+                switchVolLock.isChecked = false
+                isVolLockOn = false
+                prefs.edit { putBoolean("vol_lock_enabled", false) }
+                playbackService?.isVolumeLocked = false
+            }
+            switchVolLock.isEnabled = false
+            switchVolLock.alpha = 0.35f
+            switchVolLock.setTextColor(Color.parseColor("#555555"))
+        }
     }
 
     private fun checkAndRequestPermissions() {
@@ -450,9 +475,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            val isUsb = activeOutputDevice?.let { dev ->
-                dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET
-            } ?: false
+            val isUsb = isUsbDevice(activeOutputDevice)
             if (isUsb) {
                 playbackService?.lockSystemVolumeToMax()
                 return true
@@ -518,6 +541,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val isUsb = (usbDevice != null)
+        updateVolLockSwitchUi(isUsb)
+
         if (usbDevice != null) {
             activeOutputDevice = usbDevice
             outputDeviceName = usbDevice.productName.toString().replace("USB-Audio - ", "")
@@ -525,21 +551,9 @@ class MainActivity : AppCompatActivity() {
             activeOutputDevice = btDevice
             val rawName = btDevice.productName.toString()
             outputDeviceName = if (rawName.isNotEmpty()) rawName else "Bluetooth Audio"
-            
-            if (isVolLockOn) {
-                isVolLockOn = false
-                switchVolLock.isChecked = false
-                prefs.edit { putBoolean("vol_lock_enabled", false) }
-            }
         } else {
             activeOutputDevice = null
             outputDeviceName = "内蔵スピーカー"
-            
-            if (isVolLockOn) {
-                isVolLockOn = false
-                switchVolLock.isChecked = false
-                prefs.edit { putBoolean("vol_lock_enabled", false) }
-            }
             playbackService?.isVolumeLocked = false
             playbackService?.muteVolumeToZero()
         }
@@ -597,8 +611,11 @@ class MainActivity : AppCompatActivity() {
         val mb = pcmPacketCount / (1024.0 * 1024.0)
 
         val dev = activeOutputDevice
+        val isUsb = isUsbDevice(dev)
+        updateVolLockSwitchUi(isUsb)
+
         if (dev != null) {
-            if (dev.type == AudioDeviceInfo.TYPE_USB_DEVICE || dev.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+            if (isUsb) {
                 badgeDirect.text = "DIRECT STREAM"
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
                 badgeDirect.setTextColor(Color.BLACK)
