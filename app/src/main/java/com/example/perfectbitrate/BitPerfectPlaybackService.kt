@@ -21,6 +21,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -238,7 +239,19 @@ class BitPerfectPlaybackService : Service() {
     }
 
     private fun setupMediaSession() {
+        val activityIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val sessionActivityPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            activityIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         mediaSession = MediaSessionCompat(this, "BitPerfectMediaSession").apply {
+            setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            setSessionActivity(sessionActivityPendingIntent) // ★ Galaxy Now Bar 表示に必須
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() { onCommandListener?.invoke("play") }
                 override fun onPause() {
@@ -263,15 +276,18 @@ class BitPerfectPlaybackService : Service() {
         currentDuration = durationMs
 
         val metaBuilder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "perfect_bitrate_${System.currentTimeMillis()}")
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentArtist)
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
 
         if (currentArtwork != null) {
             metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
         }
 
         mediaSession.setMetadata(metaBuilder.build())
+        updatePlaybackState(isPlaying, currentMs)
     }
 
     fun forceCloseDacStream() {
@@ -305,10 +321,11 @@ class BitPerfectPlaybackService : Service() {
                 PlaybackStateCompat.ACTION_SEEK_TO or
                 PlaybackStateCompat.ACTION_PLAY_PAUSE
 
+        // ★ SystemClock.elapsedRealtime() を渡すことで Galaxy Now Bar のプログレスバーをリアルタイム同期
         mediaSession.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
-                .setState(state, position, if (isPlaying) 1.0f else 0.0f)
+                .setState(state, position, if (isPlaying) 1.0f else 0.0f, SystemClock.elapsedRealtime())
                 .build()
         )
 
@@ -340,9 +357,15 @@ class BitPerfectPlaybackService : Service() {
         currentArtist = artist
 
         val metaBuilder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "perfect_bitrate_${System.currentTimeMillis()}")
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, currentDuration)
+
+        if (currentArtwork != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
+        }
 
         mediaSession.setMetadata(metaBuilder.build())
         updateNotification()
@@ -353,6 +376,7 @@ class BitPerfectPlaybackService : Service() {
                     val stream = URL(artworkUrl).openStream()
                     currentArtwork = BitmapFactory.decodeStream(stream)
                     metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
+                    metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
                     mediaSession.setMetadata(metaBuilder.build())
                     updateNotification()
                 } catch (e: Exception) {}
@@ -369,6 +393,16 @@ class BitPerfectPlaybackService : Service() {
         val prevIntent = createActionPendingIntent("ACTION_PREV", 1)
         val playPauseIntent = createActionPendingIntent(if (isCurrentlyPlaying) "ACTION_PAUSE" else "ACTION_PLAY", 2)
         val nextIntent = createActionPendingIntent("ACTION_NEXT", 3)
+
+        val activityIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            activityIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val playPauseIcon = if (isCurrentlyPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
 
@@ -390,6 +424,8 @@ class BitPerfectPlaybackService : Service() {
             .setSubText("${currentSampleRate}Hz $bitStr $deviceLabel")
             .setLargeIcon(currentArtwork)
             .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(contentPendingIntent)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT) // ★ Galaxy Now Bar / ライブ通知に必須
             .addAction(android.R.drawable.ic_media_previous, "前へ", prevIntent)
             .addAction(playPauseIcon, if (isCurrentlyPlaying) "一時停止" else "再生", playPauseIntent)
             .addAction(android.R.drawable.ic_media_next, "次へ", nextIntent)
@@ -401,6 +437,7 @@ class BitPerfectPlaybackService : Service() {
             .setOngoing(isCurrentlyPlaying)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOnlyAlertOnce(true)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -410,7 +447,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★3重フォールバック搭載（絶対に AudioTrack 生成を失敗させない）
     fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
         audioLock.lock()
         try {
@@ -430,7 +466,6 @@ class BitPerfectPlaybackService : Service() {
             activeOutputDevice = targetDevice
             currentSampleRate = sampleRate
 
-            // USB DAC 以外（スピーカーやBluetooth）では安全のため 16bit を最優先
             val requestedEncodings = if (!isUsbDevice(targetDevice)) {
                 listOf(AudioFormat.ENCODING_PCM_16BIT)
             } else {
