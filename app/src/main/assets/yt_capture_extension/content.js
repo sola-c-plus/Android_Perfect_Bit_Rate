@@ -1,6 +1,6 @@
-// ★親フレーム限定ガード（iframeでの多重起動・ポート奪い合いを完全防止）
+// iframeガード
 if (window.self !== window.top) {
-    throw new Error("[BitPerfect] Skip iframe execution");
+    throw new Error("[BitPerfect] Skip iframe");
 }
 
 try {
@@ -10,7 +10,6 @@ try {
 } catch(e) {}
 
 let port = null;
-let lastTitle = "";
 let lastCodecName = "";
 let adBlockEnabled = true;
 let currentBitMode = "16bit";
@@ -166,9 +165,7 @@ function setupAudioPipeline() {
     try {
         if (!audioCtx || audioCtx.state === 'closed') {
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            audioCtx = new AudioContextClass({
-                latencyHint: 'playback'
-            });
+            audioCtx = new AudioContextClass({ latencyHint: 'playback' });
         }
 
         ensureAudioRunning();

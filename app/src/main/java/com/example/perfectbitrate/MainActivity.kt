@@ -128,6 +128,20 @@ class MainActivity : AppCompatActivity() {
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
 
+            playbackService?.onActualBitModeChanged = { actualMode ->
+                runOnUiThread {
+                    if (actualMode != currentBitMode) {
+                        currentBitMode = actualMode
+                        sendBitModeSetting(actualMode)
+                        val idx = bitModeValues.indexOf(actualMode)
+                        if (idx >= 0 && spinnerBitDepth.selectedItemPosition != idx) {
+                            spinnerBitDepth.setSelection(idx)
+                        }
+                        updateStatus()
+                    }
+                }
+            }
+
             playbackService?.onPeakListener = { dbL, dbR, mask ->
                 peakDbL = dbL
                 peakDbR = dbR
@@ -627,7 +641,6 @@ class MainActivity : AppCompatActivity() {
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
         textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
 
-        // ★ 1秒ごとにビットマスクを自動減衰（MAX固定化を防止し、ダイナミックに動かす）
         val now = System.currentTimeMillis()
         if (now - lastBitResetTime > 1000L) {
             bitActivityMask = bitActivityMask ushr 1

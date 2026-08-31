@@ -56,6 +56,7 @@ class BitPerfectPlaybackService : Service() {
 
     var onPeakListener: ((Float, Float, Int) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
+    var onActualBitModeChanged: ((String) -> Unit)? = null
 
     var isVolumeLocked = false
         set(value) {
@@ -115,7 +116,6 @@ class BitPerfectPlaybackService : Service() {
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::ServiceWakeLock")
         wakeLock?.acquire()
 
-        // ★ Android 14 (API 34) RECEIVER_EXPORTED 安全登録
         try {
             ContextCompat.registerReceiver(
                 this,
@@ -403,7 +403,6 @@ class BitPerfectPlaybackService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        // ★ Android 14+ FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK 指定
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
@@ -411,11 +410,13 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★3重フォールバック搭載（絶対に AudioTrack 生成を失敗させない）
     fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
         audioLock.lock()
         try {
             val oldTrack = audioTrack
             audioTrack = null
+            pcmQueue.clear()
 
             oldTrack?.let {
                 try {
@@ -426,107 +427,112 @@ class BitPerfectPlaybackService : Service() {
                 } catch (e: Exception) {}
             }
 
-            currentBitMode = bitMode
-            currentSampleRate = sampleRate
             activeOutputDevice = targetDevice
+            currentSampleRate = sampleRate
 
-            var encoding = when (bitMode) {
-                "32bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    AudioFormat.ENCODING_PCM_32BIT
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    AudioFormat.ENCODING_PCM_24BIT_PACKED
-                } else {
-                    AudioFormat.ENCODING_PCM_16BIT
+            // USB DAC 以外（スピーカーやBluetooth）では安全のため 16bit を最優先
+            val requestedEncodings = if (!isUsbDevice(targetDevice)) {
+                listOf(AudioFormat.ENCODING_PCM_16BIT)
+            } else {
+                when (bitMode) {
+                    "32bit" -> listOf(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) AudioFormat.ENCODING_PCM_32BIT else AudioFormat.ENCODING_PCM_16BIT,
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
+                        AudioFormat.ENCODING_PCM_16BIT
+                    )
+                    "24bit" -> listOf(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
+                        AudioFormat.ENCODING_PCM_16BIT
+                    )
+                    else -> listOf(AudioFormat.ENCODING_PCM_16BIT)
                 }
-                "24bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    AudioFormat.ENCODING_PCM_24BIT_PACKED
-                } else {
-                    AudioFormat.ENCODING_PCM_16BIT
-                }
-                else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
+            var createdTrack: AudioTrack? = null
+            var finalEncoding = AudioFormat.ENCODING_PCM_16BIT
+
+            for (enc in requestedEncodings) {
                 try {
-                    val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
-                    var matched = mixers.firstOrNull {
-                        it.format.sampleRate == sampleRate && it.format.encoding == encoding
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
+                        try {
+                            val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
+                            val matched = mixers.firstOrNull { it.format.sampleRate == sampleRate && it.format.encoding == enc }
+                                ?: mixers.firstOrNull { it.format.sampleRate == sampleRate }
+                                ?: AudioMixerAttributes.Builder(
+                                    AudioFormat.Builder()
+                                        .setSampleRate(sampleRate)
+                                        .setEncoding(enc)
+                                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                        .build()
+                                ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+
+                            val mediaAttr = AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .build()
+                            audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
+                        } catch (e: Exception) {}
                     }
 
-                    if (matched == null) {
-                        matched = mixers.firstOrNull {
-                            it.format.sampleRate == sampleRate && it.format.encoding == AudioFormat.ENCODING_PCM_24BIT_PACKED
-                        } ?: mixers.firstOrNull {
-                            it.format.sampleRate == sampleRate && it.format.encoding == AudioFormat.ENCODING_PCM_16BIT
-                        } ?: mixers.firstOrNull {
-                            it.format.sampleRate == sampleRate
-                        }
-                        if (matched != null) {
-                            encoding = matched.format.encoding
-                        }
+                    val bytesPerSample = when (enc) {
+                        AudioFormat.ENCODING_PCM_32BIT -> 4
+                        AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
+                        else -> 2
                     }
 
-                    val finalMixer = matched ?: AudioMixerAttributes.Builder(
-                        AudioFormat.Builder()
-                            .setSampleRate(sampleRate)
-                            .setEncoding(encoding)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                            .build()
-                    ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+                    val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
+                    val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms
+                    val bufferSize = max(if (minBuf > 0) minBuf * 4 else 8192, desiredBuf)
 
-                    val mediaAttr = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    val track = AudioTrack.Builder()
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .build()
+                        )
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(enc)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(bufferSize)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
                         .build()
-                    audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, finalMixer)
+
+                    if (track.state == AudioTrack.STATE_INITIALIZED) {
+                        targetDevice?.let { track.setPreferredDevice(it) }
+                        if (isVolumeLocked && isUsbDevice(targetDevice)) {
+                            track.setVolume(1.0f)
+                            lockSystemVolumeToMax()
+                        }
+                        track.play()
+                        createdTrack = track
+                        finalEncoding = enc
+                        break
+                    } else {
+                        track.release()
+                    }
                 } catch (e: Exception) {
-                    Log.e("BitPerfect", "Mixer attribute set error", e)
+                    Log.w("BitPerfect", "Format $enc failed, trying fallback...", e)
                 }
             }
 
-            val bytesPerSample = when (encoding) {
-                AudioFormat.ENCODING_PCM_32BIT -> 4
-                AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
-                else -> 2
+            audioTrack = createdTrack
+
+            val actualModeStr = when (finalEncoding) {
+                AudioFormat.ENCODING_PCM_32BIT -> "32bit"
+                AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24bit"
+                else -> "16bit"
             }
+            currentBitMode = actualModeStr
+            onActualBitModeChanged?.invoke(actualModeStr)
 
-            val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding)
-            val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms
-            val bufferSize = max(minBuf * 4, desiredBuf)
-
-            val newTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(encoding)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build()
-                )
-                .setBufferSizeInBytes(bufferSize)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-
-            targetDevice?.let {
-                newTrack.setPreferredDevice(it)
-            }
-
-            if (isVolumeLocked && isUsbDevice(targetDevice)) {
-                newTrack.setVolume(1.0f)
-                lockSystemVolumeToMax()
-            }
-
-            newTrack.play()
-            audioTrack = newTrack
-
-            Log.i("BitPerfect", "★ AudioTrack Started: ${sampleRate}Hz, Encoding=$encoding, Buffer=$bufferSize -> ${targetDevice?.productName ?: "Default"}")
+            Log.i("BitPerfect", "★ AudioTrack Started Successfully: ${sampleRate}Hz, ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
-            Log.e("BitPerfect", "AudioTrack init error", e)
+            Log.e("BitPerfect", "Critical AudioTrack init error", e)
         } finally {
             audioLock.unlock()
         }
@@ -591,7 +597,7 @@ class BitPerfectPlaybackService : Service() {
                     val valR = safeAbs(rawR)
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or rawL or rawR
+                    bitMask = bitMask or (valL.toInt()) or (valR.toInt())
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 2147483647.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 2147483647.0f) else -60f
@@ -614,7 +620,7 @@ class BitPerfectPlaybackService : Service() {
 
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (rawL and 0xFFFFFF) or (rawR and 0xFFFFFF)
+                    bitMask = bitMask or (valL.toInt() and 0xFFFFFF) or (valR.toInt() and 0xFFFFFF)
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
