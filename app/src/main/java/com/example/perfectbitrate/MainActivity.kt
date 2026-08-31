@@ -98,7 +98,7 @@ class MainActivity : AppCompatActivity() {
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             updateStatus()
-            uiHandler.postDelayed(this, 300)
+            uiHandler.postDelayed(this, 150)
         }
     }
 
@@ -604,6 +604,7 @@ class MainActivity : AppCompatActivity() {
                 if (!isPlaying) {
                     peakDbL = -60f
                     peakDbR = -60f
+                    bitActivityMask = 0
                     walkmanLevelMeter?.reset()
                 }
                 playbackService?.updatePlaybackState(isPlaying)
@@ -658,13 +659,13 @@ class MainActivity : AppCompatActivity() {
         textPeak.text = "PEAK  L: ${peakTextL} dB  /  R: ${peakTextR} dB"
 
         val maxBits = if (currentBitMode == "32bit") 32 else (if (currentBitMode == "24bit") 24 else 16)
-        val activeBits = Integer.bitCount(bitActivityMask).coerceAtMost(maxBits)
+        val activeBits = Integer.bitCount(bitActivityMask).coerceIn(if (isPlayingState && pcmPacketCount > 0) 1 else 0, maxBits)
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
         textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
 
         val now = System.currentTimeMillis()
-        if (now - lastBitResetTime > 1000L) {
-            bitActivityMask = bitActivityMask ushr 1
+        if (now - lastBitResetTime > 250L) {
+            bitActivityMask = (bitActivityMask ushr 2) or (bitActivityMask and 0x01)
             lastBitResetTime = now
         }
     }
@@ -686,7 +687,6 @@ class MainActivity : AppCompatActivity() {
 
         geckoSession = GeckoSession(sessionSettings)
         
-        // Autoplay を無条件許可
         geckoSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onContentPermissionRequest(
                 session: GeckoSession,

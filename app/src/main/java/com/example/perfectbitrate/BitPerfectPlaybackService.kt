@@ -265,7 +265,6 @@ class BitPerfectPlaybackService : Service() {
             clearPreviousMixerAttributes()
         }
 
-        // 起動時の競合を防ぐため、すでに再生中・またはトラックがある場合のみ再初期化
         if (changed && audioTrack != null) {
             isBuffering.set(true)
             trackExecutor.execute {
@@ -710,7 +709,10 @@ class BitPerfectPlaybackService : Service() {
                     val valR = safeAbs(rawR)
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (valL.toInt()) or (valR.toInt())
+                    bitMask = bitMask or (valL.toInt() and 0x7FFFFFFF) or (valR.toInt() and 0x7FFFFFFF)
+                    if (rawL < 0 || rawR < 0 || valL >= 1073741824L || valR >= 1073741824L) {
+                        bitMask = bitMask or (1 shl 31)
+                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 2147483647.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 2147483647.0f) else -60f
@@ -733,7 +735,10 @@ class BitPerfectPlaybackService : Service() {
 
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (valL.toInt() and 0xFFFFFF) or (valR.toInt() and 0xFFFFFF)
+                    bitMask = bitMask or (valL.toInt() and 0x7FFFFF) or (valR.toInt() and 0x7FFFFF)
+                    if (rawL < 0 || rawR < 0 || valL >= 4194304L || valR >= 4194304L) {
+                        bitMask = bitMask or 0x800000
+                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
@@ -748,7 +753,11 @@ class BitPerfectPlaybackService : Service() {
                     val valR = abs(rawR)
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (rawL and 0xFFFF) or (rawR and 0xFFFF)
+                    // ★ 符号拡張を防ぎ、絶対値のビット幅 + MSB のみ反映
+                    bitMask = bitMask or (valL and 0x7FFF) or (valR and 0x7FFF)
+                    if (rawL < 0 || rawR < 0 || valL >= 16384 || valR >= 16384) {
+                        bitMask = bitMask or 0x8000
+                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 32767.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 32767.0f) else -60f
