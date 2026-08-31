@@ -90,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private var peakDbL = -60f
     private var peakDbR = -60f
     private var bitActivityMask = 0
+    private var lastBitResetTime = 0L
     private var isAdBlockOn = true
     private var isVolLockOn = false
     private var isPlayingState = false
@@ -102,9 +103,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val requestBluetoothPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
-            if (isGranted) {
+    private val requestMultiplePermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            if (permissions[Manifest.permission.BLUETOOTH_CONNECT] == true) {
                 fetchBluetoothCodec()
                 updateStatus()
             }
@@ -248,6 +249,7 @@ class MainActivity : AppCompatActivity() {
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
+        checkAndRequestPermissions()
         setupBluetoothTracker()
 
         val serviceIntent = Intent(this, BitPerfectPlaybackService::class.java)
@@ -264,17 +266,25 @@ class MainActivity : AppCompatActivity() {
         uiHandler.post(uiUpdateRunnable)
     }
 
-    private fun checkAndRequestBluetoothPermission() {
+    private fun checkAndRequestPermissions() {
+        val permissionsToRequest = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                requestBluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (permissionsToRequest.isNotEmpty()) {
+            requestMultiplePermissionsLauncher.launch(permissionsToRequest.toTypedArray())
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun setupBluetoothTracker() {
-        checkAndRequestBluetoothPermission()
         try {
             val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothAdapter = btManager?.adapter
@@ -298,7 +308,7 @@ class MainActivity : AppCompatActivity() {
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
                 addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             }
-            registerReceiver(btReceiver, filter)
+            ContextCompat.registerReceiver(this, btReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
         } catch (e: Exception) {
             Log.e("BitPerfect", "Bluetooth tracker setup error", e)
         }
@@ -616,6 +626,13 @@ class MainActivity : AppCompatActivity() {
         val activeBits = Integer.bitCount(bitActivityMask).coerceAtMost(maxBits)
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
         textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
+
+        // ★ 1秒ごとにビットマスクを自動減衰（MAX固定化を防止し、ダイナミックに動かす）
+        val now = System.currentTimeMillis()
+        if (now - lastBitResetTime > 1000L) {
+            bitActivityMask = bitActivityMask ushr 1
+            lastBitResetTime = now
+        }
     }
 
     private fun setupGeckoView() {

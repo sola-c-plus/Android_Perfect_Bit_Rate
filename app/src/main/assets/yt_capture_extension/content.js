@@ -1,3 +1,8 @@
+// ★親フレーム限定ガード（iframeでの多重起動・ポート奪い合いを完全防止）
+if (window.self !== window.top) {
+    throw new Error("[BitPerfect] Skip iframe execution");
+}
+
 try {
     Object.defineProperty(document, 'hidden', { value: false, writable: false });
     Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
@@ -214,7 +219,6 @@ function setupAudioPipeline() {
                 let bytes = null;
 
                 if (currentBitMode === "32bit") {
-                    // ★ 32-bit Signed Integer PCM (Int32, S32_LE: -2147483648 〜 2147483647)
                     const buffer = new ArrayBuffer(len * 8);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -230,7 +234,6 @@ function setupAudioPipeline() {
                     }
                     bytes = new Uint8Array(buffer);
                 } else if (currentBitMode === "24bit") {
-                    // 24-bit Packed Signed Integer PCM (Int24, S24_3LE)
                     const buffer = new ArrayBuffer(len * 6);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {
@@ -252,7 +255,6 @@ function setupAudioPipeline() {
                     }
                     bytes = new Uint8Array(buffer);
                 } else {
-                    // 16-bit Signed Integer PCM (Int16, S16_LE)
                     const buffer = new ArrayBuffer(len * 4);
                     const view = new DataView(buffer);
                     for (let i = 0; i < len; i++) {

@@ -8,6 +8,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
@@ -25,6 +26,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import java.net.URL
 import java.nio.ByteBuffer
@@ -113,10 +115,23 @@ class BitPerfectPlaybackService : Service() {
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::ServiceWakeLock")
         wakeLock?.acquire()
 
+        // ★ Android 14 (API 34) RECEIVER_EXPORTED 安全登録
         try {
-            registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
-            registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
-        } catch (e: Exception) {}
+            ContextCompat.registerReceiver(
+                this,
+                volumeReceiver,
+                IntentFilter("android.media.VOLUME_CHANGED_ACTION"),
+                ContextCompat.RECEIVER_EXPORTED
+            )
+            ContextCompat.registerReceiver(
+                this,
+                noisyReceiver,
+                IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+                ContextCompat.RECEIVER_EXPORTED
+            )
+        } catch (e: Exception) {
+            Log.e("BitPerfect", "Receiver registration error", e)
+        }
 
         createNotificationChannel()
         setupMediaSession()
@@ -388,7 +403,12 @@ class BitPerfectPlaybackService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        startForeground(1001, notification)
+        // ★ Android 14+ FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK 指定
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(1001, notification)
+        }
     }
 
     fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
@@ -410,7 +430,6 @@ class BitPerfectPlaybackService : Service() {
             currentSampleRate = sampleRate
             activeOutputDevice = targetDevice
 
-            // ★ 32bit は ENCODING_PCM_FLOAT ではなく ENCODING_PCM_32BIT (22) を使用
             var encoding = when (bitMode) {
                 "32bit" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     AudioFormat.ENCODING_PCM_32BIT
@@ -427,7 +446,6 @@ class BitPerfectPlaybackService : Service() {
                 else -> AudioFormat.ENCODING_PCM_16BIT
             }
 
-            // DAC が 32bit 整数に非対応な場合の自動フォールバック
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                 try {
                     val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -435,7 +453,6 @@ class BitPerfectPlaybackService : Service() {
                         it.format.sampleRate == sampleRate && it.format.encoding == encoding
                     }
 
-                    // 32bit が DAC で直接受け入れられない場合、24bit/16bit を探す
                     if (matched == null) {
                         matched = mixers.firstOrNull {
                             it.format.sampleRate == sampleRate && it.format.encoding == AudioFormat.ENCODING_PCM_24BIT_PACKED
@@ -553,6 +570,10 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    private fun safeAbs(value: Int): Long {
+        return abs(value.toLong())
+    }
+
     private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String) {
         val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
         var instantPeakL = -60f
@@ -561,36 +582,39 @@ class BitPerfectPlaybackService : Service() {
 
         when (bitMode) {
             "32bit" -> {
-                // ★ 32-bit Signed Integer (Int32) 解析
-                var maxL = 0
-                var maxR = 0
+                var maxL = 0L
+                var maxR = 0L
                 while (buffer.remaining() >= 8) {
-                    val valL = abs(buffer.int)
-                    val valR = abs(buffer.int)
+                    val rawL = buffer.int
+                    val rawR = buffer.int
+                    val valL = safeAbs(rawL)
+                    val valR = safeAbs(rawR)
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (valL) or (valR)
+                    bitMask = bitMask or rawL or rawR
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 2147483647.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 2147483647.0f) else -60f
             }
             "24bit" -> {
-                var maxL = 0
-                var maxR = 0
+                var maxL = 0L
+                var maxR = 0L
                 while (buffer.remaining() >= 6) {
                     val b0L = buffer.get().toInt() and 0xFF
                     val b1L = buffer.get().toInt() and 0xFF
                     val b2L = buffer.get().toInt()
-                    val valL = abs((b2L shl 16) or (b1L shl 8) or b0L)
+                    val rawL = (b2L shl 16) or (b1L shl 8) or b0L
+                    val valL = safeAbs(rawL)
 
                     val b0R = buffer.get().toInt() and 0xFF
                     val b1R = buffer.get().toInt() and 0xFF
                     val b2R = buffer.get().toInt()
-                    val valR = abs((b2R shl 16) or (b1R shl 8) or b0R)
+                    val rawR = (b2R shl 16) or (b1R shl 8) or b0R
+                    val valR = safeAbs(rawR)
 
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (valL and 0xFFFFFF) or (valR and 0xFFFFFF)
+                    bitMask = bitMask or (rawL and 0xFFFFFF) or (rawR and 0xFFFFFF)
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
@@ -599,11 +623,13 @@ class BitPerfectPlaybackService : Service() {
                 var maxL = 0
                 var maxR = 0
                 while (buffer.remaining() >= 4) {
-                    val valL = abs(buffer.short.toInt())
-                    val valR = abs(buffer.short.toInt())
+                    val rawL = buffer.short.toInt()
+                    val rawR = buffer.short.toInt()
+                    val valL = abs(rawL)
+                    val valR = abs(rawR)
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    bitMask = bitMask or (valL and 0xFFFF) or (valR and 0xFFFF)
+                    bitMask = bitMask or (rawL and 0xFFFF) or (rawR and 0xFFFF)
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 32767.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 32767.0f) else -60f

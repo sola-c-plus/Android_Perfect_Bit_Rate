@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.Canvas
@@ -45,25 +45,21 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         strokeWidth = 1.0f * density
     }
 
-    // バー本体: 白色
     private val segActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFFFFF")
         style = Paint.Style.FILL
     }
 
-    // Peakホールド: ウォークマン・ゴールド
     private val segPeakPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#E5A93C")
         style = Paint.Style.FILL
     }
 
-    // 0dBクリップ: レッド
     private val segClipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FF4444")
         style = Paint.Style.FILL
     }
 
-    // 消灯グリッド
     private val segInactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#161616")
         style = Paint.Style.FILL
@@ -92,7 +88,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private val PEAK_DECAY_RATE = 50f
 
     private var lastDrawTime = 0L
-    // ★高速な戻り速度 (130 dB/s): ピーク時は0dBに届き、ビートの合間にキビキビ戻る
     private val decayRateDbPerSec = 130f
 
     private var numSegments = 0
@@ -190,7 +185,7 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     private fun dbToFraction(db: Float): Float {
         if (db <= -50f) return 0f
-        if (db >= 0f) return 1.0f + min(0.08f, db / 20f)
+        if (db >= 0f) return 1.0f
         return when {
             db < -40f -> 0.0f + (db + 50f) / 10f * 0.15f
             db < -30f -> 0.15f + (db + 40f) / 10f * 0.17f
@@ -203,7 +198,7 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (numSegments <= 0) return
+        if (numSegments <= 0 || segRectsL.size != numSegments || segRectsR.size != numSegments) return
 
         val now = System.currentTimeMillis()
         if (lastDrawTime > 0L) {
@@ -239,8 +234,8 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
         canvas.drawText("L", 0f, lCenterY, labelPaint)
         canvas.drawText("R", 0f, rCenterY, labelPaint)
 
-        val activeIdxL = (dbToFraction(currentDbL) * numSegments).toInt()
-        val activeIdxR = (dbToFraction(currentDbR) * numSegments).toInt()
+        val activeIdxL = (dbToFraction(currentDbL) * numSegments).toInt().coerceIn(0, numSegments)
+        val activeIdxR = (dbToFraction(currentDbR) * numSegments).toInt().coerceIn(0, numSegments)
 
         val peakIdxL = (dbToFraction(peakHoldDbL) * numSegments).toInt().coerceIn(0, numSegments - 1)
         val peakIdxR = (dbToFraction(peakHoldDbR) * numSegments).toInt().coerceIn(0, numSegments - 1)
