@@ -52,13 +52,13 @@ class BitPerfectPlaybackService : Service() {
     private val audioLock = ReentrantLock()
 
     private val trackExecutor = Executors.newSingleThreadExecutor()
+    private val isInitializingTrack = AtomicBoolean(false)
+    private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
-    // 画面遷移時の描画スパイク(200-300ms)を完全に耐え抜く最適クッション容量
     private val MAX_QUEUE_CAPACITY = 28
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
-    // プリロール閾値: 5パケット (約420ms分の安全マージン)
-    private val PREROLL_THRESHOLD = 5
+    private val PREROLL_THRESHOLD = 4
     private val isBuffering = AtomicBoolean(true)
 
     @Volatile private var isRunning = false
@@ -100,9 +100,10 @@ class BitPerfectPlaybackService : Service() {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                Log.w("BitPerfect", "★ Audio output disconnected! Resetting stream.")
+                Log.w("BitPerfect", "★ Output disconnected! Resetting.")
                 isVolumeLocked = false
                 muteVolumeToZero()
+                clearPreviousMixerAttributes()
                 forceCloseDacStream()
                 onDeviceDisconnectedListener?.invoke()
             }
@@ -187,6 +188,41 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    fun restoreVolumeForDevice(device: AudioDeviceInfo?) {
+        try {
+            if (isUsbDevice(device)) {
+                if (isVolumeLocked) {
+                    lockSystemVolumeToMax()
+                } else {
+                    val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    if (currentVol == 0) {
+                        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        val defaultVol = (maxVol * 0.65f).toInt().coerceAtLeast(1)
+                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, defaultVol, 0)
+                        Log.i("BitPerfect", "★ Restored volume for DAC: $defaultVol / $maxVol")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("BitPerfect", "Restore volume error", e)
+        }
+    }
+
+    private fun clearPreviousMixerAttributes() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            lastConfiguredMixerDevice?.let { dev ->
+                try {
+                    val mediaAttr = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                    audioManager.clearPreferredMixerAttributes(mediaAttr, dev)
+                } catch (e: Exception) {}
+            }
+            lastConfiguredMixerDevice = null
+        }
+    }
+
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, bitMode: String) {
         isCurrentlyPlaying = true
 
@@ -195,7 +231,7 @@ class BitPerfectPlaybackService : Service() {
                              audioTrack == null || 
                              audioTrack?.state != AudioTrack.STATE_INITIALIZED)
 
-        if (needsRecreate) {
+        if (needsRecreate && !isInitializingTrack.get()) {
             currentSampleRate = sampleRate
             currentBitMode = bitMode
             isBuffering.set(true)
@@ -226,9 +262,11 @@ class BitPerfectPlaybackService : Service() {
         if (device == null) {
             isVolumeLocked = false
             muteVolumeToZero()
+            clearPreviousMixerAttributes()
         }
 
-        if (changed || audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+        // 起動時の競合を防ぐため、すでに再生中・またはトラックがある場合のみ再初期化
+        if (changed && audioTrack != null) {
             isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, currentSampleRate, device)
@@ -347,19 +385,7 @@ class BitPerfectPlaybackService : Service() {
 
         if (!isPlaying) {
             forceCloseDacStream()
-        } else {
-            trackExecutor.execute {
-                audioLock.lock()
-                try {
-                    if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-                        initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
-                    }
-                } finally {
-                    audioLock.unlock()
-                }
-            }
         }
-
         updateNotification()
     }
 
@@ -464,129 +490,149 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
-        audioLock.lock()
+        if (isInitializingTrack.getAndSet(true)) {
+            return
+        }
+
         try {
-            val oldTrack = audioTrack
-            audioTrack = null
-            pcmQueue.clear()
-            isBuffering.set(true)
+            audioLock.lock()
+            try {
+                val oldTrack = audioTrack
+                audioTrack = null
+                pcmQueue.clear()
+                isBuffering.set(true)
 
-            oldTrack?.let {
-                try {
-                    it.pause()
-                    it.flush()
-                    it.stop()
-                    it.release()
-                } catch (e: Exception) {}
-            }
-
-            activeOutputDevice = targetDevice
-            currentSampleRate = sampleRate
-
-            val requestedEncodings = if (!isUsbDevice(targetDevice)) {
-                listOf(AudioFormat.ENCODING_PCM_16BIT)
-            } else {
-                when (bitMode) {
-                    "32bit" -> listOf(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) AudioFormat.ENCODING_PCM_32BIT else AudioFormat.ENCODING_PCM_16BIT,
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
-                        AudioFormat.ENCODING_PCM_16BIT
-                    )
-                    "24bit" -> listOf(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
-                        AudioFormat.ENCODING_PCM_16BIT
-                    )
-                    else -> listOf(AudioFormat.ENCODING_PCM_16BIT)
+                oldTrack?.let {
+                    try {
+                        it.pause()
+                        it.flush()
+                        it.stop()
+                        it.release()
+                    } catch (e: Exception) {}
                 }
-            }
 
-            var createdTrack: AudioTrack? = null
-            var finalEncoding = AudioFormat.ENCODING_PCM_16BIT
+                if (targetDevice?.id != lastConfiguredMixerDevice?.id) {
+                    clearPreviousMixerAttributes()
+                }
 
-            for (enc in requestedEncodings) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
-                        try {
-                            val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
-                            val matched = mixers.firstOrNull { it.format.sampleRate == sampleRate && it.format.encoding == enc }
-                                ?: mixers.firstOrNull { it.format.sampleRate == sampleRate }
-                                ?: AudioMixerAttributes.Builder(
-                                    AudioFormat.Builder()
-                                        .setSampleRate(sampleRate)
-                                        .setEncoding(enc)
-                                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                                        .build()
-                                ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+                if (oldTrack != null) {
+                    try { Thread.sleep(60) } catch (e: InterruptedException) {}
+                }
 
-                            val mediaAttr = AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                .build()
-                            audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
-                        } catch (e: Exception) {}
-                    }
+                activeOutputDevice = targetDevice
+                currentSampleRate = sampleRate
 
-                    val bytesPerSample = when (enc) {
-                        AudioFormat.ENCODING_PCM_32BIT -> 4
-                        AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
-                        else -> 2
-                    }
-
-                    val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
-                    val desiredBuf = sampleRate * 2 * bytesPerSample / 4 // 250ms
-                    val bufferSize = max(if (minBuf > 0) minBuf * 4 else 8192, desiredBuf)
-
-                    val track = AudioTrack.Builder()
-                        .setAudioAttributes(
-                            AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                .build()
+                val requestedEncodings = if (!isUsbDevice(targetDevice)) {
+                    listOf(AudioFormat.ENCODING_PCM_16BIT)
+                } else {
+                    when (bitMode) {
+                        "32bit" -> listOf(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) AudioFormat.ENCODING_PCM_32BIT else AudioFormat.ENCODING_PCM_16BIT,
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
+                            AudioFormat.ENCODING_PCM_16BIT
                         )
-                        .setAudioFormat(
-                            AudioFormat.Builder()
-                                .setEncoding(enc)
-                                .setSampleRate(sampleRate)
-                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                                .build()
+                        "24bit" -> listOf(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
+                            AudioFormat.ENCODING_PCM_16BIT
                         )
-                        .setBufferSizeInBytes(bufferSize)
-                        .setTransferMode(AudioTrack.MODE_STREAM)
-                        .build()
+                        else -> listOf(AudioFormat.ENCODING_PCM_16BIT)
+                    }
+                }
 
-                    if (track.state == AudioTrack.STATE_INITIALIZED) {
-                        targetDevice?.let { track.setPreferredDevice(it) }
-                        if (isVolumeLocked && isUsbDevice(targetDevice)) {
-                            track.setVolume(1.0f)
-                            lockSystemVolumeToMax()
+                var createdTrack: AudioTrack? = null
+                var finalEncoding = AudioFormat.ENCODING_PCM_16BIT
+
+                for (enc in requestedEncodings) {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
+                            try {
+                                val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
+                                val matched = mixers.firstOrNull { it.format.sampleRate == sampleRate && it.format.encoding == enc }
+                                    ?: mixers.firstOrNull { it.format.sampleRate == sampleRate }
+                                    ?: AudioMixerAttributes.Builder(
+                                        AudioFormat.Builder()
+                                            .setSampleRate(sampleRate)
+                                            .setEncoding(enc)
+                                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                            .build()
+                                    ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+
+                                val mediaAttr = AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                    .build()
+                                val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
+                                if (ok) {
+                                    lastConfiguredMixerDevice = targetDevice
+                                }
+                                Log.i("BitPerfect", "★ setPreferredMixerAttributes ($sampleRate Hz, enc=$enc): $ok")
+                            } catch (e: Exception) {}
                         }
-                        track.play()
-                        createdTrack = track
-                        finalEncoding = enc
-                        break
-                    } else {
-                        track.release()
+
+                        val bytesPerSample = when (enc) {
+                            AudioFormat.ENCODING_PCM_32BIT -> 4
+                            AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
+                            else -> 2
+                        }
+
+                        val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
+                        val desiredBuf = sampleRate * 2 * bytesPerSample / 4
+                        val bufferSize = max(if (minBuf > 0) minBuf * 4 else 8192, desiredBuf)
+
+                        val track = AudioTrack.Builder()
+                            .setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                    .build()
+                            )
+                            .setAudioFormat(
+                                AudioFormat.Builder()
+                                    .setEncoding(enc)
+                                    .setSampleRate(sampleRate)
+                                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                    .build()
+                            )
+                            .setBufferSizeInBytes(bufferSize)
+                            .setTransferMode(AudioTrack.MODE_STREAM)
+                            .build()
+
+                        if (track.state == AudioTrack.STATE_INITIALIZED) {
+                            targetDevice?.let { track.setPreferredDevice(it) }
+                            restoreVolumeForDevice(targetDevice)
+                            if (isVolumeLocked && isUsbDevice(targetDevice)) {
+                                track.setVolume(1.0f)
+                            }
+                            track.play()
+                            createdTrack = track
+                            finalEncoding = enc
+                            break
+                        } else {
+                            track.release()
+                        }
+                    } catch (e: Exception) {
+                        Log.w("BitPerfect", "Format $enc fallback...", e)
                     }
-                } catch (e: Exception) {
-                    Log.w("BitPerfect", "Format $enc fallback...", e)
                 }
+
+                audioTrack = createdTrack
+
+                val actualModeStr = when (finalEncoding) {
+                    AudioFormat.ENCODING_PCM_32BIT -> "32bit"
+                    AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24bit"
+                    else -> "16bit"
+                }
+                currentBitMode = actualModeStr
+                onActualBitModeChanged?.invoke(actualModeStr)
+
+                Log.i("BitPerfect", "★ AudioTrack Initialized: ${sampleRate}Hz, ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
+            } finally {
+                audioLock.unlock()
             }
-
-            audioTrack = createdTrack
-
-            val actualModeStr = when (finalEncoding) {
-                AudioFormat.ENCODING_PCM_32BIT -> "32bit"
-                AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24bit"
-                else -> "16bit"
-            }
-            currentBitMode = actualModeStr
-            onActualBitModeChanged?.invoke(actualModeStr)
-
-            Log.i("BitPerfect", "★ AudioTrack Initialized: ${sampleRate}Hz, ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
         } catch (e: Exception) {
             Log.e("BitPerfect", "Critical AudioTrack init error", e)
         } finally {
-            audioLock.unlock()
+            isInitializingTrack.set(false)
         }
     }
 
@@ -595,7 +641,6 @@ class BitPerfectPlaybackService : Service() {
         playbackThread = Thread {
             while (isRunning) {
                 try {
-                    // プリロール待機（約420ms分蓄積されるまで待つ）
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
                             Thread.sleep(15)
@@ -605,7 +650,6 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    // 画面遷移スパイク時も余裕を持って取り出す
                     val pcm = pcmQueue.poll(150, TimeUnit.MILLISECONDS)
                     if (pcm == null) {
                         if (pcmQueue.isEmpty()) {
@@ -738,6 +782,8 @@ class BitPerfectPlaybackService : Service() {
             mediaSession.isActive = false
             mediaSession.release()
         } catch (e: Exception) {}
+
+        clearPreviousMixerAttributes()
 
         trackExecutor.execute {
             audioLock.lock()

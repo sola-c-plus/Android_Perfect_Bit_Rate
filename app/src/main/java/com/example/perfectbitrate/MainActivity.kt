@@ -20,7 +20,6 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.media.AudioPlaybackConfiguration
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -101,6 +100,15 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
             uiHandler.postDelayed(this, 300)
         }
+    }
+
+    private val deviceDetectRunnable = Runnable {
+        detectAudioOutputDevice()
+        playbackService?.setOutputDevice(activeOutputDevice)
+        fetchBluetoothCodec()
+        try {
+            activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
+        } catch (e: Exception) {}
     }
 
     private val requestMultiplePermissionsLauncher =
@@ -212,7 +220,6 @@ class MainActivity : AppCompatActivity() {
         switchAdBlock.isChecked = isAdBlockOn
         switchVolLock.isChecked = false
         
-        // 初期状態は安全のためグレーアウト
         updateVolLockSwitchUi(false)
 
         val adapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
@@ -286,7 +293,6 @@ class MainActivity : AppCompatActivity() {
         return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
     }
 
-    // ★ 0dBスイッチの有効/無効＆グレーアウトUI制御
     private fun updateVolLockSwitchUi(isUsb: Boolean) {
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -507,17 +513,14 @@ class MainActivity : AppCompatActivity() {
     private fun registerAudioDeviceCallback() {
         audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                detectAudioOutputDevice()
-                playbackService?.setOutputDevice(activeOutputDevice)
-                fetchBluetoothCodec()
-                try {
-                    activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
-                } catch (e: Exception) {}
+                Log.i("BitPerfect", "★ Output device connected -> Scheduling detection...")
+                uiHandler.removeCallbacks(deviceDetectRunnable)
+                uiHandler.postDelayed(deviceDetectRunnable, 250)
             }
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                detectAudioOutputDevice()
-                playbackService?.setOutputDevice(activeOutputDevice)
-                fetchBluetoothCodec()
+                Log.i("BitPerfect", "★ Output device removed -> Scheduling detection...")
+                uiHandler.removeCallbacks(deviceDetectRunnable)
+                uiHandler.postDelayed(deviceDetectRunnable, 100)
             }
         }, Handler(Looper.getMainLooper()))
     }
@@ -547,6 +550,7 @@ class MainActivity : AppCompatActivity() {
         if (usbDevice != null) {
             activeOutputDevice = usbDevice
             outputDeviceName = usbDevice.productName.toString().replace("USB-Audio - ", "")
+            playbackService?.restoreVolumeForDevice(usbDevice)
         } else if (btDevice != null) {
             activeOutputDevice = btDevice
             val rawName = btDevice.productName.toString()
@@ -681,6 +685,22 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         geckoSession = GeckoSession(sessionSettings)
+        
+        // Autoplay を無条件許可
+        geckoSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                perm: GeckoSession.PermissionDelegate.ContentPermission
+            ): GeckoResult<Int>? {
+                if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE ||
+                    perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE
+                ) {
+                    return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                }
+                return null
+            }
+        }
+
         geckoRuntime?.let { runtime ->
             geckoSession.open(runtime)
             geckoView.setSession(geckoSession)
@@ -747,6 +767,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         uiHandler.removeCallbacks(uiUpdateRunnable)
+        uiHandler.removeCallbacks(deviceDetectRunnable)
         try {
             unregisterReceiver(btReceiver)
         } catch (e: Exception) {}

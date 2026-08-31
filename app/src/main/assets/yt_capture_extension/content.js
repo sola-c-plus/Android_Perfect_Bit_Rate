@@ -15,10 +15,9 @@ let currentBitMode = "16bit";
 let currentSampleRate = 48000;
 
 let audioCtx = null;
-let cachedSourceNode = null;
-let cachedVideoElement = null;
 let processor = null;
-let isVideoEventsHooked = false;
+let silentGain = null;
+let activeMediaElement = null;
 
 const itagMap = {
     '251': { name: 'Opus 160kbps (最高音質 48k)', rate: 48000 },
@@ -30,6 +29,7 @@ const itagMap = {
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
 
+// 広告ブロック用スタイル
 let adStyleElement = null;
 function updateAdBlockStyles(enable) {
     if (enable) {
@@ -64,7 +64,7 @@ function safeAdSkip() {
 
     const player = document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
     const isAd = player?.classList.contains('ad-showing') || player?.classList.contains('ad-interrupting');
-    const video = cachedVideoElement || document.querySelector('video');
+    const video = activeMediaElement || document.querySelector('video');
 
     if (isAd && video) {
         video.playbackRate = 8.0;
@@ -78,14 +78,13 @@ function safeAdSkip() {
 setInterval(safeAdSkip, 1000);
 
 function forceFullVolume() {
-    const video = cachedVideoElement || document.querySelector('video');
+    const video = activeMediaElement || document.querySelector('video');
     if (video && video.volume < 1.0) {
         video.volume = 1.0;
     }
 }
 setInterval(forceFullVolume, 2000);
 
-// 画面遷移時の描画負荷を邪魔しないようスキャン頻度と負荷を最適化
 function scanStreamCodec() {
     let detectedName = "";
     let detectedRate = 48000;
@@ -131,68 +130,46 @@ function scanStreamCodec() {
 }
 setInterval(scanStreamCodec, 2000);
 
-function ensureAudioRunning() {
-    if (audioCtx && audioCtx.state === 'suspended') {
+function getAudioContext() {
+    if (!audioCtx || audioCtx.state === 'closed') {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass({ latencyHint: 'playback' });
+    }
+    if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
         audioCtx.resume().catch(() => {});
     }
+    return audioCtx;
 }
 
-function hookVideoEvents(video) {
-    if (cachedVideoElement === video && isVideoEventsHooked) return;
-    cachedVideoElement = video;
-    isVideoEventsHooked = true;
-
-    const onPlay = () => {
-        ensureAudioRunning();
-        scanStreamCodec();
-        postNativeMessage({ type: "state", playing: true });
-    };
-
-    video.addEventListener('play', onPlay);
-    video.addEventListener('playing', onPlay);
-    video.addEventListener('pause', () => {
-        postNativeMessage({ type: "state", playing: false });
-    });
-    video.addEventListener('loadstart', scanStreamCodec);
-    video.addEventListener('loadeddata', scanStreamCodec);
-    video.addEventListener('emptied', () => { lastCodecName = ""; scanStreamCodec(); });
-}
-
-function setupAudioPipeline() {
-    const video = document.querySelector('video') || document.querySelector('audio');
-    if (!video) return;
+function attachAudioPipeline(mediaEl) {
+    if (!mediaEl) return;
+    activeMediaElement = mediaEl;
 
     try {
-        if (!audioCtx || audioCtx.state === 'closed') {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            audioCtx = new AudioContextClass({ latencyHint: 'playback' });
-        }
+        const ctx = getAudioContext();
 
-        ensureAudioRunning();
-        hookVideoEvents(video);
-
-        if (!cachedSourceNode) {
+        // 1つの mediaEl につき createMediaElementSource は生涯1回だけ
+        if (!mediaEl._bpSourceNode) {
             try {
-                cachedSourceNode = audioCtx.createMediaElementSource(video);
-            } catch(err) {
-                const stream = video.mozCaptureStream ? video.mozCaptureStream() : (video.captureStream ? video.captureStream() : null);
-                if (stream) {
-                    cachedSourceNode = audioCtx.createMediaStreamSource(stream);
-                }
+                mediaEl._bpSourceNode = ctx.createMediaElementSource(mediaEl);
+            } catch(e) {
+                // すでにアタッチされている場合は無視
             }
-            scanStreamCodec();
         }
 
-        if (cachedSourceNode && !processor) {
-            processor = audioCtx.createScriptProcessor(4096, 2, 2);
+        const sourceNode = mediaEl._bpSourceNode;
+        if (!sourceNode) return;
+
+        if (!processor || processor.context !== ctx) {
+            processor = ctx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
-                if (video.paused || video.ended) return;
-                ensureAudioRunning();
+                if (mediaEl.paused || mediaEl.ended) return;
+                if (ctx.state === 'suspended') ctx.resume().catch(() => {});
 
                 const inL = e.inputBuffer.getChannelData(0);
                 const inR = e.inputBuffer.getChannelData(1);
                 const inLen = inL.length;
-                const srcRate = audioCtx.sampleRate || 48000;
+                const srcRate = ctx.sampleRate || 48000;
 
                 let left = inL;
                 let right = inR;
@@ -276,29 +253,63 @@ function setupAudioPipeline() {
                     bitMode: currentBitMode
                 });
             };
-
-            try { cachedSourceNode.disconnect(); } catch(e) {}
-            cachedSourceNode.connect(processor);
         }
+
+        if (!silentGain || silentGain.context !== ctx) {
+            silentGain = ctx.createGain();
+            silentGain.gain.value = 0.0;
+        }
+
+        try { sourceNode.disconnect(); } catch(e) {}
+        try { processor.disconnect(); } catch(e) {}
+        try { silentGain.disconnect(); } catch(e) {}
+
+        sourceNode.connect(processor);
+        processor.connect(silentGain);
+        silentGain.connect(ctx.destination);
+
     } catch(e) {
-        console.error("[BitPerfect] Pipeline error", e);
+        console.error("[BitPerfect] Attach error", e);
     }
 }
 
+// ★ 最重要: HTMLMediaElement.prototype.play をフックして再生開始を100%確実に捕捉
+const origPlay = HTMLMediaElement.prototype.play;
+HTMLMediaElement.prototype.play = function() {
+    const mediaEl = this;
+    getAudioContext();
+    attachAudioPipeline(mediaEl);
+    scanStreamCodec();
+    postNativeMessage({ type: "state", playing: true });
+    return origPlay.apply(this, arguments);
+};
+
+function findAndAttachVideo() {
+    const video = document.querySelector('video') || document.querySelector('audio');
+    if (video) {
+        attachAudioPipeline(video);
+        scanStreamCodec();
+    }
+}
+setInterval(findAndAttachVideo, 1500);
+
 function handleNativeMessage(msg) {
     const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
-    const video = cachedVideoElement || document.querySelector('video');
+    const video = activeMediaElement || document.querySelector('video');
 
     if (cmd === 'play') {
-        ensureAudioRunning();
+        getAudioContext();
         if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
         document.querySelector('#play-pause-button')?.click();
     } else if (cmd === 'pause') {
         if (video) video.pause();
         document.querySelector('#play-pause-button')?.click();
     } else if (cmd === 'resume_audio') {
-        ensureAudioRunning();
-        setupAudioPipeline();
+        getAudioContext();
+        if (video) {
+            video.muted = false;
+            attachAudioPipeline(video);
+        }
     } else if (cmd === 'next') {
         document.querySelector('.next-button')?.click();
     } else if (cmd === 'prev') {
@@ -343,7 +354,7 @@ function postNativeMessage(data) {
 }
 
 function syncPlaybackProgress() {
-    const video = cachedVideoElement || document.querySelector('video');
+    const video = activeMediaElement || document.querySelector('video');
     if (video && !isNaN(video.duration) && video.duration > 0) {
         postNativeMessage({
             type: "progress",
@@ -369,9 +380,10 @@ function checkMetadata() {
 }
 setInterval(checkMetadata, 1500);
 
-setInterval(setupAudioPipeline, 2000);
-document.addEventListener('click', () => {
-    ensureAudioRunning();
-    setupAudioPipeline();
+// ユーザーの全タップ/タッチ/キー操作で AudioContext を確実にアンロック
+['click', 'touchstart', 'touchend', 'pointerdown', 'keydown'].forEach(evt => {
+    document.addEventListener(evt, () => {
+        getAudioContext();
+        findAndAttachVideo();
+    }, { passive: true, capture: true });
 });
-setupAudioPipeline();
