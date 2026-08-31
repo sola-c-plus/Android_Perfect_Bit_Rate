@@ -253,6 +253,7 @@ class BitPerfectPlaybackService : Service() {
     fun resetBuffer() {
         isBuffering.set(true)
         pcmQueue.clear()
+        onPeakListener?.invoke(-60f, -60f, 0)
     }
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
@@ -346,6 +347,7 @@ class BitPerfectPlaybackService : Service() {
     fun forceCloseDacStream() {
         isBuffering.set(true)
         pcmQueue.clear()
+        onPeakListener?.invoke(-60f, -60f, 0)
         trackExecutor.execute {
             audioLock.lock()
             try {
@@ -753,7 +755,6 @@ class BitPerfectPlaybackService : Service() {
                     val valR = abs(rawR)
                     if (valL > maxL) maxL = valL
                     if (valR > maxR) maxR = valR
-                    // ★ 符号拡張を防ぎ、絶対値のビット幅 + MSB のみ反映
                     bitMask = bitMask or (valL and 0x7FFF) or (valR and 0x7FFF)
                     if (rawL < 0 || rawR < 0 || valL >= 16384 || valR >= 16384) {
                         bitMask = bitMask or 0x8000
