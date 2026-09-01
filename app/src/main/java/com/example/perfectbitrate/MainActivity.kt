@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -88,8 +88,7 @@ class MainActivity : AppCompatActivity() {
     private val upsampleOptions = arrayOf("1x Direct (Bypass)", "2x Hi-Res (96k/88k)", "4x Ultra (192k/176k)", "8x Master (384k/352k)")
     private val upsampleFactorValues = arrayOf(1, 2, 4, 8)
 
-    // ★ ディザリング方式オプション
-    private var currentDitherMode = 1 // デフォルト: 1 (TPDF)
+    private var currentDitherMode = 1
     private val ditherOptions = arrayOf("TPDF (Studio Standard)", "High-Pass Shaped (Clear)", "Psychoacoustic (Walkman SBM)", "None (Direct Bypass)")
     private val ditherModeValues = arrayOf(1, 2, 3, 0)
 
@@ -162,7 +161,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (actualMode != currentBitMode) {
                         currentBitMode = actualMode
-                        sendBitModeSetting(actualMode)
+                        prefs.edit { putString("selected_bit_mode", actualMode) }
                         updateStatus()
                     }
                 }
@@ -356,7 +355,6 @@ class MainActivity : AppCompatActivity() {
             walkmanEqView.resetAllFlat()
         }
 
-        // 1. Bit Depth Spinner
         val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
         bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerBitDepth.adapter = bitAdapter
@@ -369,7 +367,7 @@ class MainActivity : AppCompatActivity() {
                 if (selectedMode != currentBitMode) {
                     currentBitMode = selectedMode
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
-                    sendBitModeSetting(selectedMode)
+                    playbackService?.currentBitMode = selectedMode
                     playbackService?.initAudioTrack(selectedMode, baseSampleRate, upsampleFactor, activeOutputDevice)
                     bitActivityMask = 0
                     peakDbL = -60f
@@ -381,7 +379,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 2. ★ Dithering Algorithm Spinner
         val ditherAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, ditherOptions)
         ditherAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDither.adapter = ditherAdapter
@@ -400,7 +397,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 3. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
@@ -420,7 +416,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 4. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -449,7 +444,6 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
         }
 
-        // 5. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked
@@ -652,16 +646,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {}
     }
 
-    private fun sendBitModeSetting(mode: String) {
-        try {
-            val jsonCmd = JSONObject().apply {
-                put("command", "setBitMode")
-                put("mode", mode)
-            }
-            activeWebExtensionPort?.postMessage(jsonCmd)
-        } catch (e: Exception) {}
-    }
-
     private fun registerAudioDeviceCallback() {
         audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
@@ -727,7 +711,7 @@ class MainActivity : AppCompatActivity() {
             "pcm" -> {
                 val base64Pcm = msg.optString("pcm", "")
                 if (base64Pcm.isNotEmpty()) {
-                    val bitMode = msg.optString("bitMode", currentBitMode)
+                    val inBitMode = msg.optString("bitMode", "float32")
                     val sampleRate = msg.optInt("sampleRate", baseSampleRate)
                     if (sampleRate > 0) baseSampleRate = sampleRate
 
@@ -738,7 +722,7 @@ class MainActivity : AppCompatActivity() {
                             isPlayingState = true
                             lastPcmTime = System.currentTimeMillis()
 
-                            playbackService?.pushPcm(pcmBytes, baseSampleRate, bitMode)
+                            playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
                         }
                     } catch (e: Exception) {
                         Log.e("BitPerfect", "PCM Base64 decode error", e)
@@ -885,7 +869,6 @@ class MainActivity : AppCompatActivity() {
                 override fun onConnect(port: WebExtension.Port) {
                     activeWebExtensionPort = port
                     sendAdBlockSetting(isAdBlockOn)
-                    sendBitModeSetting(currentBitMode)
 
                     port.setDelegate(object : WebExtension.PortDelegate {
                         override fun onPortMessage(message: Any, port: WebExtension.Port) {

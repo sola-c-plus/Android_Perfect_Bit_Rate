@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -48,6 +48,8 @@ class BitPerfectPlaybackService : Service() {
     private lateinit var audioManager: AudioManager
     var baseSampleRate = 48000
     var effectiveSampleRate = 48000
+    
+    // ★ 出力ビットモード (UIで選択されたフォーマット: 16bit / 24bit / 32bit)
     var currentBitMode = "16bit"
     var upsampleFactor = 1
     var activeOutputDevice: AudioDeviceInfo? = null
@@ -200,10 +202,11 @@ class BitPerfectPlaybackService : Service() {
                     val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     if (currentVol == 0) {
                         val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                        val defaultVol = (maxVol * 0.65f).toInt().coerceAtLeast(1)
+                        val defaultVol = (maxVol * 0.85f).toInt().coerceAtLeast(1)
                         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, defaultVol, 0)
                         Log.i("BitPerfect", "★ Restored volume for DAC: $defaultVol / $maxVol")
                     }
+                    audioTrack?.setVolume(1.0f)
                 }
             }
         } catch (e: Exception) {
@@ -238,30 +241,25 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, bitMode: String) {
+    fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
         isCurrentlyPlaying = true
         baseSampleRate = sampleRate
         val targetEffectiveRate = sampleRate * upsampleFactor
 
         val needsRecreate = (targetEffectiveRate != effectiveSampleRate || 
-                             bitMode != currentBitMode || 
                              audioTrack == null || 
                              audioTrack?.state != AudioTrack.STATE_INITIALIZED)
 
         if (needsRecreate && !isInitializingTrack.get()) {
-            currentBitMode = bitMode
             isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
             }
         }
 
-        // Native NEON Polyphase DSP アップサンプリング + 10-Band EQ
-        val processedBytes = if (upsampleFactor > 1 || true) {
-            NativeAudioEngine.nativeProcessUpsample(pcmBytes, pcmBytes.size, bitMode, currentBitMode, upsampleFactor) ?: pcmBytes
-        } else {
-            pcmBytes
-        }
+        val processedBytes = NativeAudioEngine.nativeProcessUpsample(
+            pcmBytes, pcmBytes.size, inBitMode, currentBitMode, upsampleFactor
+        ) ?: pcmBytes
 
         if (!pcmQueue.offer(processedBytes)) {
             pcmQueue.poll()
@@ -636,9 +634,7 @@ class BitPerfectPlaybackService : Service() {
                         if (track.state == AudioTrack.STATE_INITIALIZED) {
                             targetDevice?.let { track.setPreferredDevice(it) }
                             restoreVolumeForDevice(targetDevice)
-                            if (isVolumeLocked && isUsbDevice(targetDevice)) {
-                                track.setVolume(1.0f)
-                            }
+                            track.setVolume(1.0f)
                             track.play()
                             createdTrack = track
                             finalEncoding = enc
@@ -708,9 +704,7 @@ class BitPerfectPlaybackService : Service() {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
-                        if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
-                            track.setVolume(1.0f)
-                        }
+                        track.setVolume(1.0f)
                         track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                     }
                 } catch (e: InterruptedException) {

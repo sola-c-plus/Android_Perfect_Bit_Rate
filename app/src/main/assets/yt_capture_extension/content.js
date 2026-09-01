@@ -1,4 +1,4 @@
-﻿if (window.self !== window.top) {
+if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
 
@@ -11,7 +11,6 @@ try {
 let port = null;
 let lastCodecName = "";
 let adBlockEnabled = true;
-let currentBitMode = "16bit";
 let currentSampleRate = 48000;
 
 let audioCtx = null;
@@ -29,7 +28,6 @@ const itagMap = {
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
 
-// 広告ブロック用スタイル
 let adStyleElement = null;
 function updateAdBlockStyles(enable) {
     if (enable) {
@@ -130,7 +128,6 @@ function scanStreamCodec() {
 }
 setInterval(scanStreamCodec, 1500);
 
-// 安全かつ高速な Base64 変換（スタック上限エラー完全回避）
 function bytesToBase64(bytes) {
     let binary = '';
     const len = bytes.byteLength;
@@ -202,63 +199,21 @@ function attachAudioPipeline(mediaEl) {
                     }
                 }
 
-                let bytes = null;
-
-                if (currentBitMode === "32bit") {
-                    const buffer = new ArrayBuffer(len * 8);
-                    const view = new DataView(buffer);
-                    for (let i = 0; i < len; i++) {
-                        let l = Math.max(-1.0, Math.min(1.0, left[i]));
-                        let r = Math.max(-1.0, Math.min(1.0, right[i]));
-                        let intL = l < 0 ? Math.round(l * 2147483648) : Math.round(l * 2147483647);
-                        let intR = r < 0 ? Math.round(r * 2147483648) : Math.round(r * 2147483647);
-                        intL = Math.max(-2147483648, Math.min(2147483647, intL));
-                        intR = Math.max(-2147483648, Math.min(2147483647, intR));
-
-                        view.setInt32(i * 8, intL, true);
-                        view.setInt32(i * 8 + 4, intR, true);
-                    }
-                    bytes = new Uint8Array(buffer);
-                } else if (currentBitMode === "24bit") {
-                    const buffer = new ArrayBuffer(len * 6);
-                    const view = new DataView(buffer);
-                    for (let i = 0; i < len; i++) {
-                        let l = Math.max(-1.0, Math.min(1.0, left[i]));
-                        let r = Math.max(-1.0, Math.min(1.0, right[i]));
-                        let intL = l < 0 ? Math.round(l * 8388608) : Math.round(l * 8388607);
-                        let intR = r < 0 ? Math.round(r * 8388608) : Math.round(r * 8388607);
-                        intL = Math.max(-8388608, Math.min(8388607, intL));
-                        intR = Math.max(-8388608, Math.min(8388607, intR));
-                        if (intL < 0) intL = 0x1000000 + intL;
-                        if (intR < 0) intR = 0x1000000 + intR;
-
-                        view.setUint8(i * 6, intL & 0xFF);
-                        view.setUint8(i * 6 + 1, (intL >> 8) & 0xFF);
-                        view.setUint8(i * 6 + 2, (intL >> 16) & 0xFF);
-                        view.setUint8(i * 6 + 3, intR & 0xFF);
-                        view.setUint8(i * 6 + 4, (intR >> 8) & 0xFF);
-                        view.setUint8(i * 6 + 5, (intR >> 16) & 0xFF);
-                    }
-                    bytes = new Uint8Array(buffer);
-                } else {
-                    const buffer = new ArrayBuffer(len * 4);
-                    const view = new DataView(buffer);
-                    for (let i = 0; i < len; i++) {
-                        let l = Math.max(-1.0, Math.min(1.0, left[i]));
-                        let r = Math.max(-1.0, Math.min(1.0, right[i]));
-                        view.setInt16(i * 4, l < 0 ? Math.round(l * 32768) : Math.round(l * 32767), true);
-                        view.setInt16(i * 4 + 2, r < 0 ? Math.round(r * 32768) : Math.round(r * 32767), true);
-                    }
-                    bytes = new Uint8Array(buffer);
+                // 生の 32-bit Float PCM (Little Endian)
+                const buffer = new ArrayBuffer(len * 8);
+                const view = new DataView(buffer);
+                for (let i = 0; i < len; i++) {
+                    view.setFloat32(i * 8, left[i], true);
+                    view.setFloat32(i * 8 + 4, right[i], true);
                 }
-
+                const bytes = new Uint8Array(buffer);
                 const base64Pcm = bytesToBase64(bytes);
 
                 postNativeMessage({
                     type: "pcm",
                     pcm: base64Pcm,
                     sampleRate: currentSampleRate,
-                    bitMode: currentBitMode
+                    bitMode: "float32"
                 });
             };
         }
@@ -281,7 +236,6 @@ function attachAudioPipeline(mediaEl) {
     }
 }
 
-// play フック
 const origPlay = HTMLMediaElement.prototype.play;
 HTMLMediaElement.prototype.play = function() {
     const mediaEl = this;
@@ -301,7 +255,6 @@ function findAndAttachVideo() {
 }
 setInterval(findAndAttachVideo, 1000);
 
-// DOM 監視
 const observer = new MutationObserver(() => {
     findAndAttachVideo();
 });
@@ -333,8 +286,6 @@ function handleNativeMessage(msg) {
     } else if (cmd === 'setAdBlock' && msg.enabled !== undefined) {
         adBlockEnabled = msg.enabled;
         updateAdBlockStyles(msg.enabled);
-    } else if (cmd === 'setBitMode' && msg.mode !== undefined) {
-        currentBitMode = msg.mode;
     }
 }
 
@@ -394,7 +345,6 @@ function checkMetadata() {
 }
 setInterval(checkMetadata, 1500);
 
-// タッチ/クリック操作で確実に AudioContext を解除
 ['click', 'touchstart', 'touchend', 'pointerdown', 'keydown'].forEach(evt => {
     document.addEventListener(evt, () => {
         getAudioContext();

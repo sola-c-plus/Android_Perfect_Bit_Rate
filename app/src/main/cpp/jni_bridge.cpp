@@ -1,4 +1,4 @@
-﻿#include <jni.h>
+#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
@@ -7,6 +7,7 @@
 static AAudioEngine* g_engine = nullptr;
 static DspUpsampler* g_upsampler = nullptr;
 static std::vector<uint8_t> g_outDspBuffer;
+static int g_currentDitherMode = 1;
 
 extern "C" {
 
@@ -17,6 +18,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
     }
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
+        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
     }
 }
 
@@ -25,6 +27,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
         JNIEnv *env, jobject thiz, jint factor, jint sample_rate) {
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
+        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
     }
     g_upsampler->configure(factor, static_cast<float>(sample_rate));
 }
@@ -40,15 +43,20 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeResetUpsampler(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDitherMode(
         JNIEnv *env, jobject thiz, jint mode) {
-    if (g_upsampler) {
-        g_upsampler->setDitherMode(static_cast<DitherMode>(mode));
+    g_currentDitherMode = mode;
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
     }
+    g_upsampler->setDitherMode(static_cast<DitherMode>(mode));
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
-    if (!g_upsampler) return;
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
+        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
+    }
     g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
     if (gains) {
         jfloat* gainElements = env->GetFloatArrayElements(gains, nullptr);
@@ -64,7 +72,11 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
         JNIEnv *env, jobject thiz,
         jbyteArray in_bytes, jint in_length,
         jstring in_bit_mode, jstring out_bit_mode, jint factor) {
-    if (!g_upsampler || !in_bytes || in_length <= 0) return nullptr;
+    if (!in_bytes || in_length <= 0) return nullptr;
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
+        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
+    }
 
     const char* inMode = env->GetStringUTFChars(in_bit_mode, nullptr);
     const char* outMode = env->GetStringUTFChars(out_bit_mode, nullptr);
@@ -105,7 +117,7 @@ JNIEXPORT jint JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeOpen(
         JNIEnv *env, jobject thiz,
         jint sample_rate, jint channel_count, jint encoding, jint device_id) {
-    if (!g_engine) return 0;
+    if (!g_engine) g_engine = new AAudioEngine();
 
     aaudio_format_t format = AAUDIO_FORMAT_PCM_I16;
     if (encoding == 4) format = AAUDIO_FORMAT_PCM_FLOAT;

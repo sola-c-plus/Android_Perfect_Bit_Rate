@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <vector>
 #include <cstdint>
@@ -84,7 +84,6 @@ private:
 
     DitherMode ditherMode_ = DitherMode::TPDF;
 
-    // ★ ノイズシェーパー用エラーフィードバック履歴バッファ
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
