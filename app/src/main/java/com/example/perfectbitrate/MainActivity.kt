@@ -88,7 +88,6 @@ class MainActivity : AppCompatActivity() {
     private val upsampleOptions = arrayOf("1x Direct (Bypass)", "2x Hi-Res (96k/88k)", "4x Ultra (192k/176k)", "8x Master (384k/352k)")
     private val upsampleFactorValues = arrayOf(1, 2, 4, 8)
 
-    // EQ 設定
     private var isEqEnabled = false
     private val eqGains = FloatArray(10) { 0.0f }
 
@@ -229,7 +228,6 @@ class MainActivity : AppCompatActivity() {
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
 
-        // EQ設定復元
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
             eqGains[i] = prefs.getFloat("eq_gain_$i", 0.0f)
@@ -276,7 +274,6 @@ class MainActivity : AppCompatActivity() {
         val textVolLockTitle = view.findViewById<TextView>(R.id.dialogTextVolLockTitle)
         val textVolLockSub = view.findViewById<TextView>(R.id.dialogTextVolLockSub)
 
-        // ★ SONY WALKMAN 10-Band EQ バインド
         val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
         val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
         val textEqBandFreq = view.findViewById<TextView>(R.id.textEqBandFreq)
@@ -287,19 +284,31 @@ class MainActivity : AppCompatActivity() {
         val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
         val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
 
-        // EQ View 初期値
-        System.arraycopy(eqGains, 0, walkmanEqView.gains, 0, 10)
-        walkmanEqView.isDirectBypass = !isEqEnabled
-        walkmanEqView.isEditMode = false
-        switchEqEnable.isChecked = isEqEnabled
-        layoutEqAdjustControls.visibility = View.GONE
-        btnEqEdit.text = "調整"
-        btnEqEdit.setTextColor(Color.parseColor("#E5A93C"))
+        // ★ 状態を一元制御するヘルパー関数
+        fun setEditMode(enabled: Boolean) {
+            walkmanEqView.isEditMode = enabled
+            if (enabled) {
+                btnEqEdit.text = "完了"
+                layoutEqAdjustControls.visibility = View.VISIBLE
+                if (!switchEqEnable.isChecked) {
+                    switchEqEnable.isChecked = true
+                }
+            } else {
+                btnEqEdit.text = "調整"
+                layoutEqAdjustControls.visibility = View.GONE
+            }
+        }
 
         fun updateEqHeader(bandIdx: Int, gain: Float) {
             textEqBandFreq.text = "${walkmanEqView.bandLabels[bandIdx]} Hz"
             textEqGainValue.text = String.format(java.util.Locale.US, "%+.1f dB", gain)
         }
+
+        // 初期化: 常に確定状態（まるぽちょ・上下ボタンOFF）からスタート
+        System.arraycopy(eqGains, 0, walkmanEqView.gains, 0, 10)
+        walkmanEqView.isDirectBypass = !isEqEnabled
+        switchEqEnable.isChecked = isEqEnabled
+        setEditMode(false)
         updateEqHeader(walkmanEqView.selectedBandIndex, walkmanEqView.gains[walkmanEqView.selectedBandIndex])
 
         walkmanEqView.onBandSelectedListener = { bandIdx, gain ->
@@ -315,29 +324,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ★「調整」⇄「完了」ボタン切り替え
+        // ★ [ 調整 ] ⇄ [ 完了 ] ボタン切り替え
         btnEqEdit.setOnClickListener {
-            val newEditMode = !walkmanEqView.isEditMode
-            walkmanEqView.isEditMode = newEditMode
-            if (newEditMode) {
-                btnEqEdit.text = "完了"
-                btnEqEdit.setTextColor(Color.WHITE)
-                layoutEqAdjustControls.visibility = View.VISIBLE
-                if (!switchEqEnable.isChecked) {
-                    switchEqEnable.isChecked = true
-                }
-            } else {
-                btnEqEdit.text = "調整"
-                btnEqEdit.setTextColor(Color.parseColor("#E5A93C"))
-                layoutEqAdjustControls.visibility = View.GONE
-            }
+            setEditMode(!walkmanEqView.isEditMode)
         }
 
+        // ★ EQ スイッチ (OFF にされたら編集モードも自動終了し上下ボタンを確実に消去)
         switchEqEnable.setOnCheckedChangeListener { _, isChecked ->
             isEqEnabled = isChecked
             walkmanEqView.isDirectBypass = !isChecked
             prefs.edit { putBoolean("eq_enabled", isChecked) }
             NativeAudioEngine.nativeSetEqualizer(isChecked, eqGains)
+            if (!isChecked) {
+                setEditMode(false)
+            }
         }
 
         btnEqPlus.setOnClickListener {
@@ -352,7 +352,6 @@ class MainActivity : AppCompatActivity() {
             walkmanEqView.resetAllFlat()
         }
 
-        // 1. Bit Depth Spinner
         val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
         bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerBitDepth.adapter = bitAdapter
@@ -377,7 +376,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 2. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
@@ -397,7 +395,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 3. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -426,7 +423,6 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
         }
 
-        // 4. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked

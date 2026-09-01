@@ -53,19 +53,24 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:background="#0A0A0A"
-        android:padding="10dp"
+        android:background="#080808"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
         android:layout_marginBottom="14dp">
 
-        <!-- EQヘッダー: 選択中バンド数値 ＆ [+] [-] ＆ 調整/完了 ＆ FLAT ＆ DIRECT -->
+        <!-- EQヘッダー部 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
             android:layout_marginBottom="6dp">
 
-            <!-- 編集モード時に表示される周波数・ゲイン数値 -->
+            <!-- 編集モード時のみ出現する ゲイン数値 ＆ [+] [-] 丸型ボタン -->
             <LinearLayout
                 android:id="@+id/layoutEqAdjustControls"
                 android:layout_width="wrap_content"
@@ -90,21 +95,20 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:text="+0.0 dB"
-                    android:textColor="#E5A93C"
+                    android:textColor="#FFFFFF"
                     android:textSize="13sp"
                     android:textStyle="bold"
-                    android:fontFamily="sans-serif-black" />
+                    android:fontFamily="sans-serif-medium" />
 
-                <!-- [+] [-] ボタン -->
+                <!-- 丸型 [+] [-] ボタン -->
                 <Button
                     android:id="@+id/btnEqPlus"
                     android:layout_width="24dp"
                     android:layout_height="24dp"
                     android:text="＋"
                     android:textColor="#FFFFFF"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_btn_icon"
+                    android:textSize="12sp"
+                    android:background="@drawable/bg_btn_circle"
                     android:layout_marginStart="8dp"
                     android:padding="0dp" />
 
@@ -114,10 +118,9 @@
                     android:layout_height="24dp"
                     android:text="－"
                     android:textColor="#FFFFFF"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_btn_icon"
-                    android:layout_marginStart="3dp"
+                    android:textSize="12sp"
+                    android:background="@drawable/bg_btn_circle"
+                    android:layout_marginStart="4dp"
                     android:padding="0dp" />
             </LinearLayout>
 
@@ -126,41 +129,41 @@
                 android:layout_height="1dp"
                 android:layout_weight="1" />
 
-            <!-- FLAT リセットボタン -->
+            <!-- FLAT ボタン -->
             <Button
                 android:id="@+id/btnEqFlat"
                 android:layout_width="wrap_content"
                 android:layout_height="24dp"
                 android:text="FLAT"
                 android:textColor="#888888"
-                android:textSize="9.5sp"
+                android:textSize="9sp"
                 android:textStyle="bold"
-                android:background="@drawable/bg_btn_icon"
+                android:background="@drawable/bg_btn_dap_outline"
                 android:paddingStart="8dp"
                 android:paddingEnd="8dp"
                 android:layout_marginEnd="6dp" />
 
-            <!-- ★ 実機準拠「調整」/「完了」ボタン -->
+            <!-- ★ 実機準拠 [ 調整 ] / [ 完了 ] ボタン -->
             <Button
                 android:id="@+id/btnEqEdit"
                 android:layout_width="wrap_content"
                 android:layout_height="24dp"
                 android:text="調整"
-                android:textColor="#E5A93C"
+                android:textColor="#FFFFFF"
                 android:textSize="9.5sp"
                 android:textStyle="bold"
-                android:background="@drawable/bg_btn_icon"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
+                android:background="@drawable/bg_btn_dap_outline"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
                 android:layout_marginEnd="8dp" />
 
-            <!-- DIRECT スイッチ (EQ Bypass) -->
+            <!-- DIRECT スイッチ -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="EQ"
                 android:textColor="#AAAAAA"
-                android:textSize="10sp"
+                android:textSize="9.5sp"
                 android:textStyle="bold"
                 android:layout_marginEnd="4dp" />
 
@@ -175,15 +178,15 @@
                 android:checked="false" />
         </LinearLayout>
 
-        <!-- WALKMAN 1Z 10-Band スタイリッシュ・カーブ View -->
+        <!-- WALKMAN 1Z 引き締まった比率のEQ View -->
         <com.example.perfectbitrate.WalkmanEqView
             android:id="@+id/walkmanEqView"
             android:layout_width="match_parent"
-            android:layout_height="125dp" />
+            android:layout_height="135dp" />
 
     </LinearLayout>
 
-    <!-- ★ 下部設定項目（すべて美しい縦一列配置） -->
+    <!-- ★ 下部設定項目（すべて縦一列に整列） -->
 
     <!-- 1. 出力ビット深度 -->
     <LinearLayout

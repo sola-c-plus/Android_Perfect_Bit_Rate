@@ -6,6 +6,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class WalkmanEqView @JvmOverloads constructor(
@@ -42,12 +43,18 @@ class WalkmanEqView @JvmOverloads constructor(
     var onBandSelectedListener: ((Int, Float) -> Unit)? = null
 
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#1C1C1C")
+        color = Color.parseColor("#181818")
         strokeWidth = 0.8f * density
     }
 
+    private val gridBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#282828")
+        strokeWidth = 1.0f * density
+        style = Paint.Style.STROKE
+    }
+
     private val centerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#383838")
+        color = Color.parseColor("#333333")
         strokeWidth = 1.0f * density
     }
 
@@ -104,9 +111,13 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
 
-        gridLeft = 14f * density
-        gridRight = w.toFloat() - 14f * density
-        gridTop = 8f * density
+        // ★ 横長になりすぎないよう、左右に美しいマージンを確保して実機のアスペクト比に調整
+        val maxGridW = min(w.toFloat() - 48f * density, 340f * density)
+        val horizontalMargin = (w.toFloat() - maxGridW) / 2f
+
+        gridLeft = horizontalMargin
+        gridRight = w.toFloat() - horizontalMargin
+        gridTop = 6f * density
         gridBottom = h.toFloat() - 18f * density
         gridWidth = gridRight - gridLeft
         gridHeight = gridBottom - gridTop
@@ -153,6 +164,9 @@ class WalkmanEqView @JvmOverloads constructor(
             val p = if (isEditMode && i == selectedBandIndex) selectedLabelPaint else labelPaint
             canvas.drawText(bandLabels[i], x, labelY, p)
         }
+
+        // 外枠
+        canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
         // 3. 編集モード時: 選択中バンドの垂直カーソル線
         if (isEditMode && !isDirectBypass && selectedBandIndex in 0..9) {
@@ -206,7 +220,7 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawPath(curvePath, if (isDirectBypass) bypassCurvePaint else curvePaint)
 
-        // 5. まるぽちょ (編集モード時のみ描画！)
+        // 5. ★ まるぽちょ (編集モード時のみ描画！確定時は完全消灯)
         if (isEditMode && !isDirectBypass) {
             for (i in 0 until n) {
                 val x = xArr[i]
@@ -214,9 +228,9 @@ class WalkmanEqView @JvmOverloads constructor(
                 if (i == selectedBandIndex) {
                     // 選択中の白丸 + 内側ブラックリング
                     pointPaint.color = Color.WHITE
-                    canvas.drawCircle(x, y, 5.2f * density, pointPaint)
+                    canvas.drawCircle(x, y, 5.0f * density, pointPaint)
                     pointPaint.color = Color.parseColor("#121212")
-                    canvas.drawCircle(x, y, 2.2f * density, pointPaint)
+                    canvas.drawCircle(x, y, 2.0f * density, pointPaint)
                     pointPaint.color = Color.WHITE
                 } else {
                     // 通常の白丸
@@ -229,7 +243,7 @@ class WalkmanEqView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isEditMode || isDirectBypass) {
-            return false // 編集モードOFF時はタッチをスルー
+            return false
         }
 
         val x = event.x
