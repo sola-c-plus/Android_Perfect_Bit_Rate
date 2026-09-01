@@ -213,7 +213,8 @@ size_t DspUpsampler::process(
             if (historyWritePos_ >= historyLen_ - 1) {
                 int overlap = subTaps - 1;
                 std::memmove(&historyL_[0], &historyL_[historyWritePos_ - overlap], overlap * sizeof(float));
-                std::memmove(&historyR_[0], &historyR_[historyR_.size() - overlap], overlap * sizeof(float));
+                // ★ 修正: Rチャンネルも historyWritePos_ - overlap から正しくコピー
+                std::memmove(&historyR_[0], &historyR_[historyWritePos_ - overlap], overlap * sizeof(float));
                 historyWritePos_ = overlap;
             }
         }
