@@ -39,6 +39,9 @@ class WalkmanEqView @JvmOverloads constructor(
             onBandSelectedListener?.invoke(field, gains[field])
         }
 
+    // ★ ドラッグ中に対象バンドを固定するロック変数
+    private var activeDragBandIndex = -1
+
     var onGainChangedListener: ((Int, Float, FloatArray) -> Unit)? = null
     var onBandSelectedListener: ((Int, Float) -> Unit)? = null
 
@@ -111,7 +114,6 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
 
-        // ★ 横長になりすぎないよう、左右に美しいマージンを確保して実機のアスペクト比に調整
         val maxGridW = min(w.toFloat() - 48f * density, 340f * density)
         val horizontalMargin = (w.toFloat() - maxGridW) / 2f
 
@@ -150,7 +152,7 @@ class WalkmanEqView @JvmOverloads constructor(
         for (i in 0..numHoriz) {
             val y = gridTop + i * (gridHeight / numHoriz)
             if (i == numHoriz / 2) {
-                canvas.drawLine(gridLeft, y, gridRight, y, centerLinePaint) // 0dB センターライン
+                canvas.drawLine(gridLeft, y, gridRight, y, centerLinePaint)
             } else {
                 canvas.drawLine(gridLeft, y, gridRight, y, gridPaint)
             }
@@ -174,7 +176,7 @@ class WalkmanEqView @JvmOverloads constructor(
             canvas.drawLine(curX, gridTop, curX, gridBottom, cursorLinePaint)
         }
 
-        // 4. Monotone Cubic Spline (実機さながらの不要な波打ちのない美しい曲線)
+        // 4. Monotone Cubic Spline (自然な曲線補間)
         curvePath.reset()
         val n = 10
         val xArr = FloatArray(n)
@@ -184,7 +186,6 @@ class WalkmanEqView @JvmOverloads constructor(
             yArr[i] = gainToY(if (isDirectBypass) 0f else gains[i])
         }
 
-        // 傾き計算 (Monotone Spline / Fritsch-Carlson)
         val d = FloatArray(n)
         val m = FloatArray(n - 1)
         for (i in 0 until n - 1) {
@@ -220,20 +221,18 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawPath(curvePath, if (isDirectBypass) bypassCurvePaint else curvePaint)
 
-        // 5. ★ まるぽちょ (編集モード時のみ描画！確定時は完全消灯)
+        // 5. まるぽちょ (編集モード時のみ描画)
         if (isEditMode && !isDirectBypass) {
             for (i in 0 until n) {
                 val x = xArr[i]
                 val y = yArr[i]
                 if (i == selectedBandIndex) {
-                    // 選択中の白丸 + 内側ブラックリング
                     pointPaint.color = Color.WHITE
                     canvas.drawCircle(x, y, 5.0f * density, pointPaint)
                     pointPaint.color = Color.parseColor("#121212")
                     canvas.drawCircle(x, y, 2.0f * density, pointPaint)
                     pointPaint.color = Color.WHITE
                 } else {
-                    // 通常の白丸
                     pointPaint.color = Color.WHITE
                     canvas.drawCircle(x, y, 3.0f * density, pointPaint)
                 }
@@ -250,7 +249,8 @@ class WalkmanEqView @JvmOverloads constructor(
         val y = event.y
 
         when (event.action) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+            MotionEvent.ACTION_DOWN -> {
+                // ★ 1. タッチ開始時に最も近いバンドを特定し、操作対象として完全ロック
                 var closestIdx = 0
                 var minDiff = Float.MAX_VALUE
                 for (i in bandX.indices) {
@@ -261,17 +261,34 @@ class WalkmanEqView @JvmOverloads constructor(
                     }
                 }
 
+                activeDragBandIndex = closestIdx
                 selectedBandIndex = closestIdx
+
                 val newGain = yToGain(y)
-                if (gains[closestIdx] != newGain) {
-                    gains[closestIdx] = newGain
-                    onGainChangedListener?.invoke(closestIdx, newGain, gains)
+                if (gains[activeDragBandIndex] != newGain) {
+                    gains[activeDragBandIndex] = newGain
+                    onGainChangedListener?.invoke(activeDragBandIndex, newGain, gains)
                 }
                 invalidate()
                 parent?.requestDisallowInterceptTouchEvent(true)
                 return true
             }
+            MotionEvent.ACTION_MOVE -> {
+                // ★ 2. ドラッグ中: 指が左右にブレても、最初に触ったバンド(activeDragBandIndex)のみを上下調整！
+                if (activeDragBandIndex in 0..9) {
+                    val newGain = yToGain(y)
+                    if (gains[activeDragBandIndex] != newGain) {
+                        gains[activeDragBandIndex] = newGain
+                        onGainChangedListener?.invoke(activeDragBandIndex, newGain, gains)
+                    }
+                    invalidate()
+                }
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // ★ 3. 指を離したときにロック解除
+                activeDragBandIndex = -1
                 parent?.requestDisallowInterceptTouchEvent(false)
                 return true
             }
