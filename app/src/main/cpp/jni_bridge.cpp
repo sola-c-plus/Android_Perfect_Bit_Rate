@@ -38,6 +38,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeResetUpsampler(
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDitherMode(
+        JNIEnv *env, jobject thiz, jint mode) {
+    if (g_upsampler) {
+        g_upsampler->setDitherMode(static_cast<DitherMode>(mode));
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
     if (!g_upsampler) return;

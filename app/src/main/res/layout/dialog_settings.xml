@@ -60,7 +60,6 @@
         android:paddingEnd="4dp"
         android:layout_marginBottom="14dp">
 
-        <!-- EQヘッダー部 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -70,7 +69,6 @@
             android:paddingEnd="6dp"
             android:layout_marginBottom="6dp">
 
-            <!-- 編集モード時のみ出現する ゲイン数値 ＆ [+] [-] 丸型ボタン -->
             <LinearLayout
                 android:id="@+id/layoutEqAdjustControls"
                 android:layout_width="wrap_content"
@@ -100,7 +98,6 @@
                     android:textStyle="bold"
                     android:fontFamily="sans-serif-medium" />
 
-                <!-- 丸型 [+] [-] ボタン -->
                 <Button
                     android:id="@+id/btnEqPlus"
                     android:layout_width="24dp"
@@ -129,7 +126,6 @@
                 android:layout_height="1dp"
                 android:layout_weight="1" />
 
-            <!-- FLAT ボタン -->
             <Button
                 android:id="@+id/btnEqFlat"
                 android:layout_width="wrap_content"
@@ -143,7 +139,6 @@
                 android:paddingEnd="8dp"
                 android:layout_marginEnd="6dp" />
 
-            <!-- ★ 実機準拠 [ 調整 ] / [ 完了 ] ボタン -->
             <Button
                 android:id="@+id/btnEqEdit"
                 android:layout_width="wrap_content"
@@ -157,7 +152,6 @@
                 android:paddingEnd="10dp"
                 android:layout_marginEnd="8dp" />
 
-            <!-- DIRECT スイッチ -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -178,7 +172,6 @@
                 android:checked="false" />
         </LinearLayout>
 
-        <!-- WALKMAN 1Z 引き締まった比率のEQ View -->
         <com.example.perfectbitrate.WalkmanEqView
             android:id="@+id/walkmanEqView"
             android:layout_width="match_parent"
@@ -186,7 +179,7 @@
 
     </LinearLayout>
 
-    <!-- ★ 下部設定項目（すべて縦一列に整列） -->
+    <!-- ★ 下部設定項目（縦一列に配置） -->
 
     <!-- 1. 出力ビット深度 -->
     <LinearLayout
@@ -232,7 +225,51 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 2. アップサンプリング DSP -->
+    <!-- 2. ★ DITHERING MODE (ディザリング方式切り替え) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DITHERING ALGORITHM"
+                android:textColor="#FFFFFF"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="量子化ノイズ分散・SBM心理音響シェーピング"
+                android:textColor="#777777"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <Spinner
+            android:id="@+id/dialogSpinnerDither"
+            android:layout_width="wrap_content"
+            android:layout_height="30dp"
+            android:background="@drawable/bg_spinner_dap"
+            android:popupBackground="#1A1A1A" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1C1C1C"
+        android:layout_marginBottom="12dp" />
+
+    <!-- 3. アップサンプリング DSP -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -276,7 +313,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 3. 0dB Volume Lock -->
+    <!-- 4. 0dB Volume Lock -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -324,7 +361,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 4. AD CUT (広告自動カット) -->
+    <!-- 5. AD CUT (広告自動カット) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

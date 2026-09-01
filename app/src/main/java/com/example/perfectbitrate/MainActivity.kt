@@ -88,6 +88,11 @@ class MainActivity : AppCompatActivity() {
     private val upsampleOptions = arrayOf("1x Direct (Bypass)", "2x Hi-Res (96k/88k)", "4x Ultra (192k/176k)", "8x Master (384k/352k)")
     private val upsampleFactorValues = arrayOf(1, 2, 4, 8)
 
+    // ★ ディザリング方式オプション
+    private var currentDitherMode = 1 // デフォルト: 1 (TPDF)
+    private val ditherOptions = arrayOf("TPDF (Studio Standard)", "High-Pass Shaped (Clear)", "Psychoacoustic (Walkman SBM)", "None (Direct Bypass)")
+    private val ditherModeValues = arrayOf(1, 2, 3, 0)
+
     private var isEqEnabled = false
     private val eqGains = FloatArray(10) { 0.0f }
 
@@ -150,6 +155,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
 
+            NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -227,6 +233,7 @@ class MainActivity : AppCompatActivity() {
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
+        currentDitherMode = prefs.getInt("selected_dither_mode", 1)
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -267,6 +274,7 @@ class MainActivity : AppCompatActivity() {
         dialog.setContentView(view)
 
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
+        val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
@@ -284,7 +292,6 @@ class MainActivity : AppCompatActivity() {
         val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
         val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
 
-        // ★ 状態を一元制御するヘルパー関数
         fun setEditMode(enabled: Boolean) {
             walkmanEqView.isEditMode = enabled
             if (enabled) {
@@ -304,7 +311,6 @@ class MainActivity : AppCompatActivity() {
             textEqGainValue.text = String.format(java.util.Locale.US, "%+.1f dB", gain)
         }
 
-        // 初期化: 常に確定状態（まるぽちょ・上下ボタンOFF）からスタート
         System.arraycopy(eqGains, 0, walkmanEqView.gains, 0, 10)
         walkmanEqView.isDirectBypass = !isEqEnabled
         switchEqEnable.isChecked = isEqEnabled
@@ -324,12 +330,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ★ [ 調整 ] ⇄ [ 完了 ] ボタン切り替え
         btnEqEdit.setOnClickListener {
             setEditMode(!walkmanEqView.isEditMode)
         }
 
-        // ★ EQ スイッチ (OFF にされたら編集モードも自動終了し上下ボタンを確実に消去)
         switchEqEnable.setOnCheckedChangeListener { _, isChecked ->
             isEqEnabled = isChecked
             walkmanEqView.isDirectBypass = !isChecked
@@ -352,6 +356,7 @@ class MainActivity : AppCompatActivity() {
             walkmanEqView.resetAllFlat()
         }
 
+        // 1. Bit Depth Spinner
         val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
         bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerBitDepth.adapter = bitAdapter
@@ -376,6 +381,26 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
+        // 2. ★ Dithering Algorithm Spinner
+        val ditherAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, ditherOptions)
+        ditherAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerDither.adapter = ditherAdapter
+        val initialDitherIdx = ditherModeValues.indexOf(currentDitherMode).let { if (it >= 0) it else 0 }
+        spinnerDither.setSelection(initialDitherIdx)
+
+        spinnerDither.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedMode = ditherModeValues[position]
+                if (selectedMode != currentDitherMode) {
+                    currentDitherMode = selectedMode
+                    prefs.edit { putInt("selected_dither_mode", selectedMode) }
+                    NativeAudioEngine.nativeSetDitherMode(selectedMode)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // 3. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
@@ -395,6 +420,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
+        // 4. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -423,6 +449,7 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
         }
 
+        // 5. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked

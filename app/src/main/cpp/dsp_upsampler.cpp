@@ -5,18 +5,20 @@
 
 constexpr double PI = 3.14159265358979323846;
 
-// 高速 TPDF (Triangular Probability Density Function) ディザー生成器
 static uint32_t g_ditherState = 0x87654321;
-inline float generateTpdfDither() {
+inline float getRng() {
     g_ditherState = g_ditherState * 1664525u + 1013904223u;
-    int32_t r1 = static_cast<int32_t>(g_ditherState >> 16);
-    g_ditherState = g_ditherState * 1664525u + 1013904223u;
-    int32_t r2 = static_cast<int32_t>(g_ditherState >> 16);
-    return static_cast<float>(r1 - r2) / 65536.0f; // [-1.0, 1.0]
+    return static_cast<float>(static_cast<int32_t>(g_ditherState >> 16)) / 32768.0f; // [-1.0, 1.0]
 }
 
 DspUpsampler::DspUpsampler() {
     configure(1, 48000.0f);
+}
+
+void DspUpsampler::setDitherMode(DitherMode mode) {
+    ditherMode_ = mode;
+    std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
+    std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
 }
 
 double DspUpsampler::besselI0(double x) {
@@ -103,6 +105,8 @@ void DspUpsampler::reset() {
         std::fill(historyR_.begin(), historyR_.end(), 0.0f);
         historyWritePos_ = tapsPerPhase_ - 1;
     }
+    std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
+    std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     equalizer_.reset();
 }
 
@@ -215,10 +219,10 @@ size_t DspUpsampler::process(
         }
     }
 
-    // ★ 64-bit Audiophile 10-Band EQ 処理
+    // 64-bit 10-Band EQ 処理
     equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 出力PCMエンコード (TPDF ディザリング付き)
+    // ★ マルチモード・ディザリング ＆ PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
@@ -227,7 +231,7 @@ size_t DspUpsampler::process(
     outBuffer.resize(outTotalBytes);
     uint8_t* dst = outBuffer.data();
 
-    if (outBytesPerSample == 4) {
+    if (outBytesPerSample == 4) { // 32-bit Int (ディザー不要・ダイレクト)
         auto* dst32 = reinterpret_cast<int32_t*>(dst);
         for (size_t i = 0; i < numOutFrames; ++i) {
             float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);
@@ -235,15 +239,42 @@ size_t DspUpsampler::process(
             dst32[i * 2]     = static_cast<int32_t>(l >= 0.0f ? (l * 2147483647.0f) : (l * 2147483648.0f));
             dst32[i * 2 + 1] = static_cast<int32_t>(r >= 0.0f ? (r * 2147483647.0f) : (r * 2147483648.0f));
         }
-    } else if (outBytesPerSample == 3) {
-        for (size_t i = 0; i < numOutFrames; ++i) {
-            float ditherL = generateTpdfDither() / 8388608.0f;
-            float ditherR = generateTpdfDither() / 8388608.0f;
-            float l = std::clamp(tempOutL_[i] + ditherL, -1.0f, 1.0f);
-            float r = std::clamp(tempOutR_[i] + ditherR, -1.0f, 1.0f);
+    } else if (outBytesPerSample == 3) { // 24-bit PCM
+        const double scale = 8388607.0;
 
-            int32_t intL = static_cast<int32_t>(l >= 0.0f ? (l * 8388607.0f) : (l * 8388608.0f));
-            int32_t intR = static_cast<int32_t>(r >= 0.0f ? (r * 8388607.0f) : (r * 8388608.0f));
+        for (size_t i = 0; i < numOutFrames; ++i) {
+            double rawL = tempOutL_[i] * scale;
+            double rawR = tempOutR_[i] * scale;
+
+            double shapedL = rawL;
+            double shapedR = rawR;
+
+            if (ditherMode_ == DitherMode::TPDF) {
+                double ditherL = (getRng() - getRng()) * 0.5;
+                double ditherR = (getRng() - getRng()) * 0.5;
+                shapedL += ditherL;
+                shapedR += ditherR;
+            } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
+                // 2次 High-Pass ノイズシェーピング
+                shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + (getRng() - getRng()) * 0.5;
+                shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + (getRng() - getRng()) * 0.5;
+            } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                // SONY SBM風 4次 心理音響ノイズシェーピング (F-weighting)
+                shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + (getRng() - getRng()) * 0.5;
+                shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + (getRng() - getRng()) * 0.5;
+            }
+
+            int32_t intL = static_cast<int32_t>(std::clamp(std::round(shapedL), -8388608.0, 8388607.0));
+            int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -8388608.0, 8388607.0));
+
+            // エラーフィードバック更新
+            if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                double eL = shapedL - intL;
+                double eR = shapedR - intR;
+                errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0]; errHistL_[0] = eL;
+                errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0]; errHistR_[0] = eR;
+            }
+
             if (intL < 0) intL = 0x1000000 + intL;
             if (intR < 0) intR = 0x1000000 + intR;
 
@@ -255,16 +286,43 @@ size_t DspUpsampler::process(
             dst[base + 4] = (intR >> 8) & 0xFF;
             dst[base + 5] = (intR >> 16) & 0xFF;
         }
-    } else {
-        auto* dst16 = reinterpret_cast<int16_t*>(dst);
-        for (size_t i = 0; i < numOutFrames; ++i) {
-            float ditherL = generateTpdfDither() / 32768.0f;
-            float ditherR = generateTpdfDither() / 32768.0f;
-            float l = std::clamp(tempOutL_[i] + ditherL, -1.0f, 1.0f);
-            float r = std::clamp(tempOutR_[i] + ditherR, -1.0f, 1.0f);
+    } else { // 16-bit PCM
+        const double scale = 32767.0;
 
-            dst16[i * 2]     = static_cast<int16_t>(l >= 0.0f ? (l * 32767.0f) : (l * 32768.0f));
-            dst16[i * 2 + 1] = static_cast<int16_t>(r >= 0.0f ? (r * 32767.0f) : (r * 32768.0f));
+        for (size_t i = 0; i < numOutFrames; ++i) {
+            double rawL = tempOutL_[i] * scale;
+            double rawR = tempOutR_[i] * scale;
+
+            double shapedL = rawL;
+            double shapedR = rawR;
+
+            if (ditherMode_ == DitherMode::TPDF) {
+                double ditherL = (getRng() - getRng()) * 0.5;
+                double ditherR = (getRng() - getRng()) * 0.5;
+                shapedL += ditherL;
+                shapedR += ditherR;
+            } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
+                shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + (getRng() - getRng()) * 0.5;
+                shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + (getRng() - getRng()) * 0.5;
+            } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + (getRng() - getRng()) * 0.5;
+                shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + (getRng() - getRng()) * 0.5;
+            }
+
+            int32_t intL = static_cast<int32_t>(std::clamp(std::round(shapedL), -32768.0, 32767.0));
+            int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -32768.0, 32767.0));
+
+            if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                double eL = shapedL - intL;
+                double eR = shapedR - intR;
+                errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0]; errHistL_[0] = eL;
+                errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0]; errHistR_[0] = eR;
+            }
+
+            dst[i * 4]     = intL & 0xFF;
+            dst[i * 4 + 1] = (intL >> 8) & 0xFF;
+            dst[i * 4 + 2] = intR & 0xFF;
+            dst[i * 4 + 3] = (intR >> 8) & 0xFF;
         }
     }
 

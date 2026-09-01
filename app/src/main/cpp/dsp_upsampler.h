@@ -13,6 +13,13 @@
 #define USE_ARM_NEON 0
 #endif
 
+enum class DitherMode : int {
+    NONE = 0,               // ディザーなし (Truncation)
+    TPDF = 1,               // 三角PDF (スタジオ標準)
+    HIGH_PASS_SHAPED = 2,   // ハイパス型ノイズシェーピング (高解像・中域クリア)
+    PSYCHOACOUSTIC = 3      // 心理音響4次ノイズシェーピング (Walkman SBM風・超高S/N)
+};
+
 template <typename T, size_t Alignment = 16>
 struct AlignedAllocator {
     using value_type = T;
@@ -52,6 +59,9 @@ public:
     int getFactor() const { return factor_; }
     DspEqualizer& getEqualizer() { return equalizer_; }
 
+    void setDitherMode(DitherMode mode);
+    DitherMode getDitherMode() const { return ditherMode_; }
+
     size_t process(
         const uint8_t* inPcm,
         size_t inBytes,
@@ -71,6 +81,12 @@ private:
     int tapsPerPhase_ = 32;
     int historyLen_ = 128;
     int historyWritePos_ = 0;
+
+    DitherMode ditherMode_ = DitherMode::TPDF;
+
+    // ★ ノイズシェーパー用エラーフィードバック履歴バッファ
+    double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
+    double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
     DspEqualizer equalizer_;
 

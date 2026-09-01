@@ -14,6 +14,7 @@ object NativeAudioEngine {
     external fun nativeInit()
     external fun nativeConfigureUpsampler(factor: Int, sampleRate: Int)
     external fun nativeResetUpsampler()
+    external fun nativeSetDitherMode(mode: Int)
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeProcessUpsample(
         inBytes: ByteArray,
