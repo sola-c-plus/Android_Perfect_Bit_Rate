@@ -38,12 +38,11 @@ enum class DcPhaseType : int {
     B_HIGH = 6
 };
 
-// ★ 高音補完 (DSEE風 ハーモニック・エクステンダー) モード
 enum class DseeMode : int {
     OFF = 0,
-    STANDARD = 1, // 自然な高域・空気感
-    VOCAL = 2,    // 女性ボーカル・息づかい・艶
-    DYNAMIC = 3   // シンバル・抜けの良さ・ハイレゾ開放感
+    STANDARD = 1,
+    VOCAL = 2,
+    DYNAMIC = 3
 };
 
 class DspDcPhaseLinearizer {
@@ -64,7 +63,6 @@ private:
     double s1_R_ = 0.0, s2_R_ = 0.0;
 };
 
-// ★ YouTube Opus 特化型 超高域・倍音復元 DSP
 class DspHarmonicRestorer {
 public:
     DspHarmonicRestorer();
@@ -78,18 +76,15 @@ private:
     bool isBypass_ = false;
     double blendGain_ = 0.08;
 
-    // 抽出用 HPF フィルター (10kHz)
     double hp_b0_ = 1.0, hp_b1_ = -1.0;
     double hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
-    // 整形用 BPF フィルター (16kHz〜35kHz)
     double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
     double bp_a1_ = 0.0, bp_a2_ = 0.0;
     double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
     double bp_s1_R_ = 0.0, bp_s2_R_ = 0.0;
 
-    // エンベロープ追従
     double envL_ = 0.0, envR_ = 0.0;
 };
 
@@ -132,6 +127,9 @@ public:
     int getFactor() const { return factor_; }
     DspEqualizer& getEqualizer() { return equalizer_; }
 
+    void setDirectSource(bool enabled);
+    bool isDirectSource() const { return isDirectSource_; }
+
     void setDitherMode(DitherMode mode);
     DitherMode getDitherMode() const { return ditherMode_; }
 
@@ -164,6 +162,9 @@ private:
     int tapsPerPhase_ = 32;
     int historyLen_ = 128;
     int historyWritePos_ = 0;
+
+    // ★ 全DSPバイパス・ソースダイレクトフラグ
+    bool isDirectSource_ = false;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;

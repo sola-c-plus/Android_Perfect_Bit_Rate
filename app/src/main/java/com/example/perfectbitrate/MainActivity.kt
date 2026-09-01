@@ -81,6 +81,8 @@ class MainActivity : AppCompatActivity() {
     private var bluetoothA2dp: BluetoothA2dp? = null
     private var bluetoothAdapter: BluetoothAdapter? = null
 
+    private var isDirectSource = false
+
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
@@ -108,8 +110,7 @@ class MainActivity : AppCompatActivity() {
     )
     private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
 
-    // ★ 高音補完 (DSEE風) オプション
-    private var currentDseeMode = 1 // デフォルト: STANDARD
+    private var currentDseeMode = 1
     private val dseeOptions = arrayOf(
         "OFF (Bypass)",
         "Standard (Natural Air / 自然な空気感)",
@@ -177,9 +178,10 @@ class MainActivity : AppCompatActivity() {
             detectAudioOutputDevice()
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
-            playbackService?.upsampleFactor = upsampleFactor
+            playbackService?.upsampleFactor = if (isDirectSource) 1 else upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
 
+            NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
             NativeAudioEngine.nativeSetFirFilterType(currentFirFilterType)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
@@ -257,6 +259,7 @@ class MainActivity : AppCompatActivity() {
         val btnSettings = findViewById<Button>(R.id.btnSettings)
 
         prefs = getSharedPreferences("bp_settings", Context.MODE_PRIVATE)
+        isDirectSource = prefs.getBoolean("direct_source_enabled", false)
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
@@ -264,7 +267,7 @@ class MainActivity : AppCompatActivity() {
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
-        currentDseeMode = prefs.getInt("selected_dsee_mode", 1) // Default: STANDARD
+        currentDseeMode = prefs.getInt("selected_dsee_mode", 1)
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -304,6 +307,15 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
 
+        val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
+
+        val layoutSectionEq = view.findViewById<View>(R.id.layoutSectionEq)
+        val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
+        val layoutSectionFir = view.findViewById<View>(R.id.layoutSectionFir)
+        val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
+        val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
+        val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
+
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerFirFilter = view.findViewById<Spinner>(R.id.dialogSpinnerFirFilter)
@@ -326,7 +338,47 @@ class MainActivity : AppCompatActivity() {
         val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
         val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
 
+        fun updateDspSectionsState(isDirect: Boolean) {
+            val alpha = if (isDirect) 0.3f else 1.0f
+            val enabled = !isDirect
+
+            layoutSectionEq.alpha = alpha
+            layoutSectionDither.alpha = alpha
+            layoutSectionFir.alpha = alpha
+            layoutSectionDcPhase.alpha = alpha
+            layoutSectionDsee.alpha = alpha
+            layoutSectionUpsample.alpha = alpha
+
+            spinnerDither.isEnabled = enabled
+            spinnerFirFilter.isEnabled = enabled
+            spinnerDcPhase.isEnabled = enabled
+            spinnerDsee.isEnabled = enabled
+            spinnerUpsample.isEnabled = enabled
+
+            switchEqEnable.isEnabled = enabled
+            btnEqEdit.isEnabled = enabled
+            btnEqFlat.isEnabled = enabled
+            btnEqPlus.isEnabled = enabled
+            btnEqMinus.isEnabled = enabled
+            walkmanEqView.isEnabled = enabled
+        }
+
+        switchDirectSource.isChecked = isDirectSource
+        updateDspSectionsState(isDirectSource)
+
+        switchDirectSource.setOnCheckedChangeListener { _, isChecked ->
+            isDirectSource = isChecked
+            prefs.edit { putBoolean("direct_source_enabled", isChecked) }
+            NativeAudioEngine.nativeSetDirectSource(isChecked)
+            updateDspSectionsState(isChecked)
+
+            val effectiveFactor = if (isChecked) 1 else upsampleFactor
+            playbackService?.setUpsampling(effectiveFactor)
+            updateStatus()
+        }
+
         fun setEditMode(enabled: Boolean) {
+            if (isDirectSource) return
             walkmanEqView.isEditMode = enabled
             if (enabled) {
                 btnEqEdit.text = "完了"
@@ -404,7 +456,7 @@ class MainActivity : AppCompatActivity() {
                     currentBitMode = selectedMode
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
                     playbackService?.currentBitMode = selectedMode
-                    playbackService?.initAudioTrack(selectedMode, baseSampleRate, upsampleFactor, activeOutputDevice)
+                    playbackService?.initAudioTrack(selectedMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
                     bitActivityMask = 0
                     peakDbL = -60f
                     peakDbR = -60f
@@ -472,7 +524,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 5. ★ HIGH-FREQ RESTORATION (高音補完) Spinner
+        // 5. HIGH-FREQ RESTORATION (高音補完) Spinner
         val dseeAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dseeOptions)
         dseeAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDsee.adapter = dseeAdapter
@@ -504,7 +556,9 @@ class MainActivity : AppCompatActivity() {
                 if (selectedFactor != upsampleFactor) {
                     upsampleFactor = selectedFactor
                     prefs.edit { putInt("selected_upsample_factor", selectedFactor) }
-                    playbackService?.setUpsampling(selectedFactor)
+                    if (!isDirectSource) {
+                        playbackService?.setUpsampling(selectedFactor)
+                    }
                     updateStatus()
                 }
             }
@@ -713,7 +767,7 @@ class MainActivity : AppCompatActivity() {
             peakDbR = -60f
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
-            playbackService?.initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
+            playbackService?.initAudioTrack(currentBitMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
             try {
                 activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
             } catch (e: Exception) {}
@@ -864,11 +918,12 @@ class MainActivity : AppCompatActivity() {
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
 
-        val dspTag = if (upsampleFactor > 1) " [DSP ${upsampleFactor}x]" else ""
+        val activeFactor = if (isDirectSource) 1 else upsampleFactor
+        val dspTag = if (isDirectSource) " [DIRECT]" else (if (activeFactor > 1) " [DSP ${activeFactor}x]" else "")
 
         if (dev != null) {
             if (isUsb) {
-                badgeDirect.text = "DIRECT STREAM$dspTag"
+                badgeDirect.text = if (isDirectSource) "DIRECT SOURCE" else "DIRECT STREAM$dspTag"
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
                 badgeDirect.setTextColor(Color.BLACK)
                 textCodec.text = currentCodec.uppercase()
@@ -897,7 +952,7 @@ class MainActivity : AppCompatActivity() {
             else -> "16 bit"
         }
 
-        val effectiveRate = baseSampleRate * upsampleFactor
+        val effectiveRate = baseSampleRate * activeFactor
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
         textTransfer.text = String.format("%.1f MB", mb)

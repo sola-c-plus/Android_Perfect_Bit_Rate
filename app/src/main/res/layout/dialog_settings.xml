@@ -48,8 +48,56 @@
             android:padding="0dp" />
     </LinearLayout>
 
+    <!-- ★ DIRECT SOURCE (全DSPバイパス) スイッチ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#161616"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:layout_marginBottom="12dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DIRECT SOURCE (全DSPバイパス)"
+                android:textColor="#E5A93C"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-black" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="全DSPを無効化し、原音生ストリームを1:1ダイレクト伝送"
+                android:textColor="#888888"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/dialogSwitchDirectSource"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@null"
+            app:trackTint="@null"
+            android:thumb="@drawable/switch_thumb_white"
+            app:track="@drawable/switch_track_walkman_outline"
+            android:checked="false" />
+    </LinearLayout>
+
     <!-- 10-BAND EQ セクション -->
     <LinearLayout
+        android:id="@+id/layoutSectionEq"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
@@ -225,6 +273,7 @@
 
     <!-- 2. ディザリング方式 -->
     <LinearLayout
+        android:id="@+id/layoutSectionDither"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -269,6 +318,7 @@
 
     <!-- 3. FIR フィルター特性切り替え -->
     <LinearLayout
+        android:id="@+id/layoutSectionFir"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -313,6 +363,7 @@
 
     <!-- 4. DC PHASE LINEARIZER -->
     <LinearLayout
+        android:id="@+id/layoutSectionDcPhase"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -355,8 +406,9 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 5. ★ HIGH-FREQ RESTORATION (高音補完 / 新規追加) -->
+    <!-- 5. HIGH-FREQ RESTORATION (高音補完) -->
     <LinearLayout
+        android:id="@+id/layoutSectionDsee"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -401,6 +453,7 @@
 
     <!-- 6. アップサンプリング DSP -->
     <LinearLayout
+        android:id="@+id/layoutSectionUpsample"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"

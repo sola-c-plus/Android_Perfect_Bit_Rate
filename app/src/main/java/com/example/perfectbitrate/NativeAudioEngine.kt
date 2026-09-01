@@ -14,6 +14,7 @@ object NativeAudioEngine {
     external fun nativeInit()
     external fun nativeConfigureUpsampler(factor: Int, sampleRate: Int)
     external fun nativeResetUpsampler()
+    external fun nativeSetDirectSource(enabled: Boolean)
     external fun nativeSetDitherMode(mode: Int)
     external fun nativeSetFirFilterType(type: Int)
     external fun nativeSetDcPhaseType(type: Int)

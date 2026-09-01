@@ -17,7 +17,7 @@ inline double getTpdfDither() {
 }
 
 // -----------------------------------------------------------------------------
-// DspHarmonicRestorer 実装 (Opus 251 特化型 高音補完)
+// DspHarmonicRestorer 実装
 // -----------------------------------------------------------------------------
 DspHarmonicRestorer::DspHarmonicRestorer() {
     configure(DseeMode::STANDARD, 48000.0);
@@ -35,22 +35,19 @@ void DspHarmonicRestorer::configure(DseeMode mode, double sampleRate) {
 
     isBypass_ = false;
 
-    // モード別ブレンド強度
     switch (mode_) {
-        case DseeMode::STANDARD: blendGain_ = 0.08; break; // 自然な高域
-        case DseeMode::VOCAL:    blendGain_ = 0.12; break; // 女性ボーカル・艶
-        case DseeMode::DYNAMIC:  blendGain_ = 0.16; break; // シンバル開放感
+        case DseeMode::STANDARD: blendGain_ = 0.08; break;
+        case DseeMode::VOCAL:    blendGain_ = 0.12; break;
+        case DseeMode::DYNAMIC:  blendGain_ = 0.16; break;
         default: blendGain_ = 0.08; break;
     }
 
-    // 1. 抽出用 1次 HPF (10kHz)
     double fExtract = 10000.0;
     double kExtract = std::tan(PI * fExtract / sampleRate_);
     hp_b0_ = 1.0 / (1.0 + kExtract);
     hp_b1_ = -hp_b0_;
     hp_a1_ = -(1.0 - kExtract) / (1.0 + kExtract);
 
-    // 2. 整形用 2次 BPF (18kHz〜32kHz)
     double fCenter = (sampleRate_ >= 88200.0) ? 22000.0 : 16000.0;
     fCenter = std::min(fCenter, sampleRate_ * 0.45);
     double Q = 1.2;
@@ -83,27 +80,20 @@ void DspHarmonicRestorer::processStereo(float* left, float* right, size_t numFra
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
     for (size_t i = 0; i < numFrames; ++i) {
-        // L チャンネル
         double inL = static_cast<double>(left[i]);
-        // 10kHz以上を抽出
         double hiL = hp_b0_ * inL + hp_b1_ * hp_s1_L_ - hp_a1_ * hp_s1_L_;
         hp_s1_L_ = inL;
 
-        // 非線形倍音生成 (2次・3次高調波)
         double harmL = (hiL * hiL * 2.5 - 0.1) + (hiL * hiL * hiL * 2.0);
 
-        // 超高域整形 BPF
         double outHarmL = bp_b0_ * harmL + bp_s1_L_;
         bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
         bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
 
-        // ダイナミック・エンベロープ追従
         envL_ = envL_ * 0.995 + std::abs(hiL) * 0.005;
         double dynamicScaleL = std::min(envL_ * 8.0, 1.5);
-
         left[i] = static_cast<float>(inL + outHarmL * blendGain_ * dynamicScaleL);
 
-        // R チャンネル
         double inR = static_cast<double>(right[i]);
         double hiR = hp_b0_ * inR + hp_b1_ * hp_s1_R_ - hp_a1_ * hp_s1_R_;
         hp_s1_R_ = inR;
@@ -116,7 +106,6 @@ void DspHarmonicRestorer::processStereo(float* left, float* right, size_t numFra
 
         envR_ = envR_ * 0.995 + std::abs(hiR) * 0.005;
         double dynamicScaleR = std::min(envR_ * 8.0, 1.5);
-
         right[i] = static_cast<float>(inR + outHarmR * blendGain_ * dynamicScaleR);
     }
 }
@@ -206,6 +195,11 @@ void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFr
 // -----------------------------------------------------------------------------
 DspUpsampler::DspUpsampler() {
     configure(1, 48000.0f);
+}
+
+void DspUpsampler::setDirectSource(bool enabled) {
+    isDirectSource_ = enabled;
+    reset();
 }
 
 void DspUpsampler::setDitherMode(DitherMode mode) {
@@ -452,11 +446,12 @@ size_t DspUpsampler::process(
         }
     }
 
-    size_t numOutFrames = numInFrames * factor_;
+    int currentFactor = isDirectSource_ ? 1 : factor_;
+    size_t numOutFrames = numInFrames * currentFactor;
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    if (factor_ <= 1) {
+    if (currentFactor <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
     } else {
@@ -466,7 +461,7 @@ size_t DspUpsampler::process(
             historyL_[historyWritePos_] = tempInL_[i];
             historyR_[historyWritePos_] = tempInR_[i];
 
-            for (int p = 0; p < factor_; ++p) {
+            for (int p = 0; p < currentFactor; ++p) {
                 const float* coeffPtr = polyCoeffs_[p].data();
                 const float* histPtrL = &historyL_[historyWritePos_ - (subTaps - 1)];
                 const float* histPtrR = &historyR_[historyWritePos_ - (subTaps - 1)];
@@ -502,8 +497,8 @@ size_t DspUpsampler::process(
                     sumR += coeffPtr[k] * histPtrR[k];
                 }
 #endif
-                tempOutL_[i * factor_ + p] = sumL;
-                tempOutR_[i * factor_ + p] = sumR;
+                tempOutL_[i * currentFactor + p] = sumL;
+                tempOutR_[i * currentFactor + p] = sumR;
             }
 
             historyWritePos_++;
@@ -516,16 +511,19 @@ size_t DspUpsampler::process(
         }
     }
 
-    // 1. 10-Band EQ 処理
-    equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    // ★ Direct Source (ソースダイレクト) が OFF の時のみ DSP 処理を実行
+    if (!isDirectSource_) {
+        // 1. 10-Band EQ 処理
+        equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 2. DC Phase Linearizer (低域アナログ位相)
-    dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        // 2. DC Phase Linearizer
+        dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 3. ★ 高音補完 (Opus 251 特化型 20kHz〜40kHz+ 倍音復元)
-    harmonicRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        // 3. 高音補完
+        harmonicRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    }
 
-    // 4. ディザリング ＆ PCM パッキング
+    // PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
@@ -552,21 +550,23 @@ size_t DspUpsampler::process(
             double shapedL = rawL;
             double shapedR = rawR;
 
-            if (ditherMode_ == DitherMode::TPDF) {
-                shapedL += getTpdfDither();
-                shapedR += getTpdfDither();
-            } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
-                shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + getTpdfDither();
-                shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + getTpdfDither();
-            } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
-                shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + getTpdfDither();
-                shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + getTpdfDither();
+            if (!isDirectSource_) {
+                if (ditherMode_ == DitherMode::TPDF) {
+                    shapedL += getTpdfDither();
+                    shapedR += getTpdfDither();
+                } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
+                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + getTpdfDither();
+                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + getTpdfDither();
+                } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + getTpdfDither();
+                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + getTpdfDither();
+                }
             }
 
             int32_t intL = static_cast<int32_t>(std::clamp(std::round(shapedL), -8388608.0, 8388607.0));
             int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -8388608.0, 8388607.0));
 
-            if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+            if (!isDirectSource_ && (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC)) {
                 double eL = std::clamp(shapedL - intL, -2.0, 2.0);
                 double eR = std::clamp(shapedR - intR, -2.0, 2.0);
                 errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0]; errHistL_[0] = eL;
@@ -594,21 +594,23 @@ size_t DspUpsampler::process(
             double shapedL = rawL;
             double shapedR = rawR;
 
-            if (ditherMode_ == DitherMode::TPDF) {
-                shapedL += getTpdfDither();
-                shapedR += getTpdfDither();
-            } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
-                shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + getTpdfDither();
-                shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + getTpdfDither();
-            } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
-                shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + getTpdfDither();
-                shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + getTpdfDither();
+            if (!isDirectSource_) {
+                if (ditherMode_ == DitherMode::TPDF) {
+                    shapedL += getTpdfDither();
+                    shapedR += getTpdfDither();
+                } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
+                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + getTpdfDither();
+                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + getTpdfDither();
+                } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + getTpdfDither();
+                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + getTpdfDither();
+                }
             }
 
             int32_t intL = static_cast<int32_t>(std::clamp(std::round(shapedL), -32768.0, 32767.0));
             int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -32768.0, 32767.0));
 
-            if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+            if (!isDirectSource_ && (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC)) {
                 double eL = std::clamp(shapedL - intL, -2.0, 2.0);
                 double eR = std::clamp(shapedR - intR, -2.0, 2.0);
                 errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0]; errHistL_[0] = eL;
