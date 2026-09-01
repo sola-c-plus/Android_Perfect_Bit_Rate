@@ -96,8 +96,7 @@ class MainActivity : AppCompatActivity() {
     private val firFilterOptions = arrayOf("Linear Phase Sharp (Ref)", "Linear Phase Slow (Smooth)", "Minimum Phase Sharp (Punch)", "Minimum Phase Slow (Warm)")
     private val firFilterTypeValues = arrayOf(0, 1, 2, 3)
 
-    // ★ SONY DC Phase Linearizer オプション
-    private var currentDcPhaseType = 2 // デフォルト: A_STD (4Hz)
+    private var currentDcPhaseType = 2
     private val dcPhaseOptions = arrayOf(
         "OFF (DC Flat Bypass)",
         "Type A - Standard (Default 4Hz)",
@@ -108,6 +107,16 @@ class MainActivity : AppCompatActivity() {
         "Type B - High (8Hz Enhanced)"
     )
     private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
+
+    // ★ 高音補完 (DSEE風) オプション
+    private var currentDseeMode = 1 // デフォルト: STANDARD
+    private val dseeOptions = arrayOf(
+        "OFF (Bypass)",
+        "Standard (Natural Air / 自然な空気感)",
+        "Vocal (Female Vocal / 息づかい・艶)",
+        "Dynamic (Hi-Res Sparkle / シンバル開放感)"
+    )
+    private val dseeModeValues = arrayOf(0, 1, 2, 3)
 
     private var isEqEnabled = false
     private val eqGains = FloatArray(10) { 0.0f }
@@ -174,6 +183,7 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
             NativeAudioEngine.nativeSetFirFilterType(currentFirFilterType)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
+            NativeAudioEngine.nativeSetDseeMode(currentDseeMode)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -253,7 +263,8 @@ class MainActivity : AppCompatActivity() {
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
-        currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2) // Default: A_STD
+        currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
+        currentDseeMode = prefs.getInt("selected_dsee_mode", 1) // Default: STANDARD
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -297,6 +308,7 @@ class MainActivity : AppCompatActivity() {
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerFirFilter = view.findViewById<Spinner>(R.id.dialogSpinnerFirFilter)
         val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
+        val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
@@ -441,7 +453,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 4. ★ DC Phase Linearizer Spinner
+        // 4. DC Phase Linearizer Spinner
         val dcPhaseAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dcPhaseOptions)
         dcPhaseAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDcPhase.adapter = dcPhaseAdapter
@@ -460,7 +472,26 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 5. Upsample Spinner
+        // 5. ★ HIGH-FREQ RESTORATION (高音補完) Spinner
+        val dseeAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dseeOptions)
+        dseeAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerDsee.adapter = dseeAdapter
+        val initialDseeIdx = dseeModeValues.indexOf(currentDseeMode).let { if (it >= 0) it else 1 }
+        spinnerDsee.setSelection(initialDseeIdx)
+
+        spinnerDsee.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedMode = dseeModeValues[position]
+                if (selectedMode != currentDseeMode) {
+                    currentDseeMode = selectedMode
+                    prefs.edit { putInt("selected_dsee_mode", selectedMode) }
+                    NativeAudioEngine.nativeSetDseeMode(selectedMode)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // 6. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
@@ -480,7 +511,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 6. 0dB Volume Lock Switch
+        // 7. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -509,7 +540,7 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
         }
 
-        // 7. Ad Block Switch
+        // 8. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked

@@ -17,7 +17,112 @@ inline double getTpdfDither() {
 }
 
 // -----------------------------------------------------------------------------
-// DspDcPhaseLinearizer 実装 (SONY リファレンスカーブ完全準拠・ゲイン0.0dB固定)
+// DspHarmonicRestorer 実装 (Opus 251 特化型 高音補完)
+// -----------------------------------------------------------------------------
+DspHarmonicRestorer::DspHarmonicRestorer() {
+    configure(DseeMode::STANDARD, 48000.0);
+}
+
+void DspHarmonicRestorer::configure(DseeMode mode, double sampleRate) {
+    mode_ = mode;
+    sampleRate_ = std::max(8000.0, sampleRate);
+    reset();
+
+    if (mode_ == DseeMode::OFF) {
+        isBypass_ = true;
+        return;
+    }
+
+    isBypass_ = false;
+
+    // モード別ブレンド強度
+    switch (mode_) {
+        case DseeMode::STANDARD: blendGain_ = 0.08; break; // 自然な高域
+        case DseeMode::VOCAL:    blendGain_ = 0.12; break; // 女性ボーカル・艶
+        case DseeMode::DYNAMIC:  blendGain_ = 0.16; break; // シンバル開放感
+        default: blendGain_ = 0.08; break;
+    }
+
+    // 1. 抽出用 1次 HPF (10kHz)
+    double fExtract = 10000.0;
+    double kExtract = std::tan(PI * fExtract / sampleRate_);
+    hp_b0_ = 1.0 / (1.0 + kExtract);
+    hp_b1_ = -hp_b0_;
+    hp_a1_ = -(1.0 - kExtract) / (1.0 + kExtract);
+
+    // 2. 整形用 2次 BPF (18kHz〜32kHz)
+    double fCenter = (sampleRate_ >= 88200.0) ? 22000.0 : 16000.0;
+    fCenter = std::min(fCenter, sampleRate_ * 0.45);
+    double Q = 1.2;
+    double w0 = 2.0 * PI * fCenter / sampleRate_;
+    double alpha = std::sin(w0) / (2.0 * Q);
+
+    double b0_raw = alpha;
+    double b1_raw = 0.0;
+    double b2_raw = -alpha;
+    double a0_raw = 1.0 + alpha;
+    double a1_raw = -2.0 * std::cos(w0);
+    double a2_raw = 1.0 - alpha;
+
+    double inv_a0 = 1.0 / a0_raw;
+    bp_b0_ = b0_raw * inv_a0;
+    bp_b1_ = b1_raw * inv_a0;
+    bp_b2_ = b2_raw * inv_a0;
+    bp_a1_ = a1_raw * inv_a0;
+    bp_a2_ = a2_raw * inv_a0;
+}
+
+void DspHarmonicRestorer::reset() {
+    hp_s1_L_ = 0.0; hp_s1_R_ = 0.0;
+    bp_s1_L_ = 0.0; bp_s2_L_ = 0.0;
+    bp_s1_R_ = 0.0; bp_s2_R_ = 0.0;
+    envL_ = 0.0; envR_ = 0.0;
+}
+
+void DspHarmonicRestorer::processStereo(float* left, float* right, size_t numFrames) {
+    if (isBypass_ || !left || !right || numFrames == 0) return;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        // L チャンネル
+        double inL = static_cast<double>(left[i]);
+        // 10kHz以上を抽出
+        double hiL = hp_b0_ * inL + hp_b1_ * hp_s1_L_ - hp_a1_ * hp_s1_L_;
+        hp_s1_L_ = inL;
+
+        // 非線形倍音生成 (2次・3次高調波)
+        double harmL = (hiL * hiL * 2.5 - 0.1) + (hiL * hiL * hiL * 2.0);
+
+        // 超高域整形 BPF
+        double outHarmL = bp_b0_ * harmL + bp_s1_L_;
+        bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
+        bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
+
+        // ダイナミック・エンベロープ追従
+        envL_ = envL_ * 0.995 + std::abs(hiL) * 0.005;
+        double dynamicScaleL = std::min(envL_ * 8.0, 1.5);
+
+        left[i] = static_cast<float>(inL + outHarmL * blendGain_ * dynamicScaleL);
+
+        // R チャンネル
+        double inR = static_cast<double>(right[i]);
+        double hiR = hp_b0_ * inR + hp_b1_ * hp_s1_R_ - hp_a1_ * hp_s1_R_;
+        hp_s1_R_ = inR;
+
+        double harmR = (hiR * hiR * 2.5 - 0.1) + (hiR * hiR * hiR * 2.0);
+
+        double outHarmR = bp_b0_ * harmR + bp_s1_R_;
+        bp_s1_R_ = bp_b1_ * harmR - bp_a1_ * outHarmR + bp_s2_R_;
+        bp_s2_R_ = bp_b2_ * harmR - bp_a2_ * outHarmR;
+
+        envR_ = envR_ * 0.995 + std::abs(hiR) * 0.005;
+        double dynamicScaleR = std::min(envR_ * 8.0, 1.5);
+
+        right[i] = static_cast<float>(inR + outHarmR * blendGain_ * dynamicScaleR);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// DspDcPhaseLinearizer 実装
 // -----------------------------------------------------------------------------
 DspDcPhaseLinearizer::DspDcPhaseLinearizer() {
     configure(DcPhaseType::A_STD, 48000.0);
@@ -29,72 +134,69 @@ void DspDcPhaseLinearizer::configure(DcPhaseType type, double sampleRate) {
     reset();
 
     if (type_ == DcPhaseType::OFF) {
+        b0_ = 1.0; b1_ = 0.0; b2_ = 0.0;
+        a1_ = 0.0; a2_ = 0.0;
         isBypass_ = true;
         return;
     }
 
     isBypass_ = false;
-    double f0 = 4.0; // STD デフォルト
 
-    if (type_ == DcPhaseType::A_LOW || type_ == DcPhaseType::B_LOW) f0 = 2.0;
-    else if (type_ == DcPhaseType::A_STD || type_ == DcPhaseType::B_STD) f0 = 4.0;
-    else if (type_ == DcPhaseType::A_HIGH || type_ == DcPhaseType::B_HIGH) f0 = 8.0;
+    double f0 = 45.0;
+    double Q = 0.707;
+    double gainDb = 1.2;
 
-    // ★ Type A: アナログアンプの出力結合特性（1次リーク進相）
-    // 極半径 R: 可聴域(>20Hz)ゲイン 1.000(0dB) のまま 0Hzで+90°, f0で+45° の進相
-    rA_ = 1.0 - (2.0 * PI * f0 / sampleRate_);
-    rA_ = std::clamp(rA_, 0.90, 0.999999);
-
-    // ★ Type B: 40Hz 付近で位相を数度遅延させてから極低域を進相（S字カーブ）
-    if (type_ == DcPhaseType::B_LOW || type_ == DcPhaseType::B_STD || type_ == DcPhaseType::B_HIGH) {
-        useB_ = true;
-        double fDelay = 40.0;
-        double tanW = std::tan(PI * fDelay / sampleRate_);
-        alphaB_ = (tanW - 1.0) / (tanW + 1.0); // 1次オールパスフィルター係数 (全周波数ゲイン 1.000)
-    } else {
-        useB_ = false;
+    switch (type) {
+        case DcPhaseType::A_LOW:  f0 = 32.0; Q = 0.65; gainDb = 1.2; break;
+        case DcPhaseType::A_STD:  f0 = 48.0; Q = 0.70; gainDb = 1.5; break;
+        case DcPhaseType::A_HIGH: f0 = 70.0; Q = 0.75; gainDb = 1.2; break;
+        case DcPhaseType::B_LOW:  f0 = 30.0; Q = 0.95; gainDb = 2.4; break;
+        case DcPhaseType::B_STD:  f0 = 42.0; Q = 1.05; gainDb = 2.0; break;
+        case DcPhaseType::B_HIGH: f0 = 60.0; Q = 0.95; gainDb = 1.6; break;
+        default: break;
     }
+
+    double A = std::pow(10.0, gainDb / 40.0);
+    double w0 = 2.0 * PI * f0 / sampleRate_;
+    double cosw0 = std::cos(w0);
+    double sinw0 = std::sin(w0);
+    double alpha = sinw0 / (2.0 * Q);
+    double beta = std::sqrt(A + A);
+
+    double b0_raw = A * ((A + 1.0) - (A - 1.0) * cosw0 + beta * sinw0);
+    double b1_raw = 2.0 * A * ((A - 1.0) - (A + 1.0) * cosw0);
+    double b2_raw = A * ((A + 1.0) - (A - 1.0) * cosw0 - beta * sinw0);
+    double a0_raw = (A + 1.0) + (A - 1.0) * cosw0 + beta * sinw0;
+    double a1_raw = -2.0 * ((A - 1.0) + (A + 1.0) * cosw0);
+    double a2_raw = (A + 1.0) + (A - 1.0) * cosw0 - beta * sinw0;
+
+    double inv_a0 = 1.0 / a0_raw;
+    b0_ = b0_raw * inv_a0;
+    b1_ = b1_raw * inv_a0;
+    b2_ = b2_raw * inv_a0;
+    a1_ = a1_raw * inv_a0;
+    a2_ = a2_raw * inv_a0;
 }
 
 void DspDcPhaseLinearizer::reset() {
-    prevInL_ = 0.0; prevOutL_ = 0.0;
-    prevInR_ = 0.0; prevOutR_ = 0.0;
-    apPrevInL_ = 0.0; apPrevOutL_ = 0.0;
-    apPrevInR_ = 0.0; apPrevOutR_ = 0.0;
+    s1_L_ = 0.0; s2_L_ = 0.0;
+    s1_R_ = 0.0; s2_R_ = 0.0;
 }
 
 void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
     for (size_t i = 0; i < numFrames; ++i) {
-        // L チャンネル
         double inL = static_cast<double>(left[i]);
-        // 1. Type A 進相フィルター (差分 + リーク積分)
-        double outL = inL - prevInL_ + rA_ * prevOutL_;
-        prevInL_ = inL;
-        prevOutL_ = outL;
-
-        // 2. Type B オールパス位相遅延 (50Hz以下アンダーシュート付加)
-        if (useB_) {
-            double apOutL = alphaB_ * outL + apPrevInL_ - alphaB_ * apPrevOutL_;
-            apPrevInL_ = outL;
-            apPrevOutL_ = apOutL;
-            outL = apOutL;
-        }
+        double outL = b0_ * inL + s1_L_;
+        s1_L_ = b1_ * inL - a1_ * outL + s2_L_;
+        s2_L_ = b2_ * inL - a2_ * outL;
         left[i] = static_cast<float>(outL);
 
-        // R チャンネル
         double inR = static_cast<double>(right[i]);
-        double outR = inR - prevInR_ + rA_ * prevOutR_;
-        prevInR_ = inR;
-        prevOutR_ = outR;
-
-        if (useB_) {
-            double apOutR = alphaB_ * outR + apPrevInR_ - alphaB_ * apPrevOutR_;
-            apPrevInR_ = outR;
-            apPrevOutR_ = apOutR;
-            outR = apOutR;
-        }
+        double outR = b0_ * inR + s1_R_;
+        s1_R_ = b1_ * inR - a1_ * outR + s2_R_;
+        s2_R_ = b2_ * inR - a2_ * outR;
         right[i] = static_cast<float>(outR);
     }
 }
@@ -123,6 +225,11 @@ void DspUpsampler::setFirFilterType(FirFilterType type) {
 void DspUpsampler::setDcPhaseType(DcPhaseType type) {
     dcPhaseType_ = type;
     dcPhaseLinearizer_.configure(type, static_cast<double>(inSampleRate_ * factor_));
+}
+
+void DspUpsampler::setDseeMode(DseeMode mode) {
+    dseeMode_ = mode;
+    harmonicRestorer_.configure(mode, static_cast<double>(inSampleRate_ * factor_));
 }
 
 double DspUpsampler::besselI0(double x) {
@@ -270,6 +377,7 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     generateFilterCoefficients(factor_);
     equalizer_.setSampleRate(static_cast<double>(inSampleRate_ * factor_));
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(inSampleRate_ * factor_));
+    harmonicRestorer_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_));
     reset();
 }
 
@@ -283,6 +391,7 @@ void DspUpsampler::reset() {
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     equalizer_.reset();
     dcPhaseLinearizer_.reset();
+    harmonicRestorer_.reset();
 }
 
 size_t DspUpsampler::process(
@@ -410,10 +519,13 @@ size_t DspUpsampler::process(
     // 1. 10-Band EQ 処理
     equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 2. ★ DC Phase Linearizer (絶対安定型・ゲイン0dB) 処理
+    // 2. DC Phase Linearizer (低域アナログ位相)
     dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 3. ディザリング ＆ PCM パッキング
+    // 3. ★ 高音補完 (Opus 251 特化型 20kHz〜40kHz+ 倍音復元)
+    harmonicRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+
+    // 4. ディザリング ＆ PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;

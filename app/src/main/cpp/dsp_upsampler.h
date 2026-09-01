@@ -30,15 +30,22 @@ enum class FirFilterType : int {
 
 enum class DcPhaseType : int {
     OFF = 0,
-    A_LOW = 1,   // A Curve 2Hz
-    A_STD = 2,   // A Curve 4Hz (Default)
-    A_HIGH = 3,  // A Curve 8Hz
-    B_LOW = 4,   // B Curve 2Hz Enhanced
-    B_STD = 5,   // B Curve 4Hz Enhanced
-    B_HIGH = 6   // B Curve 8Hz Enhanced
+    A_LOW = 1,
+    A_STD = 2,
+    A_HIGH = 3,
+    B_LOW = 4,
+    B_STD = 5,
+    B_HIGH = 6
 };
 
-// ★ 64-bit 倍精度・絶対安定型 DC Phase Linearizer
+// ★ 高音補完 (DSEE風 ハーモニック・エクステンダー) モード
+enum class DseeMode : int {
+    OFF = 0,
+    STANDARD = 1, // 自然な高域・空気感
+    VOCAL = 2,    // 女性ボーカル・息づかい・艶
+    DYNAMIC = 3   // シンバル・抜けの良さ・ハイレゾ開放感
+};
+
 class DspDcPhaseLinearizer {
 public:
     DspDcPhaseLinearizer();
@@ -51,16 +58,39 @@ private:
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
 
-    // Type A: 1次 リーク進相ハイパス係数
-    double rA_ = 0.999476;
-    double prevInL_ = 0.0, prevOutL_ = 0.0;
-    double prevInR_ = 0.0, prevOutR_ = 0.0;
+    double b0_ = 1.0, b1_ = 0.0, b2_ = 0.0;
+    double a1_ = 0.0, a2_ = 0.0;
+    double s1_L_ = 0.0, s2_L_ = 0.0;
+    double s1_R_ = 0.0, s2_R_ = 0.0;
+};
 
-    // Type B: 40Hz 1次 オールパス位相遅延係数
-    bool useB_ = false;
-    double alphaB_ = 0.0;
-    double apPrevInL_ = 0.0, apPrevOutL_ = 0.0;
-    double apPrevInR_ = 0.0, apPrevOutR_ = 0.0;
+// ★ YouTube Opus 特化型 超高域・倍音復元 DSP
+class DspHarmonicRestorer {
+public:
+    DspHarmonicRestorer();
+    void configure(DseeMode mode, double sampleRate);
+    void reset();
+    void processStereo(float* left, float* right, size_t numFrames);
+
+private:
+    DseeMode mode_ = DseeMode::STANDARD;
+    double sampleRate_ = 48000.0;
+    bool isBypass_ = false;
+    double blendGain_ = 0.08;
+
+    // 抽出用 HPF フィルター (10kHz)
+    double hp_b0_ = 1.0, hp_b1_ = -1.0;
+    double hp_a1_ = 0.0;
+    double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
+
+    // 整形用 BPF フィルター (16kHz〜35kHz)
+    double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
+    double bp_a1_ = 0.0, bp_a2_ = 0.0;
+    double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
+    double bp_s1_R_ = 0.0, bp_s2_R_ = 0.0;
+
+    // エンベロープ追従
+    double envL_ = 0.0, envR_ = 0.0;
 };
 
 template <typename T, size_t Alignment = 16>
@@ -111,6 +141,9 @@ public:
     void setDcPhaseType(DcPhaseType type);
     DcPhaseType getDcPhaseType() const { return dcPhaseType_; }
 
+    void setDseeMode(DseeMode mode);
+    DseeMode getDseeMode() const { return dseeMode_; }
+
     size_t process(
         const uint8_t* inPcm,
         size_t inBytes,
@@ -135,12 +168,14 @@ private:
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
+    DseeMode dseeMode_ = DseeMode::STANDARD;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
     DspEqualizer equalizer_;
     DspDcPhaseLinearizer dcPhaseLinearizer_;
+    DspHarmonicRestorer harmonicRestorer_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
