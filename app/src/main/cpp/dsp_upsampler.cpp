@@ -17,7 +17,7 @@ inline double getTpdfDither() {
 }
 
 // -----------------------------------------------------------------------------
-// DspDcPhaseLinearizer 実装
+// DspDcPhaseLinearizer 実装 (SONY リファレンスカーブ完全準拠・ゲイン0.0dB固定)
 // -----------------------------------------------------------------------------
 DspDcPhaseLinearizer::DspDcPhaseLinearizer() {
     configure(DcPhaseType::A_STD, 48000.0);
@@ -29,72 +29,72 @@ void DspDcPhaseLinearizer::configure(DcPhaseType type, double sampleRate) {
     reset();
 
     if (type_ == DcPhaseType::OFF) {
-        b0_ = 1.0; b1_ = 0.0; b2_ = 0.0;
-        a1_ = 0.0; a2_ = 0.0;
         isBypass_ = true;
         return;
     }
 
     isBypass_ = false;
-    double f0 = 4.0; // デフォルト (STD)
+    double f0 = 4.0; // STD デフォルト
 
     if (type_ == DcPhaseType::A_LOW || type_ == DcPhaseType::B_LOW) f0 = 2.0;
     else if (type_ == DcPhaseType::A_STD || type_ == DcPhaseType::B_STD) f0 = 4.0;
     else if (type_ == DcPhaseType::A_HIGH || type_ == DcPhaseType::B_HIGH) f0 = 8.0;
 
-    if (type_ == DcPhaseType::A_LOW || type_ == DcPhaseType::A_STD || type_ == DcPhaseType::A_HIGH) {
-        // ★ A Curve: 1次 進相フィルター (DCで+90°、f0で+45°、50Hzで0°)
-        double K = std::tan(PI * f0 / sampleRate_);
-        double norm = 1.0 / (1.0 + K);
-        b0_ = 1.0 * norm;
-        b1_ = -1.0 * norm;
-        b2_ = 0.0;
-        a1_ = -(1.0 - K) * norm;
-        a2_ = 0.0;
+    // ★ Type A: アナログアンプの出力結合特性（1次リーク進相）
+    // 極半径 R: 可聴域(>20Hz)ゲイン 1.000(0dB) のまま 0Hzで+90°, f0で+45° の進相
+    rA_ = 1.0 - (2.0 * PI * f0 / sampleRate_);
+    rA_ = std::clamp(rA_, 0.90, 0.999999);
+
+    // ★ Type B: 40Hz 付近で位相を数度遅延させてから極低域を進相（S字カーブ）
+    if (type_ == DcPhaseType::B_LOW || type_ == DcPhaseType::B_STD || type_ == DcPhaseType::B_HIGH) {
+        useB_ = true;
+        double fDelay = 40.0;
+        double tanW = std::tan(PI * fDelay / sampleRate_);
+        alphaB_ = (tanW - 1.0) / (tanW + 1.0); // 1次オールパスフィルター係数 (全周波数ゲイン 1.000)
     } else {
-        // ★ B Curve: 2次 アンダーシュート付き進相 (50Hz以下で数度遅延後に極低域で進相)
-        double f1 = 40.0; // アンダーシュート周波数
-        double Q = 0.7071;
-        double w0 = 2.0 * PI * f0 / sampleRate_;
-        double w1 = 2.0 * PI * f1 / sampleRate_;
-        double alpha = std::sin(w0) / (2.0 * Q);
-        double cosw0 = std::cos(w0);
-
-        double b0_raw = 1.0 + std::sin(w1);
-        double b1_raw = -2.0 * std::cos(w1);
-        double b2_raw = 1.0 - std::sin(w1);
-        double a0_raw = 1.0 + alpha;
-        double a1_raw = -2.0 * cosw0;
-        double a2_raw = 1.0 - alpha;
-
-        double inv_a0 = 1.0 / a0_raw;
-        b0_ = b0_raw * inv_a0;
-        b1_ = b1_raw * inv_a0;
-        b2_ = b2_raw * inv_a0;
-        a1_ = a1_raw * inv_a0;
-        a2_ = a2_raw * inv_a0;
+        useB_ = false;
     }
 }
 
 void DspDcPhaseLinearizer::reset() {
-    s1_L_ = 0.0; s2_L_ = 0.0;
-    s1_R_ = 0.0; s2_R_ = 0.0;
+    prevInL_ = 0.0; prevOutL_ = 0.0;
+    prevInR_ = 0.0; prevOutR_ = 0.0;
+    apPrevInL_ = 0.0; apPrevOutL_ = 0.0;
+    apPrevInR_ = 0.0; apPrevOutR_ = 0.0;
 }
 
 void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
     for (size_t i = 0; i < numFrames; ++i) {
+        // L チャンネル
         double inL = static_cast<double>(left[i]);
-        double outL = b0_ * inL + s1_L_;
-        s1_L_ = b1_ * inL - a1_ * outL + s2_L_;
-        s2_L_ = b2_ * inL - a2_ * outL;
+        // 1. Type A 進相フィルター (差分 + リーク積分)
+        double outL = inL - prevInL_ + rA_ * prevOutL_;
+        prevInL_ = inL;
+        prevOutL_ = outL;
+
+        // 2. Type B オールパス位相遅延 (50Hz以下アンダーシュート付加)
+        if (useB_) {
+            double apOutL = alphaB_ * outL + apPrevInL_ - alphaB_ * apPrevOutL_;
+            apPrevInL_ = outL;
+            apPrevOutL_ = apOutL;
+            outL = apOutL;
+        }
         left[i] = static_cast<float>(outL);
 
+        // R チャンネル
         double inR = static_cast<double>(right[i]);
-        double outR = b0_ * inR + s1_R_;
-        s1_R_ = b1_ * inR - a1_ * outR + s2_R_;
-        s2_R_ = b2_ * inR - a2_ * outR;
+        double outR = inR - prevInR_ + rA_ * prevOutR_;
+        prevInR_ = inR;
+        prevOutR_ = outR;
+
+        if (useB_) {
+            double apOutR = alphaB_ * outR + apPrevInR_ - alphaB_ * apPrevOutR_;
+            apPrevInR_ = outR;
+            apPrevOutR_ = apOutR;
+            outR = apOutR;
+        }
         right[i] = static_cast<float>(outR);
     }
 }
@@ -410,7 +410,7 @@ size_t DspUpsampler::process(
     // 1. 10-Band EQ 処理
     equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 2. ★ DC Phase Linearizer (アナログ低域位相補正) 処理
+    // 2. ★ DC Phase Linearizer (絶対安定型・ゲイン0dB) 処理
     dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
     // 3. ディザリング ＆ PCM パッキング

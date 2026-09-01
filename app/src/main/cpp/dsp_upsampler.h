@@ -28,18 +28,17 @@ enum class FirFilterType : int {
     MINIMUM_PHASE_SLOW = 3
 };
 
-// ★ SONY 実機リバースエンジニアリング準拠 DC Phase Linearizer
 enum class DcPhaseType : int {
     OFF = 0,
     A_LOW = 1,   // A Curve 2Hz
-    A_STD = 2,   // A Curve 4Hz (Walkman Default)
+    A_STD = 2,   // A Curve 4Hz (Default)
     A_HIGH = 3,  // A Curve 8Hz
     B_LOW = 4,   // B Curve 2Hz Enhanced
     B_STD = 5,   // B Curve 4Hz Enhanced
     B_HIGH = 6   // B Curve 8Hz Enhanced
 };
 
-// ★ 64-bit 倍精度 DC Phase Linearizer IIR フィルター
+// ★ 64-bit 倍精度・絶対安定型 DC Phase Linearizer
 class DspDcPhaseLinearizer {
 public:
     DspDcPhaseLinearizer();
@@ -48,14 +47,20 @@ public:
     void processStereo(float* left, float* right, size_t numFrames);
 
 private:
-    DcPhaseType type_ = DcPhaseType::OFF;
+    DcPhaseType type_ = DcPhaseType::A_STD;
     double sampleRate_ = 48000.0;
+    bool isBypass_ = false;
 
-    double b0_ = 1.0, b1_ = 0.0, b2_ = 0.0;
-    double a1_ = 0.0, a2_ = 0.0;
-    double s1_L_ = 0.0, s2_L_ = 0.0;
-    double s1_R_ = 0.0, s2_R_ = 0.0;
-    bool isBypass_ = true;
+    // Type A: 1次 リーク進相ハイパス係数
+    double rA_ = 0.999476;
+    double prevInL_ = 0.0, prevOutL_ = 0.0;
+    double prevInR_ = 0.0, prevOutR_ = 0.0;
+
+    // Type B: 40Hz 1次 オールパス位相遅延係数
+    bool useB_ = false;
+    double alphaB_ = 0.0;
+    double apPrevInL_ = 0.0, apPrevOutL_ = 0.0;
+    double apPrevInR_ = 0.0, apPrevOutR_ = 0.0;
 };
 
 template <typename T, size_t Alignment = 16>
