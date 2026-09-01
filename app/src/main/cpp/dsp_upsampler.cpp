@@ -16,6 +16,92 @@ inline double getTpdfDither() {
     return (r1 - r2);
 }
 
+// -----------------------------------------------------------------------------
+// DspDcPhaseLinearizer 実装
+// -----------------------------------------------------------------------------
+DspDcPhaseLinearizer::DspDcPhaseLinearizer() {
+    configure(DcPhaseType::A_STD, 48000.0);
+}
+
+void DspDcPhaseLinearizer::configure(DcPhaseType type, double sampleRate) {
+    type_ = type;
+    sampleRate_ = std::max(8000.0, sampleRate);
+    reset();
+
+    if (type_ == DcPhaseType::OFF) {
+        b0_ = 1.0; b1_ = 0.0; b2_ = 0.0;
+        a1_ = 0.0; a2_ = 0.0;
+        isBypass_ = true;
+        return;
+    }
+
+    isBypass_ = false;
+    double f0 = 4.0; // デフォルト (STD)
+
+    if (type_ == DcPhaseType::A_LOW || type_ == DcPhaseType::B_LOW) f0 = 2.0;
+    else if (type_ == DcPhaseType::A_STD || type_ == DcPhaseType::B_STD) f0 = 4.0;
+    else if (type_ == DcPhaseType::A_HIGH || type_ == DcPhaseType::B_HIGH) f0 = 8.0;
+
+    if (type_ == DcPhaseType::A_LOW || type_ == DcPhaseType::A_STD || type_ == DcPhaseType::A_HIGH) {
+        // ★ A Curve: 1次 進相フィルター (DCで+90°、f0で+45°、50Hzで0°)
+        double K = std::tan(PI * f0 / sampleRate_);
+        double norm = 1.0 / (1.0 + K);
+        b0_ = 1.0 * norm;
+        b1_ = -1.0 * norm;
+        b2_ = 0.0;
+        a1_ = -(1.0 - K) * norm;
+        a2_ = 0.0;
+    } else {
+        // ★ B Curve: 2次 アンダーシュート付き進相 (50Hz以下で数度遅延後に極低域で進相)
+        double f1 = 40.0; // アンダーシュート周波数
+        double Q = 0.7071;
+        double w0 = 2.0 * PI * f0 / sampleRate_;
+        double w1 = 2.0 * PI * f1 / sampleRate_;
+        double alpha = std::sin(w0) / (2.0 * Q);
+        double cosw0 = std::cos(w0);
+
+        double b0_raw = 1.0 + std::sin(w1);
+        double b1_raw = -2.0 * std::cos(w1);
+        double b2_raw = 1.0 - std::sin(w1);
+        double a0_raw = 1.0 + alpha;
+        double a1_raw = -2.0 * cosw0;
+        double a2_raw = 1.0 - alpha;
+
+        double inv_a0 = 1.0 / a0_raw;
+        b0_ = b0_raw * inv_a0;
+        b1_ = b1_raw * inv_a0;
+        b2_ = b2_raw * inv_a0;
+        a1_ = a1_raw * inv_a0;
+        a2_ = a2_raw * inv_a0;
+    }
+}
+
+void DspDcPhaseLinearizer::reset() {
+    s1_L_ = 0.0; s2_L_ = 0.0;
+    s1_R_ = 0.0; s2_R_ = 0.0;
+}
+
+void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFrames) {
+    if (isBypass_ || !left || !right || numFrames == 0) return;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        double inL = static_cast<double>(left[i]);
+        double outL = b0_ * inL + s1_L_;
+        s1_L_ = b1_ * inL - a1_ * outL + s2_L_;
+        s2_L_ = b2_ * inL - a2_ * outL;
+        left[i] = static_cast<float>(outL);
+
+        double inR = static_cast<double>(right[i]);
+        double outR = b0_ * inR + s1_R_;
+        s1_R_ = b1_ * inR - a1_ * outR + s2_R_;
+        s2_R_ = b2_ * inR - a2_ * outR;
+        right[i] = static_cast<float>(outR);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// DspUpsampler 実装
+// -----------------------------------------------------------------------------
 DspUpsampler::DspUpsampler() {
     configure(1, 48000.0f);
 }
@@ -34,6 +120,11 @@ void DspUpsampler::setFirFilterType(FirFilterType type) {
     }
 }
 
+void DspUpsampler::setDcPhaseType(DcPhaseType type) {
+    dcPhaseType_ = type;
+    dcPhaseLinearizer_.configure(type, static_cast<double>(inSampleRate_ * factor_));
+}
+
 double DspUpsampler::besselI0(double x) {
     double sum = 1.0;
     double term = 1.0;
@@ -47,7 +138,6 @@ double DspUpsampler::besselI0(double x) {
     return sum;
 }
 
-// ★ ヒルベルト/ケプストラム法による完全な最小位相化（プリリンギングゼロ変換）
 void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     int fftSize = 512;
     while (fftSize < totalTaps * 2) fftSize *= 2;
@@ -123,8 +213,6 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
     }
 
     int totalTaps = factor * tapsPerPhase_;
-    
-    // ★ フィルタータイプ別のパラメータ設定
     double cutoff = 0.94 / (2.0 * factor);
     double beta = 10.5;
 
@@ -147,7 +235,6 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         protoFilter[i] = sinc * window;
     }
 
-    // ★ 最小位相化の適用 (Minimum Phase Sharp / Slow)
     if (filterType_ == FirFilterType::MINIMUM_PHASE_SHARP || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW) {
         convertToMinimumPhase(protoFilter, totalTaps);
     }
@@ -182,6 +269,7 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     inSampleRate_ = inSampleRate;
     generateFilterCoefficients(factor_);
     equalizer_.setSampleRate(static_cast<double>(inSampleRate_ * factor_));
+    dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(inSampleRate_ * factor_));
     reset();
 }
 
@@ -194,6 +282,7 @@ void DspUpsampler::reset() {
     std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     equalizer_.reset();
+    dcPhaseLinearizer_.reset();
 }
 
 size_t DspUpsampler::process(
@@ -318,8 +407,13 @@ size_t DspUpsampler::process(
         }
     }
 
+    // 1. 10-Band EQ 処理
     equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
+    // 2. ★ DC Phase Linearizer (アナログ低域位相補正) 処理
+    dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+
+    // 3. ディザリング ＆ PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;

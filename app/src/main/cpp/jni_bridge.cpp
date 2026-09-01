@@ -9,6 +9,7 @@ static DspUpsampler* g_upsampler = nullptr;
 static std::vector<uint8_t> g_outDspBuffer;
 static int g_currentDitherMode = 1;
 static int g_currentFirFilterType = 0;
+static int g_currentDcPhaseType = 2; // Default: A_STD (4Hz)
 
 extern "C" {
 
@@ -21,6 +22,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
         g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
+        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
     }
 }
 
@@ -31,6 +33,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
         g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
+        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
     }
     g_upsampler->configure(factor, static_cast<float>(sample_rate));
 }
@@ -64,12 +67,23 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFirFilterType(
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
+        JNIEnv *env, jobject thiz, jint type) {
+    g_currentDcPhaseType = type;
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
+    }
+    g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(type));
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
         g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
+        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
     }
     g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
     if (gains) {
@@ -91,6 +105,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
         g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
+        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
     }
 
     const char* inMode = env->GetStringUTFChars(in_bit_mode, nullptr);

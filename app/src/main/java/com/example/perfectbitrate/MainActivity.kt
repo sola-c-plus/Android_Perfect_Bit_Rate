@@ -92,10 +92,22 @@ class MainActivity : AppCompatActivity() {
     private val ditherOptions = arrayOf("TPDF (Studio Standard)", "High-Pass Shaped (Clear)", "Psychoacoustic (Walkman SBM)", "None (Direct Bypass)")
     private val ditherModeValues = arrayOf(1, 2, 3, 0)
 
-    // ★ FIR フィルター特性オプション
     private var currentFirFilterType = 0
     private val firFilterOptions = arrayOf("Linear Phase Sharp (Ref)", "Linear Phase Slow (Smooth)", "Minimum Phase Sharp (Punch)", "Minimum Phase Slow (Warm)")
     private val firFilterTypeValues = arrayOf(0, 1, 2, 3)
+
+    // ★ SONY DC Phase Linearizer オプション
+    private var currentDcPhaseType = 2 // デフォルト: A_STD (4Hz)
+    private val dcPhaseOptions = arrayOf(
+        "OFF (DC Flat Bypass)",
+        "Type A - Standard (Default 4Hz)",
+        "Type A - Low (2Hz)",
+        "Type A - High (8Hz)",
+        "Type B - Standard (4Hz Enhanced)",
+        "Type B - Low (2Hz Enhanced)",
+        "Type B - High (8Hz Enhanced)"
+    )
+    private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
 
     private var isEqEnabled = false
     private val eqGains = FloatArray(10) { 0.0f }
@@ -161,6 +173,7 @@ class MainActivity : AppCompatActivity() {
 
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
             NativeAudioEngine.nativeSetFirFilterType(currentFirFilterType)
+            NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -240,6 +253,7 @@ class MainActivity : AppCompatActivity() {
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
+        currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2) // Default: A_STD
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -282,6 +296,7 @@ class MainActivity : AppCompatActivity() {
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerFirFilter = view.findViewById<Spinner>(R.id.dialogSpinnerFirFilter)
+        val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
@@ -407,7 +422,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 3. ★ FIR Filter Character Spinner (新規追加)
+        // 3. FIR Filter Spinner
         val firAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, firFilterOptions)
         firAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerFirFilter.adapter = firAdapter
@@ -426,7 +441,26 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 4. Upsample Spinner
+        // 4. ★ DC Phase Linearizer Spinner
+        val dcPhaseAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dcPhaseOptions)
+        dcPhaseAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerDcPhase.adapter = dcPhaseAdapter
+        val initialDcPhaseIdx = dcPhaseTypeValues.indexOf(currentDcPhaseType).let { if (it >= 0) it else 1 }
+        spinnerDcPhase.setSelection(initialDcPhaseIdx)
+
+        spinnerDcPhase.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedType = dcPhaseTypeValues[position]
+                if (selectedType != currentDcPhaseType) {
+                    currentDcPhaseType = selectedType
+                    prefs.edit { putInt("selected_dc_phase_type", selectedType) }
+                    NativeAudioEngine.nativeSetDcPhaseType(selectedType)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // 5. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
@@ -446,7 +480,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 5. 0dB Volume Lock Switch
+        // 6. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -475,7 +509,7 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
         }
 
-        // 6. Ad Block Switch
+        // 7. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked

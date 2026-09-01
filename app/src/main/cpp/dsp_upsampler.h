@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
+#include <array>
 #include "dsp_equalizer.h"
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -21,10 +22,40 @@ enum class DitherMode : int {
 };
 
 enum class FirFilterType : int {
-    LINEAR_PHASE_SHARP = 0,  // 直線位相・シャープ (原音忠実)
-    LINEAR_PHASE_SLOW = 1,   // 直線位相・スロー (滑らか)
-    MINIMUM_PHASE_SHARP = 2, // 最小位相・シャープ (プリリンギング0・パンチ力)
-    MINIMUM_PHASE_SLOW = 3   // 最小位相・スロー (プリリンギング0・アナログトーン)
+    LINEAR_PHASE_SHARP = 0,
+    LINEAR_PHASE_SLOW = 1,
+    MINIMUM_PHASE_SHARP = 2,
+    MINIMUM_PHASE_SLOW = 3
+};
+
+// ★ SONY 実機リバースエンジニアリング準拠 DC Phase Linearizer
+enum class DcPhaseType : int {
+    OFF = 0,
+    A_LOW = 1,   // A Curve 2Hz
+    A_STD = 2,   // A Curve 4Hz (Walkman Default)
+    A_HIGH = 3,  // A Curve 8Hz
+    B_LOW = 4,   // B Curve 2Hz Enhanced
+    B_STD = 5,   // B Curve 4Hz Enhanced
+    B_HIGH = 6   // B Curve 8Hz Enhanced
+};
+
+// ★ 64-bit 倍精度 DC Phase Linearizer IIR フィルター
+class DspDcPhaseLinearizer {
+public:
+    DspDcPhaseLinearizer();
+    void configure(DcPhaseType type, double sampleRate);
+    void reset();
+    void processStereo(float* left, float* right, size_t numFrames);
+
+private:
+    DcPhaseType type_ = DcPhaseType::OFF;
+    double sampleRate_ = 48000.0;
+
+    double b0_ = 1.0, b1_ = 0.0, b2_ = 0.0;
+    double a1_ = 0.0, a2_ = 0.0;
+    double s1_L_ = 0.0, s2_L_ = 0.0;
+    double s1_R_ = 0.0, s2_R_ = 0.0;
+    bool isBypass_ = true;
 };
 
 template <typename T, size_t Alignment = 16>
@@ -72,6 +103,9 @@ public:
     void setFirFilterType(FirFilterType type);
     FirFilterType getFirFilterType() const { return filterType_; }
 
+    void setDcPhaseType(DcPhaseType type);
+    DcPhaseType getDcPhaseType() const { return dcPhaseType_; }
+
     size_t process(
         const uint8_t* inPcm,
         size_t inBytes,
@@ -95,11 +129,13 @@ private:
 
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
+    DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
     DspEqualizer equalizer_;
+    DspDcPhaseLinearizer dcPhaseLinearizer_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
