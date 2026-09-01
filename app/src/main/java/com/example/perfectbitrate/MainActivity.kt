@@ -88,6 +88,10 @@ class MainActivity : AppCompatActivity() {
     private val upsampleOptions = arrayOf("1x Direct (Bypass)", "2x Hi-Res (96k/88k)", "4x Ultra (192k/176k)", "8x Master (384k/352k)")
     private val upsampleFactorValues = arrayOf(1, 2, 4, 8)
 
+    // EQ 設定
+    private var isEqEnabled = false
+    private val eqGains = FloatArray(10) { 0.0f }
+
     private var peakDbL = -60f
     private var peakDbR = -60f
     private var bitActivityMask = 0
@@ -96,8 +100,6 @@ class MainActivity : AppCompatActivity() {
     private var isAdBlockOn = true
     private var isVolLockOn = false
     private var isPlayingState = false
-
-    private var currentSettingsDialog: BottomSheetDialog? = null
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
@@ -148,6 +150,9 @@ class MainActivity : AppCompatActivity() {
             playbackService?.currentBitMode = currentBitMode
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
+
+            // EQ初期状態を Native DSP へ送信
+            NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
                 runOnUiThread {
@@ -225,6 +230,12 @@ class MainActivity : AppCompatActivity() {
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
 
+        // EQ設定復元
+        isEqEnabled = prefs.getBoolean("eq_enabled", false)
+        for (i in 0..9) {
+            eqGains[i] = prefs.getFloat("eq_gain_$i", 0.0f)
+        }
+
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
         checkAndRequestPermissions()
@@ -257,7 +268,6 @@ class MainActivity : AppCompatActivity() {
         val dialog = BottomSheetDialog(this)
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
-        currentSettingsDialog = dialog
 
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
@@ -266,6 +276,58 @@ class MainActivity : AppCompatActivity() {
         val btnClose = view.findViewById<Button>(R.id.btnDialogClose)
         val textVolLockTitle = view.findViewById<TextView>(R.id.dialogTextVolLockTitle)
         val textVolLockSub = view.findViewById<TextView>(R.id.dialogTextVolLockSub)
+
+        // ★ SONY WALKMAN 10-Band EQ バインド
+        val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
+        val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
+        val textEqBandFreq = view.findViewById<TextView>(R.id.textEqBandFreq)
+        val textEqGainValue = view.findViewById<TextView>(R.id.textEqGainValue)
+        val btnEqPlus = view.findViewById<Button>(R.id.btnEqPlus)
+        val btnEqMinus = view.findViewById<Button>(R.id.btnEqMinus)
+        val btnEqFlat = view.findViewById<Button>(R.id.btnEqFlat)
+
+        // EQ View 初期値
+        System.arraycopy(eqGains, 0, walkmanEqView.gains, 0, 10)
+        walkmanEqView.isDirectBypass = !isEqEnabled
+        switchEqEnable.isChecked = isEqEnabled
+
+        fun updateEqHeader(bandIdx: Int, gain: Float) {
+            textEqBandFreq.text = "${walkmanEqView.bandLabels[bandIdx]} Hz"
+            textEqGainValue.text = String.format(java.util.Locale.US, "%+.1f dB", gain)
+        }
+        updateEqHeader(walkmanEqView.selectedBandIndex, walkmanEqView.gains[walkmanEqView.selectedBandIndex])
+
+        walkmanEqView.onBandSelectedListener = { bandIdx, gain ->
+            updateEqHeader(bandIdx, gain)
+        }
+
+        walkmanEqView.onGainChangedListener = { bandIdx, gain, allGains ->
+            updateEqHeader(bandIdx, gain)
+            System.arraycopy(allGains, 0, eqGains, 0, 10)
+            NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
+            prefs.edit {
+                for (i in 0..9) putFloat("eq_gain_$i", eqGains[i])
+            }
+        }
+
+        switchEqEnable.setOnCheckedChangeListener { _, isChecked ->
+            isEqEnabled = isChecked
+            walkmanEqView.isDirectBypass = !isChecked
+            prefs.edit { putBoolean("eq_enabled", isChecked) }
+            NativeAudioEngine.nativeSetEqualizer(isChecked, eqGains)
+        }
+
+        btnEqPlus.setOnClickListener {
+            walkmanEqView.stepGain(+0.5f)
+        }
+
+        btnEqMinus.setOnClickListener {
+            walkmanEqView.stepGain(-0.5f)
+        }
+
+        btnEqFlat.setOnClickListener {
+            walkmanEqView.resetAllFlat()
+        }
 
         // 1. Bit Depth Spinner
         val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)

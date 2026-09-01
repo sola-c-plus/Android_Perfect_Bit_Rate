@@ -6,7 +6,7 @@
 constexpr double PI = 3.14159265358979323846;
 
 DspUpsampler::DspUpsampler() {
-    configure(1);
+    configure(1, 48000.0f);
 }
 
 double DspUpsampler::besselI0(double x) {
@@ -28,20 +28,19 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         return;
     }
 
-    // 倍率に応じた高品質タップ数設定 (4の倍数アライメント)
     if (factor == 2) {
-        tapsPerPhase_ = 64;  // 全体 128 タップ
+        tapsPerPhase_ = 64;
     } else if (factor == 4) {
-        tapsPerPhase_ = 48;  // 全体 192 タップ
+        tapsPerPhase_ = 48;
     } else if (factor == 8) {
-        tapsPerPhase_ = 32;  // 全体 256 タップ
+        tapsPerPhase_ = 32;
     } else {
         tapsPerPhase_ = 32;
     }
 
     int totalTaps = factor * tapsPerPhase_;
-    double cutoff = 0.94 / (2.0 * factor); // 急峻なカットオフ (Nyquist帯域保護)
-    double beta = 10.5; // Kaiser窓パラメータ (阻止域減衰量 > 120dB)
+    double cutoff = 0.94 / (2.0 * factor);
+    double beta = 10.5;
     double i0Beta = besselI0(beta);
     double center = (totalTaps - 1) * 0.5;
 
@@ -50,9 +49,7 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
 
     for (int i = 0; i < totalTaps; ++i) {
         double t = i - center;
-        // Sinc
         double sinc = (t == 0.0) ? 1.0 : (std::sin(2.0 * PI * cutoff * t) / (PI * t));
-        // Kaiser Window
         double norm = (2.0 * i / (totalTaps - 1)) - 1.0;
         double arg = 1.0 - norm * norm;
         double window = (arg >= 0.0) ? (besselI0(beta * std::sqrt(arg)) / i0Beta) : 0.0;
@@ -61,7 +58,6 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         sumGain += protoFilter[i];
     }
 
-    // 0dB (Unity Gain) 正規化: 各サブバンドの通過ゲインを 1.0 にスケーリング
     double scale = static_cast<double>(factor) / sumGain;
 
     polyCoeffs_.resize(factor);
@@ -83,10 +79,11 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
     historyWritePos_ = tapsPerPhase_ - 1;
 }
 
-void DspUpsampler::configure(int factor) {
-    if (factor_ == factor && !polyCoeffs_.empty()) return;
+void DspUpsampler::configure(int factor, float inSampleRate) {
     factor_ = (factor == 2 || factor == 4 || factor == 8) ? factor : 1;
+    inSampleRate_ = inSampleRate;
     generateFilterCoefficients(factor_);
+    equalizer_.setSampleRate(inSampleRate_ * factor_);
     reset();
 }
 
@@ -96,6 +93,7 @@ void DspUpsampler::reset() {
         std::fill(historyR_.begin(), historyR_.end(), 0.0f);
         historyWritePos_ = tapsPerPhase_ - 1;
     }
+    equalizer_.reset();
 }
 
 size_t DspUpsampler::process(
@@ -111,21 +109,20 @@ size_t DspUpsampler::process(
     if (strcmp(inBitMode, "32bit") == 0) inBytesPerSample = 4;
     else if (strcmp(inBitMode, "24bit") == 0) inBytesPerSample = 3;
 
-    int inBytesPerFrame = inBytesPerSample * 2; // Stereo
+    int inBytesPerFrame = inBytesPerSample * 2;
     size_t numInFrames = inBytes / inBytesPerFrame;
     if (numInFrames == 0) return 0;
 
-    // 1. 入力PCMをFloat [-1.0, 1.0] にアンパック
     tempInL_.resize(numInFrames);
     tempInR_.resize(numInFrames);
 
-    if (inBytesPerSample == 4) { // 32-bit Int
+    if (inBytesPerSample == 4) {
         const auto* src32 = reinterpret_cast<const int32_t*>(inPcm);
         for (size_t i = 0; i < numInFrames; ++i) {
             tempInL_[i] = static_cast<float>(src32[i * 2]) / 2147483648.0f;
             tempInR_[i] = static_cast<float>(src32[i * 2 + 1]) / 2147483648.0f;
         }
-    } else if (inBytesPerSample == 3) { // 24-bit Packed
+    } else if (inBytesPerSample == 3) {
         for (size_t i = 0; i < numInFrames; ++i) {
             size_t base = i * 6;
             int32_t valL = static_cast<int32_t>((inPcm[base]) | (inPcm[base + 1] << 8) | (inPcm[base + 2] << 16));
@@ -136,7 +133,7 @@ size_t DspUpsampler::process(
             tempInL_[i] = static_cast<float>(valL) / 8388608.0f;
             tempInR_[i] = static_cast<float>(valR) / 8388608.0f;
         }
-    } else { // 16-bit Int
+    } else {
         const auto* src16 = reinterpret_cast<const int16_t*>(inPcm);
         for (size_t i = 0; i < numInFrames; ++i) {
             tempInL_[i] = static_cast<float>(src16[i * 2]) / 32768.0f;
@@ -148,7 +145,6 @@ size_t DspUpsampler::process(
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    // 2. アップサンプリング（1x の場合はバイパスコピー、2x/4x/8x は NEON ポリフェーズ補間）
     if (factor_ <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
@@ -156,7 +152,6 @@ size_t DspUpsampler::process(
         const int subTaps = tapsPerPhase_;
 
         for (size_t i = 0; i < numInFrames; ++i) {
-            // ヒストリバッファに最新サンプルを書き込み
             historyL_[historyWritePos_] = tempInL_[i];
             historyR_[historyWritePos_] = tempInR_[i];
 
@@ -180,7 +175,6 @@ size_t DspUpsampler::process(
                     accR = vmlaq_f32(accR, c, xR);
                 }
 
-                // 水平加算
 #if defined(__aarch64__)
                 sumL = vaddvq_f32(accL);
                 sumR = vaddvq_f32(accR);
@@ -202,7 +196,6 @@ size_t DspUpsampler::process(
             }
 
             historyWritePos_++;
-            // バッファ末端に達したら、最新の (subTaps - 1) サンプルを先頭へシフト
             if (historyWritePos_ >= historyLen_ - 1) {
                 int overlap = subTaps - 1;
                 std::memmove(&historyL_[0], &historyL_[historyWritePos_ - overlap], overlap * sizeof(float));
@@ -212,7 +205,10 @@ size_t DspUpsampler::process(
         }
     }
 
-    // 3. 出力PCMフォーマットへパック (16bit / 24bit Packed / 32bit Int)
+    // ★ SONY WALKMAN 10-Band EQ 処理
+    equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+
+    // 出力PCMエンコード
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
@@ -221,7 +217,7 @@ size_t DspUpsampler::process(
     outBuffer.resize(outTotalBytes);
     uint8_t* dst = outBuffer.data();
 
-    if (outBytesPerSample == 4) { // 32-bit Int
+    if (outBytesPerSample == 4) {
         auto* dst32 = reinterpret_cast<int32_t*>(dst);
         for (size_t i = 0; i < numOutFrames; ++i) {
             float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);
@@ -229,7 +225,7 @@ size_t DspUpsampler::process(
             dst32[i * 2]     = static_cast<int32_t>(l >= 0.0f ? (l * 2147483647.0f) : (l * 2147483648.0f));
             dst32[i * 2 + 1] = static_cast<int32_t>(r >= 0.0f ? (r * 2147483647.0f) : (r * 2147483648.0f));
         }
-    } else if (outBytesPerSample == 3) { // 24-bit Packed
+    } else if (outBytesPerSample == 3) {
         for (size_t i = 0; i < numOutFrames; ++i) {
             float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);
             float r = std::clamp(tempOutR_[i], -1.0f, 1.0f);
@@ -246,7 +242,7 @@ size_t DspUpsampler::process(
             dst[base + 4] = (intR >> 8) & 0xFF;
             dst[base + 5] = (intR >> 16) & 0xFF;
         }
-    } else { // 16-bit Int
+    } else {
         auto* dst16 = reinterpret_cast<int16_t*>(dst);
         for (size_t i = 0; i < numOutFrames; ++i) {
             float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);

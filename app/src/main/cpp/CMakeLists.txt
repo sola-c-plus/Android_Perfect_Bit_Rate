@@ -5,11 +5,11 @@ add_library(
     native_audio_engine
     SHARED
     aaudio_engine.cpp
+    dsp_equalizer.cpp
     dsp_upsampler.cpp
     jni_bridge.cpp
 )
 
-# NEON・C++17・高速演算最適化 & 16KB アライメント
 target_compile_options(native_audio_engine PRIVATE -std=c++17 -O3 -ffast-math -flto)
 target_link_options(native_audio_engine PRIVATE "-Wl,-z,max-page-size=16384" -flto)
 

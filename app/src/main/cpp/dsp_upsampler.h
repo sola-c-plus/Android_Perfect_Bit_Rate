@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
+#include "dsp_equalizer.h"
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
@@ -12,7 +13,6 @@
 #define USE_ARM_NEON 0
 #endif
 
-// 16バイトアライメント対応カスタムアロケータ
 template <typename T, size_t Alignment = 16>
 struct AlignedAllocator {
     using value_type = T;
@@ -48,11 +48,10 @@ public:
     DspUpsampler();
     ~DspUpsampler() = default;
 
-    void configure(int factor);
+    void configure(int factor, float inSampleRate = 48000.0f);
     int getFactor() const { return factor_; }
+    DspEqualizer& getEqualizer() { return equalizer_; }
 
-    // 入力バイト列 (16bit/24bit/32bit PCM) をアップサンプリングし、指定出力フォーマットのバイト列として書き込む
-    // 戻り値: 出力バイト数
     size_t process(
         const uint8_t* inPcm,
         size_t inBytes,
@@ -68,18 +67,17 @@ private:
     double besselI0(double x);
 
     int factor_ = 1;
-    int tapsPerPhase_ = 32; // 各ポリフェーズのタップ数（4の倍数でNEON最適化）
+    float inSampleRate_ = 48000.0f;
+    int tapsPerPhase_ = 32;
     int historyLen_ = 128;
     int historyWritePos_ = 0;
 
-    // 16バイトアライメントされたポリフェーズFIR係数 [phase][tap]
-    std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
+    DspEqualizer equalizer_;
 
-    // 16バイトアライメントされたL/Rチャンネル用履歴バッファ
+    std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
     std::vector<float, AlignedAllocator<float, 16>> historyR_;
 
-    // 一時Floatバッファ
     std::vector<float, AlignedAllocator<float, 16>> tempInL_;
     std::vector<float, AlignedAllocator<float, 16>> tempInR_;
     std::vector<float, AlignedAllocator<float, 16>> tempOutL_;

@@ -22,11 +22,11 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
-        JNIEnv *env, jobject thiz, jint factor) {
+        JNIEnv *env, jobject thiz, jint factor, jint sample_rate) {
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
     }
-    g_upsampler->configure(factor);
+    g_upsampler->configure(factor, static_cast<float>(sample_rate));
 }
 
 JNIEXPORT void JNICALL
@@ -34,6 +34,20 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeResetUpsampler(
         JNIEnv *env, jobject thiz) {
     if (g_upsampler) {
         g_upsampler->reset();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
+        JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
+    if (!g_upsampler) return;
+    g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
+    if (gains) {
+        jfloat* gainElements = env->GetFloatArrayElements(gains, nullptr);
+        if (gainElements) {
+            g_upsampler->getEqualizer().setAllGains(gainElements);
+            env->ReleaseFloatArrayElements(gains, gainElements, JNI_ABORT);
+        }
     }
 }
 
@@ -86,13 +100,9 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeOpen(
     if (!g_engine) return 0;
 
     aaudio_format_t format = AAUDIO_FORMAT_PCM_I16;
-    if (encoding == 4) { // AudioFormat.ENCODING_PCM_FLOAT
-        format = AAUDIO_FORMAT_PCM_FLOAT;
-    } else if (encoding == 2) { // AudioFormat.ENCODING_PCM_16BIT
-        format = AAUDIO_FORMAT_PCM_I16;
-    } else if (encoding == 21 || encoding == 3) { // 24-bit packed
-        format = AAUDIO_FORMAT_PCM_I24_PACKED;
-    }
+    if (encoding == 4) format = AAUDIO_FORMAT_PCM_FLOAT;
+    else if (encoding == 2) format = AAUDIO_FORMAT_PCM_I16;
+    else if (encoding == 21 || encoding == 3) format = AAUDIO_FORMAT_PCM_I24_PACKED;
 
     return g_engine->openStream(sample_rate, channel_count, format, device_id);
 }

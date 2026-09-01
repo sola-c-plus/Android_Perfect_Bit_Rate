@@ -5,9 +5,9 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@drawable/bg_bottom_sheet_dap"
-    android:paddingStart="18dp"
-    android:paddingEnd="18dp"
-    android:paddingTop="12dp"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="10dp"
     android:paddingBottom="24dp">
 
     <!-- ドラッグハンドルバー -->
@@ -16,7 +16,7 @@
         android:layout_height="4dp"
         android:layout_gravity="center_horizontal"
         android:background="#444444"
-        android:layout_marginBottom="12dp" />
+        android:layout_marginBottom="10dp" />
 
     <!-- タイトルバー -->
     <LinearLayout
@@ -24,15 +24,15 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="12dp">
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="AUDIO DSP SETTINGS"
+            android:text="WALKMAN 1Z MASTER DSP"
             android:textColor="#E5A93C"
-            android:textSize="14sp"
+            android:textSize="13.5sp"
             android:textStyle="bold"
             android:fontFamily="sans-serif-black"
             android:letterSpacing="0.05" />
@@ -48,13 +48,124 @@
             android:padding="0dp" />
     </LinearLayout>
 
+    <!-- ★ SONY WALKMAN 10-BAND EQ セクション -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#0A0A0A"
+        android:padding="10dp"
+        android:layout_marginBottom="14dp">
+
+        <!-- EQヘッダー: 選択中バンド数値 ＆ [+] [-] ＆ DIRECT ＆ FLAT -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="6dp">
+
+            <TextView
+                android:id="@+id/textEqBandFreq"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="4K Hz"
+                android:textColor="#CCCCCC"
+                android:textSize="11.5sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-condensed" />
+
+            <TextView
+                android:id="@+id/textEqGainValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="+0.0 dB"
+                android:textColor="#E5A93C"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-black" />
+
+            <!-- [+] [-] ステップボタン -->
+            <Button
+                android:id="@+id/btnEqPlus"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:text="＋"
+                android:textColor="#FFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:background="@drawable/bg_btn_icon"
+                android:layout_marginStart="10dp"
+                android:padding="0dp" />
+
+            <Button
+                android:id="@+id/btnEqMinus"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:text="－"
+                android:textColor="#FFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:background="@drawable/bg_btn_icon"
+                android:layout_marginStart="4dp"
+                android:padding="0dp" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <!-- FLAT リセットボタン -->
+            <Button
+                android:id="@+id/btnEqFlat"
+                android:layout_width="wrap_content"
+                android:layout_height="24dp"
+                android:text="FLAT"
+                android:textColor="#888888"
+                android:textSize="9.5sp"
+                android:textStyle="bold"
+                android:background="@drawable/bg_btn_icon"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:layout_marginEnd="8dp" />
+
+            <!-- DIRECT スイッチ (EQ Bypass) -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="EQ"
+                android:textColor="#AAAAAA"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="4dp" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchEqEnable"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:thumbTint="@null"
+                app:trackTint="@null"
+                android:thumb="@drawable/switch_thumb_white"
+                app:track="@drawable/switch_track_walkman_outline"
+                android:checked="false" />
+        </LinearLayout>
+
+        <!-- WALKMAN 1Z 10-Band グラフィカル・カーブ View -->
+        <com.example.perfectbitrate.WalkmanEqView
+            android:id="@+id/walkmanEqView"
+            android:layout_width="match_parent"
+            android:layout_height="130dp" />
+
+    </LinearLayout>
+
     <!-- 項目 1: 出力ビット深度 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="14dp">
+        android:layout_marginBottom="12dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -67,32 +178,30 @@
                 android:layout_height="wrap_content"
                 android:text="BIT DEPTH FORMAT"
                 android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-medium" />
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="DACへ伝送するPCMビット深度"
                 android:textColor="#777777"
-                android:textSize="10sp" />
+                android:textSize="9.5sp" />
         </LinearLayout>
 
         <Spinner
             android:id="@+id/dialogSpinnerBitDepth"
             android:layout_width="wrap_content"
-            android:layout_height="32dp"
+            android:layout_height="30dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A"
-            android:gravity="center_vertical" />
+            android:popupBackground="#1A1A1A" />
     </LinearLayout>
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="#1F1F1F"
-        android:layout_marginBottom="14dp" />
+        android:background="#1C1C1C"
+        android:layout_marginBottom="12dp" />
 
     <!-- 項目 2: アップサンプリング DSP -->
     <LinearLayout
@@ -100,7 +209,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="14dp">
+        android:layout_marginBottom="12dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -113,83 +222,32 @@
                 android:layout_height="wrap_content"
                 android:text="ULTRA HQ UPSAMPLING"
                 android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-medium" />
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="ARM NEON 高タップ数ポリフェーズFIR"
                 android:textColor="#777777"
-                android:textSize="10sp" />
+                android:textSize="9.5sp" />
         </LinearLayout>
 
         <Spinner
             android:id="@+id/dialogSpinnerUpsample"
             android:layout_width="wrap_content"
-            android:layout_height="32dp"
+            android:layout_height="30dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A"
-            android:gravity="center_vertical" />
+            android:popupBackground="#1A1A1A" />
     </LinearLayout>
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="#1F1F1F"
-        android:layout_marginBottom="14dp" />
+        android:background="#1C1C1C"
+        android:layout_marginBottom="12dp" />
 
-    <!-- 項目 3: 0dB Volume Lock -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="14dp">
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/dialogTextVolLockTitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0dB VOLUME LOCK"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-medium" />
-
-            <TextView
-                android:id="@+id/dialogTextVolLockSub"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="USB DAC接続時のビット落ち回避（最大音量固定）"
-                android:textColor="#777777"
-                android:textSize="10sp" />
-        </LinearLayout>
-
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/dialogSwitchVolLock"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:thumbTint="@null"
-            app:trackTint="@null"
-            android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline" />
-    </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1F1F1F"
-        android:layout_marginBottom="14dp" />
-
-    <!-- 項目 4: AD BLOCK (広告カット) -->
+    <!-- 項目 3: 0dB Volume Lock & AD CUT -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -203,20 +261,53 @@
             android:orientation="vertical">
 
             <TextView
+                android:id="@+id/dialogTextVolLockTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="AD CUT (広告自動カット)"
+                android:text="0dB VOL LOCK"
                 android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-medium" />
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/dialogTextVolLockSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DAC最大音量固定"
+                android:textColor="#777777"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/dialogSwitchVolLock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@null"
+            app:trackTint="@null"
+            android:thumb="@drawable/switch_thumb_white"
+            app:track="@drawable/switch_track_walkman_outline"
+            android:layout_marginEnd="16dp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="YouTube Music 動画広告の自動スキップ"
+                android:text="AD CUT"
+                android:textColor="#FFFFFF"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="広告自動カット"
                 android:textColor="#777777"
-                android:textSize="10sp" />
+                android:textSize="9.5sp" />
         </LinearLayout>
 
         <androidx.appcompat.widget.SwitchCompat

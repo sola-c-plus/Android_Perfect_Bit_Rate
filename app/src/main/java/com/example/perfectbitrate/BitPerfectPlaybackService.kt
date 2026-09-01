@@ -229,7 +229,7 @@ class BitPerfectPlaybackService : Service() {
     fun setUpsampling(factor: Int) {
         if (upsampleFactor != factor) {
             upsampleFactor = factor
-            NativeAudioEngine.nativeConfigureUpsampler(factor)
+            NativeAudioEngine.nativeConfigureUpsampler(factor, baseSampleRate)
             effectiveSampleRate = baseSampleRate * factor
             isBuffering.set(true)
             trackExecutor.execute {
@@ -256,8 +256,8 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        // Native NEON Polyphase DSP アップサンプリング
-        val processedBytes = if (upsampleFactor > 1) {
+        // Native NEON Polyphase DSP アップサンプリング + 10-Band EQ
+        val processedBytes = if (upsampleFactor > 1 || true) {
             NativeAudioEngine.nativeProcessUpsample(pcmBytes, pcmBytes.size, bitMode, currentBitMode, upsampleFactor) ?: pcmBytes
         } else {
             pcmBytes

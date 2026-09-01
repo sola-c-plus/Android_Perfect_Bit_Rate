@@ -12,8 +12,9 @@ object NativeAudioEngine {
     }
 
     external fun nativeInit()
-    external fun nativeConfigureUpsampler(factor: Int)
+    external fun nativeConfigureUpsampler(factor: Int, sampleRate: Int)
     external fun nativeResetUpsampler()
+    external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeProcessUpsample(
         inBytes: ByteArray,
         inLength: Int,
@@ -22,7 +23,6 @@ object NativeAudioEngine {
         factor: Int
     ): ByteArray?
 
-    // AAudio Direct Mode
     external fun nativeOpen(sampleRate: Int, channelCount: Int, encoding: Int, deviceId: Int): Int
     external fun nativeStart(): Boolean
     external fun nativeStop(): Boolean
