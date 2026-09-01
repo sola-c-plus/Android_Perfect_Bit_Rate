@@ -1,7 +1,12 @@
 ﻿#include <jni.h>
 #include "aaudio_engine.h"
+#include "dsp_upsampler.h"
+#include <vector>
+#include <string>
 
 static AAudioEngine* g_engine = nullptr;
+static DspUpsampler* g_upsampler = nullptr;
+static std::vector<uint8_t> g_outDspBuffer;
 
 extern "C" {
 
@@ -10,6 +15,68 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
     if (!g_engine) {
         g_engine = new AAudioEngine();
     }
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
+        JNIEnv *env, jobject thiz, jint factor) {
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
+    }
+    g_upsampler->configure(factor);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeResetUpsampler(
+        JNIEnv *env, jobject thiz) {
+    if (g_upsampler) {
+        g_upsampler->reset();
+    }
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
+        JNIEnv *env, jobject thiz,
+        jbyteArray in_bytes, jint in_length,
+        jstring in_bit_mode, jstring out_bit_mode, jint factor) {
+    if (!g_upsampler || !in_bytes || in_length <= 0) return nullptr;
+
+    const char* inMode = env->GetStringUTFChars(in_bit_mode, nullptr);
+    const char* outMode = env->GetStringUTFChars(out_bit_mode, nullptr);
+
+    if (g_upsampler->getFactor() != factor) {
+        g_upsampler->configure(factor);
+    }
+
+    jbyte* src = env->GetByteArrayElements(in_bytes, nullptr);
+    if (!src) {
+        env->ReleaseStringUTFChars(in_bit_mode, inMode);
+        env->ReleaseStringUTFChars(out_bit_mode, outMode);
+        return nullptr;
+    }
+
+    size_t outSize = g_upsampler->process(
+        reinterpret_cast<const uint8_t*>(src),
+        static_cast<size_t>(in_length),
+        inMode,
+        outMode,
+        g_outDspBuffer
+    );
+
+    env->ReleaseByteArrayElements(in_bytes, src, JNI_ABORT);
+    env->ReleaseStringUTFChars(in_bit_mode, inMode);
+    env->ReleaseStringUTFChars(out_bit_mode, outMode);
+
+    if (outSize == 0) return nullptr;
+
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(outSize));
+    if (result) {
+        env->SetByteArrayRegion(result, 0, static_cast<jsize>(outSize), reinterpret_cast<const jbyte*>(g_outDspBuffer.data()));
+    }
+    return result;
 }
 
 JNIEXPORT jint JNICALL

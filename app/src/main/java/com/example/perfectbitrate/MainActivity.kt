@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private var geckoRuntime: GeckoRuntime? = null
     private lateinit var audioManager: AudioManager
     private lateinit var spinnerBitDepth: Spinner
+    private lateinit var spinnerUpsample: Spinner
     private lateinit var switchAdBlock: SwitchCompat
     private lateinit var switchVolLock: SwitchCompat
     private lateinit var prefs: SharedPreferences
@@ -72,7 +73,8 @@ class MainActivity : AppCompatActivity() {
     private var isServiceBound = false
     private var activeWebExtensionPort: WebExtension.Port? = null
 
-    private var currentSampleRate = 48000
+    private var baseSampleRate = 48000
+    private var upsampleFactor = 1
     private var pcmPacketCount = 0L
     private var outputDeviceName = "内蔵スピーカー"
     private var activeOutputDevice: AudioDeviceInfo? = null
@@ -85,6 +87,9 @@ class MainActivity : AppCompatActivity() {
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
+
+    private val upsampleOptions = arrayOf("1x Direct", "2x Hi-Res", "4x Ultra", "8x Master")
+    private val upsampleFactorValues = arrayOf(1, 2, 4, 8)
 
     private var peakDbL = -60f
     private var peakDbR = -60f
@@ -99,7 +104,6 @@ class MainActivity : AppCompatActivity() {
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
-            // PCM受信が400ms以上途絶えた、または非再生時は確実にゼロに落とす
             if (now - lastPcmTime > 400L || !isPlayingState) {
                 peakDbL = -60f
                 peakDbR = -60f
@@ -143,6 +147,7 @@ class MainActivity : AppCompatActivity() {
             detectAudioOutputDevice()
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
+            playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -218,6 +223,7 @@ class MainActivity : AppCompatActivity() {
 
         geckoView = findViewById(R.id.geckoview)
         spinnerBitDepth = findViewById(R.id.spinnerBitDepth)
+        spinnerUpsample = findViewById(R.id.spinnerUpsample)
         switchAdBlock = findViewById(R.id.switchAdBlock)
         switchVolLock = findViewById(R.id.switchVolLock)
         val btnReload = findViewById<Button>(R.id.btnReload)
@@ -226,18 +232,18 @@ class MainActivity : AppCompatActivity() {
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
+        upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
 
         switchAdBlock.isChecked = isAdBlockOn
         switchVolLock.isChecked = false
         
         updateVolLockSwitchUi(false)
 
-        val adapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
-        adapter.setDropDownViewResource(R.layout.item_spinner_dap)
-        spinnerBitDepth.adapter = adapter
-
-        val initialIndex = bitModeValues.indexOf(currentBitMode).let { if (it >= 0) it else 0 }
-        spinnerBitDepth.setSelection(initialIndex)
+        val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
+        bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerBitDepth.adapter = bitAdapter
+        val initialBitIdx = bitModeValues.indexOf(currentBitMode).let { if (it >= 0) it else 0 }
+        spinnerBitDepth.setSelection(initialBitIdx)
 
         spinnerBitDepth.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -246,11 +252,30 @@ class MainActivity : AppCompatActivity() {
                     currentBitMode = selectedMode
                     prefs.edit { putString("selected_bit_mode", selectedMode) }
                     sendBitModeSetting(selectedMode)
-                    playbackService?.initAudioTrack(selectedMode, currentSampleRate, activeOutputDevice)
+                    playbackService?.initAudioTrack(selectedMode, baseSampleRate, upsampleFactor, activeOutputDevice)
                     bitActivityMask = 0
                     peakDbL = -60f
                     peakDbR = -60f
                     walkmanLevelMeter?.reset()
+                    updateStatus()
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
+        upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerUpsample.adapter = upsampleAdapter
+        val initialUpsampleIdx = upsampleFactorValues.indexOf(upsampleFactor).let { if (it >= 0) it else 0 }
+        spinnerUpsample.setSelection(initialUpsampleIdx)
+
+        spinnerUpsample.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selectedFactor = upsampleFactorValues[position]
+                if (selectedFactor != upsampleFactor) {
+                    upsampleFactor = selectedFactor
+                    prefs.edit { putInt("selected_upsample_factor", selectedFactor) }
+                    playbackService?.setUpsampling(selectedFactor)
                     updateStatus()
                 }
             }
@@ -391,7 +416,6 @@ class MainActivity : AppCompatActivity() {
                 val codecConfig = getCodecConfigMethod.invoke(codecStatus)
                 if (codecConfig != null) {
                     currentBtCodecName = parseComprehensiveCodec(codecConfig, codecStatus)
-                    Log.i("BitPerfect", "★ Bluetooth Codec Detected: $currentBtCodecName")
                 }
             }
         } catch (e: SecurityException) {
@@ -480,7 +504,7 @@ class MainActivity : AppCompatActivity() {
             peakDbR = -60f
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
-            playbackService?.initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+            playbackService?.initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
             try {
                 activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
             } catch (e: Exception) {}
@@ -523,12 +547,10 @@ class MainActivity : AppCompatActivity() {
     private fun registerAudioDeviceCallback() {
         audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                Log.i("BitPerfect", "★ Output device connected -> Scheduling detection...")
                 uiHandler.removeCallbacks(deviceDetectRunnable)
                 uiHandler.postDelayed(deviceDetectRunnable, 250)
             }
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                Log.i("BitPerfect", "★ Output device removed -> Scheduling detection...")
                 uiHandler.removeCallbacks(deviceDetectRunnable)
                 uiHandler.postDelayed(deviceDetectRunnable, 100)
             }
@@ -575,25 +597,43 @@ class MainActivity : AppCompatActivity() {
         updateStatus()
     }
 
+    private fun safeToJson(msg: Any?): JSONObject? {
+        return when (msg) {
+            is JSONObject -> msg
+            is String -> try { JSONObject(msg) } catch (e: Exception) { null }
+            is Map<*, *> -> try { JSONObject(msg) } catch (e: Exception) { null }
+            null -> null
+            else -> try { JSONObject(msg.toString()) } catch (e: Exception) { null }
+        }
+    }
+
     private fun handleIncomingMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "pcm" -> {
-                val base64Pcm = msg.getString("pcm")
-                val bitMode = msg.optString("bitMode", currentBitMode)
-                val sampleRate = msg.optInt("sampleRate", currentSampleRate)
-                if (sampleRate > 0) currentSampleRate = sampleRate
+                val base64Pcm = msg.optString("pcm", "")
+                if (base64Pcm.isNotEmpty()) {
+                    val bitMode = msg.optString("bitMode", currentBitMode)
+                    val sampleRate = msg.optInt("sampleRate", baseSampleRate)
+                    if (sampleRate > 0) baseSampleRate = sampleRate
 
-                val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
-                pcmPacketCount += pcmBytes.size
-                isPlayingState = true
-                lastPcmTime = System.currentTimeMillis()
+                    try {
+                        val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
+                        if (pcmBytes != null && pcmBytes.isNotEmpty()) {
+                            pcmPacketCount += pcmBytes.size
+                            isPlayingState = true
+                            lastPcmTime = System.currentTimeMillis()
 
-                playbackService?.pushPcm(pcmBytes, currentSampleRate, bitMode)
+                            playbackService?.pushPcm(pcmBytes, baseSampleRate, bitMode)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("BitPerfect", "PCM Base64 decode error", e)
+                    }
+                }
             }
             "codec" -> {
                 currentCodec = msg.optString("codec", currentCodec)
-                val sampleRate = msg.optInt("sampleRate", currentSampleRate)
-                if (sampleRate > 0) currentSampleRate = sampleRate
+                val sampleRate = msg.optInt("sampleRate", baseSampleRate)
+                if (sampleRate > 0) baseSampleRate = sampleRate
                 playbackService?.updateCodec(currentCodec)
             }
             "meta" -> {
@@ -630,14 +670,16 @@ class MainActivity : AppCompatActivity() {
         val isUsb = isUsbDevice(dev)
         updateVolLockSwitchUi(isUsb)
 
+        val dspTag = if (upsampleFactor > 1) " [DSP ${upsampleFactor}x]" else ""
+
         if (dev != null) {
             if (isUsb) {
-                badgeDirect.text = "DIRECT STREAM"
+                badgeDirect.text = "DIRECT STREAM$dspTag"
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_direct)
                 badgeDirect.setTextColor(Color.BLACK)
                 textCodec.text = currentCodec.uppercase()
             } else {
-                val btCodecBadge = if (currentBtCodecName.isNotEmpty()) "BT [$currentBtCodecName]" else "BLUETOOTH"
+                val btCodecBadge = if (currentBtCodecName.isNotEmpty()) "BT [$currentBtCodecName]$dspTag" else "BLUETOOTH$dspTag"
                 badgeDirect.text = btCodecBadge
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_bluetooth)
                 badgeDirect.setTextColor(Color.BLACK)
@@ -648,7 +690,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } else {
-            badgeDirect.text = "STANDARD MIX"
+            badgeDirect.text = "STANDARD MIX$dspTag"
             badgeDirect.setBackgroundResource(R.drawable.bg_badge_normal)
             badgeDirect.setTextColor(Color.LTGRAY)
             textCodec.text = currentCodec.uppercase()
@@ -661,11 +703,11 @@ class MainActivity : AppCompatActivity() {
             else -> "16 bit"
         }
 
-        val rateStr = String.format(java.util.Locale.US, "%.1f", currentSampleRate / 1000.0)
+        val effectiveRate = baseSampleRate * upsampleFactor
+        val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
         textTransfer.text = String.format("%.1f MB", mb)
 
-        // ★ 停止時または -50dB 以下は即座に "-inf" を表示
         val peakTextL = if (peakDbL > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbL) else "-inf"
         val peakTextR = if (peakDbR > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbR) else "-inf"
         textPeak.text = "PEAK  L: ${peakTextL} dB  /  R: ${peakTextR} dB"
@@ -684,7 +726,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupGeckoView() {
         val runtimeSettings = GeckoRuntimeSettings.Builder()
-            .consoleOutput(false)
+            .consoleOutput(true)
             .aboutConfigEnabled(false)
             .build()
 
@@ -722,9 +764,7 @@ class MainActivity : AppCompatActivity() {
 
             val messageDelegate = object : WebExtension.MessageDelegate {
                 override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
-                    if (message is JSONObject) {
-                        handleIncomingMessage(message)
-                    }
+                    safeToJson(message)?.let { handleIncomingMessage(it) }
                     return GeckoResult.fromValue(JSONObject())
                 }
 
@@ -735,9 +775,7 @@ class MainActivity : AppCompatActivity() {
 
                     port.setDelegate(object : WebExtension.PortDelegate {
                         override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                            if (message is JSONObject) {
-                                handleIncomingMessage(message)
-                            }
+                            safeToJson(message)?.let { handleIncomingMessage(it) }
                         }
                         override fun onDisconnect(port: WebExtension.Port) {
                             if (activeWebExtensionPort == port) activeWebExtensionPort = null

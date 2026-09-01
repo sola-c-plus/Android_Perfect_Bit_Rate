@@ -18,97 +18,115 @@
         android:paddingBottom="5dp"
         android:elevation="8dp">
 
-        <!-- 1段目: DIRECTバッジ + 出力DAC名 + 全スイッチ集約 -->
-        <LinearLayout
+        <!-- 1段目: DIRECTバッジ + 出力DAC名 + スピナー(BIT/DSP) + 全スイッチ -->
+        <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:scrollbars="none"
+            android:fillViewport="true">
 
-            <TextView
-                android:id="@+id/badgeDirect"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="DIRECT STREAM"
-                android:textColor="#000000"
-                android:textSize="8.5sp"
-                android:textStyle="bold"
-                android:background="@drawable/bg_badge_direct"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp"
-                android:paddingTop="1dp"
-                android:paddingBottom="1dp"
-                android:fontFamily="sans-serif-black" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
 
-            <TextView
-                android:id="@+id/textDacName"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="6dp"
-                android:layout_marginEnd="6dp"
-                android:text="WALKMAN"
-                android:textColor="#F0F0F0"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:fontFamily="sans-serif-medium" />
+                <TextView
+                    android:id="@+id/badgeDirect"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DIRECT STREAM"
+                    android:textColor="#000000"
+                    android:textSize="8.5sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_badge_direct"
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp"
+                    android:paddingTop="1dp"
+                    android:paddingBottom="1dp"
+                    android:fontFamily="sans-serif-black" />
 
-            <Spinner
-                android:id="@+id/spinnerBitDepth"
-                android:layout_width="wrap_content"
-                android:layout_height="22dp"
-                android:background="@drawable/bg_spinner_dap"
-                android:popupBackground="#1A1A1A"
-                android:layout_marginEnd="6dp"
-                android:gravity="center_vertical" />
+                <TextView
+                    android:id="@+id/textDacName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:layout_marginEnd="6dp"
+                    android:maxWidth="110dp"
+                    android:text="WALKMAN"
+                    android:textColor="#F0F0F0"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:fontFamily="sans-serif-medium" />
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchAdBlock"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="AD CUT"
-                android:textColor="#CCCCCC"
-                android:textSize="8.5sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-medium"
-                android:checked="true"
-                app:switchPadding="4dp"
-                app:thumbTint="@null"
-                app:trackTint="@null"
-                android:thumb="@drawable/switch_thumb_white"
-                app:track="@drawable/switch_track_walkman_outline"
-                android:layout_marginEnd="6dp" />
+                <!-- Bit Depth Spinner -->
+                <Spinner
+                    android:id="@+id/spinnerBitDepth"
+                    android:layout_width="wrap_content"
+                    android:layout_height="22dp"
+                    android:background="@drawable/bg_spinner_dap"
+                    android:popupBackground="#1A1A1A"
+                    android:layout_marginEnd="4dp"
+                    android:gravity="center_vertical" />
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchVolLock"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0dB"
-                android:textColor="#CCCCCC"
-                android:textSize="8.5sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-medium"
-                android:checked="false"
-                app:switchPadding="4dp"
-                app:thumbTint="@null"
-                app:trackTint="@null"
-                android:thumb="@drawable/switch_thumb_white"
-                app:track="@drawable/switch_track_walkman_outline"
-                android:layout_marginEnd="6dp" />
+                <!-- Ultra HQ Upsampling DSP Spinner -->
+                <Spinner
+                    android:id="@+id/spinnerUpsample"
+                    android:layout_width="wrap_content"
+                    android:layout_height="22dp"
+                    android:background="@drawable/bg_spinner_dap"
+                    android:popupBackground="#1A1A1A"
+                    android:layout_marginEnd="6dp"
+                    android:gravity="center_vertical" />
 
-            <Button
-                android:id="@+id/btnReload"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:text="↻"
-                android:textColor="#CCCCCC"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:backgroundTint="#222222"
-                android:padding="0dp" />
-        </LinearLayout>
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchAdBlock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="AD CUT"
+                    android:textColor="#CCCCCC"
+                    android:textSize="8.5sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-medium"
+                    android:checked="true"
+                    app:switchPadding="4dp"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline"
+                    android:layout_marginEnd="6dp" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchVolLock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0dB"
+                    android:textColor="#CCCCCC"
+                    android:textSize="8.5sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-medium"
+                    android:checked="false"
+                    app:switchPadding="4dp"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline"
+                    android:layout_marginEnd="6dp" />
+
+                <Button
+                    android:id="@+id/btnReload"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:text="↻"
+                    android:textColor="#CCCCCC"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#222222"
+                    android:padding="0dp" />
+            </LinearLayout>
+        </HorizontalScrollView>
 
         <!-- 区切り線 -->
         <View

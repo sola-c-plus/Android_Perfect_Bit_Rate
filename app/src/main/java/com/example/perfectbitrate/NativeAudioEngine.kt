@@ -12,7 +12,17 @@ object NativeAudioEngine {
     }
 
     external fun nativeInit()
-    // 戻り値: 0=失敗, 1=EXCLUSIVE(排他), 2=SHARED(共有)
+    external fun nativeConfigureUpsampler(factor: Int)
+    external fun nativeResetUpsampler()
+    external fun nativeProcessUpsample(
+        inBytes: ByteArray,
+        inLength: Int,
+        inBitMode: String,
+        outBitMode: String,
+        factor: Int
+    ): ByteArray?
+
+    // AAudio Direct Mode
     external fun nativeOpen(sampleRate: Int, channelCount: Int, encoding: Int, deviceId: Int): Int
     external fun nativeStart(): Boolean
     external fun nativeStop(): Boolean

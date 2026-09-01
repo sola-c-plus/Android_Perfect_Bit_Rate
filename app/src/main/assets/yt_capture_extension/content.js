@@ -1,4 +1,4 @@
-if (window.self !== window.top) {
+﻿if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
 
@@ -20,7 +20,7 @@ let silentGain = null;
 let activeMediaElement = null;
 
 const itagMap = {
-    '251': { name: 'Opus 160kbps (最高音質 48k)', rate: 48000 },
+    '251': { name: 'Opus 160kbps (48k)', rate: 48000 },
     '250': { name: 'Opus 70kbps (48k)', rate: 48000 },
     '249': { name: 'Opus 50kbps (48k)', rate: 48000 },
     '140': { name: 'AAC 128kbps (44.1k)', rate: 44100 },
@@ -91,7 +91,7 @@ function scanStreamCodec() {
 
     try {
         const entries = performance.getEntriesByType('resource');
-        const startIdx = Math.max(0, entries.length - 15);
+        const startIdx = Math.max(0, entries.length - 20);
         for (let i = entries.length - 1; i >= startIdx; i--) {
             const url = entries[i].name;
             if (url.includes('videoplayback')) {
@@ -128,7 +128,19 @@ function scanStreamCodec() {
         });
     }
 }
-setInterval(scanStreamCodec, 2000);
+setInterval(scanStreamCodec, 1500);
+
+// 安全かつ高速な Base64 変換（スタック上限エラー完全回避）
+function bytesToBase64(bytes) {
+    let binary = '';
+    const len = bytes.byteLength;
+    const chunkSize = 4096;
+    for (let i = 0; i < len; i += chunkSize) {
+        const sub = bytes.subarray(i, Math.min(i + chunkSize, len));
+        binary += String.fromCharCode.apply(null, sub);
+    }
+    return btoa(binary);
+}
 
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
@@ -147,14 +159,14 @@ function attachAudioPipeline(mediaEl) {
 
     try {
         const ctx = getAudioContext();
+        if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+        }
 
-        // 1つの mediaEl につき createMediaElementSource は生涯1回だけ
         if (!mediaEl._bpSourceNode) {
             try {
                 mediaEl._bpSourceNode = ctx.createMediaElementSource(mediaEl);
-            } catch(e) {
-                // すでにアタッチされている場合は無視
-            }
+            } catch(e) {}
         }
 
         const sourceNode = mediaEl._bpSourceNode;
@@ -240,15 +252,11 @@ function attachAudioPipeline(mediaEl) {
                     bytes = new Uint8Array(buffer);
                 }
 
-                let binary = '';
-                const chunkSize = 16384;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-                }
+                const base64Pcm = bytesToBase64(bytes);
 
                 postNativeMessage({
                     type: "pcm",
-                    pcm: btoa(binary),
+                    pcm: base64Pcm,
                     sampleRate: currentSampleRate,
                     bitMode: currentBitMode
                 });
@@ -273,7 +281,7 @@ function attachAudioPipeline(mediaEl) {
     }
 }
 
-// ★ 最重要: HTMLMediaElement.prototype.play をフックして再生開始を100%確実に捕捉
+// play フック
 const origPlay = HTMLMediaElement.prototype.play;
 HTMLMediaElement.prototype.play = function() {
     const mediaEl = this;
@@ -291,7 +299,13 @@ function findAndAttachVideo() {
         scanStreamCodec();
     }
 }
-setInterval(findAndAttachVideo, 1500);
+setInterval(findAndAttachVideo, 1000);
+
+// DOM 監視
+const observer = new MutationObserver(() => {
+    findAndAttachVideo();
+});
+observer.observe(document.documentElement, { childList: true, subtree: true });
 
 function handleNativeMessage(msg) {
     const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
@@ -380,7 +394,7 @@ function checkMetadata() {
 }
 setInterval(checkMetadata, 1500);
 
-// ユーザーの全タップ/タッチ/キー操作で AudioContext を確実にアンロック
+// タッチ/クリック操作で確実に AudioContext を解除
 ['click', 'touchstart', 'touchend', 'pointerdown', 'keydown'].forEach(evt => {
     document.addEventListener(evt, () => {
         getAudioContext();

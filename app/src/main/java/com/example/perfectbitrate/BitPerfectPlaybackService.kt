@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -46,8 +46,10 @@ class BitPerfectPlaybackService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     var audioTrack: AudioTrack? = null
     private lateinit var audioManager: AudioManager
-    var currentSampleRate = 48000
+    var baseSampleRate = 48000
+    var effectiveSampleRate = 48000
     var currentBitMode = "16bit"
+    var upsampleFactor = 1
     var activeOutputDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
@@ -55,7 +57,7 @@ class BitPerfectPlaybackService : Service() {
     private val isInitializingTrack = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
-    private val MAX_QUEUE_CAPACITY = 28
+    private val MAX_QUEUE_CAPACITY = 32
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
     private val PREROLL_THRESHOLD = 4
@@ -120,6 +122,7 @@ class BitPerfectPlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        NativeAudioEngine.nativeInit()
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -223,26 +226,46 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    fun setUpsampling(factor: Int) {
+        if (upsampleFactor != factor) {
+            upsampleFactor = factor
+            NativeAudioEngine.nativeConfigureUpsampler(factor)
+            effectiveSampleRate = baseSampleRate * factor
+            isBuffering.set(true)
+            trackExecutor.execute {
+                initAudioTrack(currentBitMode, baseSampleRate, factor, activeOutputDevice)
+            }
+        }
+    }
+
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, bitMode: String) {
         isCurrentlyPlaying = true
+        baseSampleRate = sampleRate
+        val targetEffectiveRate = sampleRate * upsampleFactor
 
-        val needsRecreate = (sampleRate != currentSampleRate || 
+        val needsRecreate = (targetEffectiveRate != effectiveSampleRate || 
                              bitMode != currentBitMode || 
                              audioTrack == null || 
                              audioTrack?.state != AudioTrack.STATE_INITIALIZED)
 
         if (needsRecreate && !isInitializingTrack.get()) {
-            currentSampleRate = sampleRate
             currentBitMode = bitMode
             isBuffering.set(true)
             trackExecutor.execute {
-                initAudioTrack(currentBitMode, currentSampleRate, activeOutputDevice)
+                initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
             }
         }
 
-        if (!pcmQueue.offer(pcmBytes)) {
+        // Native NEON Polyphase DSP アップサンプリング
+        val processedBytes = if (upsampleFactor > 1) {
+            NativeAudioEngine.nativeProcessUpsample(pcmBytes, pcmBytes.size, bitMode, currentBitMode, upsampleFactor) ?: pcmBytes
+        } else {
+            pcmBytes
+        }
+
+        if (!pcmQueue.offer(processedBytes)) {
             pcmQueue.poll()
-            pcmQueue.offer(pcmBytes)
+            pcmQueue.offer(processedBytes)
         }
 
         if (isBuffering.get() && pcmQueue.size >= PREROLL_THRESHOLD) {
@@ -253,6 +276,7 @@ class BitPerfectPlaybackService : Service() {
     fun resetBuffer() {
         isBuffering.set(true)
         pcmQueue.clear()
+        NativeAudioEngine.nativeResetUpsampler()
         onPeakListener?.invoke(-60f, -60f, 0)
     }
 
@@ -269,7 +293,7 @@ class BitPerfectPlaybackService : Service() {
         if (changed && audioTrack != null) {
             isBuffering.set(true)
             trackExecutor.execute {
-                initAudioTrack(currentBitMode, currentSampleRate, device)
+                initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, device)
             }
         }
     }
@@ -347,6 +371,7 @@ class BitPerfectPlaybackService : Service() {
     fun forceCloseDacStream() {
         isBuffering.set(true)
         pcmQueue.clear()
+        NativeAudioEngine.nativeResetUpsampler()
         onPeakListener?.invoke(-60f, -60f, 0)
         trackExecutor.execute {
             audioLock.lock()
@@ -461,10 +486,12 @@ class BitPerfectPlaybackService : Service() {
             else -> "SPEAKER"
         }
 
+        val upsampleTag = if (upsampleFactor > 1) " [DSP ${upsampleFactor}x]" else ""
+
         val notification = NotificationCompat.Builder(this, "bitperfect_service_channel")
             .setContentTitle(currentTitle)
-            .setContentText("$currentArtist | $currentCodec")
-            .setSubText("${currentSampleRate}Hz $bitStr $deviceLabel")
+            .setContentText("$currentArtist | $currentCodec$upsampleTag")
+            .setSubText("${effectiveSampleRate}Hz $bitStr $deviceLabel")
             .setLargeIcon(currentArtwork)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(contentPendingIntent)
@@ -490,7 +517,12 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    fun initAudioTrack(bitMode: String, sampleRate: Int = currentSampleRate, targetDevice: AudioDeviceInfo? = null) {
+    fun initAudioTrack(
+        bitMode: String,
+        baseRate: Int = baseSampleRate,
+        factor: Int = upsampleFactor,
+        targetDevice: AudioDeviceInfo? = null
+    ) {
         if (isInitializingTrack.getAndSet(true)) {
             return
         }
@@ -502,6 +534,7 @@ class BitPerfectPlaybackService : Service() {
                 audioTrack = null
                 pcmQueue.clear()
                 isBuffering.set(true)
+                NativeAudioEngine.nativeResetUpsampler()
 
                 oldTrack?.let {
                     try {
@@ -521,7 +554,9 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 activeOutputDevice = targetDevice
-                currentSampleRate = sampleRate
+                baseSampleRate = baseRate
+                upsampleFactor = factor
+                effectiveSampleRate = baseRate * factor
 
                 val requestedEncodings = if (!isUsbDevice(targetDevice)) {
                     listOf(AudioFormat.ENCODING_PCM_16BIT)
@@ -548,11 +583,11 @@ class BitPerfectPlaybackService : Service() {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                             try {
                                 val mixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
-                                val matched = mixers.firstOrNull { it.format.sampleRate == sampleRate && it.format.encoding == enc }
-                                    ?: mixers.firstOrNull { it.format.sampleRate == sampleRate }
+                                val matched = mixers.firstOrNull { it.format.sampleRate == effectiveSampleRate && it.format.encoding == enc }
+                                    ?: mixers.firstOrNull { it.format.sampleRate == effectiveSampleRate }
                                     ?: AudioMixerAttributes.Builder(
                                         AudioFormat.Builder()
-                                            .setSampleRate(sampleRate)
+                                            .setSampleRate(effectiveSampleRate)
                                             .setEncoding(enc)
                                             .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                                             .build()
@@ -566,7 +601,7 @@ class BitPerfectPlaybackService : Service() {
                                 if (ok) {
                                     lastConfiguredMixerDevice = targetDevice
                                 }
-                                Log.i("BitPerfect", "★ setPreferredMixerAttributes ($sampleRate Hz, enc=$enc): $ok")
+                                Log.i("BitPerfect", "★ setPreferredMixerAttributes ($effectiveSampleRate Hz, enc=$enc): $ok")
                             } catch (e: Exception) {}
                         }
 
@@ -576,9 +611,9 @@ class BitPerfectPlaybackService : Service() {
                             else -> 2
                         }
 
-                        val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
-                        val desiredBuf = sampleRate * 2 * bytesPerSample / 4
-                        val bufferSize = max(if (minBuf > 0) minBuf * 4 else 8192, desiredBuf)
+                        val minBuf = AudioTrack.getMinBufferSize(effectiveSampleRate, AudioFormat.CHANNEL_OUT_STEREO, enc)
+                        val desiredBuf = effectiveSampleRate * 2 * bytesPerSample / 4
+                        val bufferSize = max(if (minBuf > 0) minBuf * 4 else 16384, desiredBuf)
 
                         val track = AudioTrack.Builder()
                             .setAudioAttributes(
@@ -590,7 +625,7 @@ class BitPerfectPlaybackService : Service() {
                             .setAudioFormat(
                                 AudioFormat.Builder()
                                     .setEncoding(enc)
-                                    .setSampleRate(sampleRate)
+                                    .setSampleRate(effectiveSampleRate)
                                     .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                                     .build()
                             )
@@ -626,7 +661,7 @@ class BitPerfectPlaybackService : Service() {
                 currentBitMode = actualModeStr
                 onActualBitModeChanged?.invoke(actualModeStr)
 
-                Log.i("BitPerfect", "★ AudioTrack Initialized: ${sampleRate}Hz, ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
+                Log.i("BitPerfect", "★ AudioTrack Initialized: ${effectiveSampleRate}Hz (Base:${baseRate}Hz x${factor}), ActualEncoding=$actualModeStr -> ${targetDevice?.productName ?: "Default"}")
             } finally {
                 audioLock.unlock()
             }
