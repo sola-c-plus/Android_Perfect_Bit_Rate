@@ -1,0 +1,233 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_bottom_sheet_dap"
+    android:paddingStart="18dp"
+    android:paddingEnd="18dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="24dp">
+
+    <!-- ドラッグハンドルバー -->
+    <View
+        android:layout_width="36dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:background="#444444"
+        android:layout_marginBottom="12dp" />
+
+    <!-- タイトルバー -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="AUDIO DSP SETTINGS"
+            android:textColor="#E5A93C"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="0.05" />
+
+        <Button
+            android:id="@+id/btnDialogClose"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:text="✕"
+            android:textColor="#AAAAAA"
+            android:textSize="12sp"
+            android:background="@drawable/bg_btn_icon"
+            android:padding="0dp" />
+    </LinearLayout>
+
+    <!-- 項目 1: 出力ビット深度 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="14dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="BIT DEPTH FORMAT"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DACへ伝送するPCMビット深度"
+                android:textColor="#777777"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <Spinner
+            android:id="@+id/dialogSpinnerBitDepth"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:background="@drawable/bg_spinner_dap"
+            android:popupBackground="#1A1A1A"
+            android:gravity="center_vertical" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1F1F1F"
+        android:layout_marginBottom="14dp" />
+
+    <!-- 項目 2: アップサンプリング DSP -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="14dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ULTRA HQ UPSAMPLING"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ARM NEON 高タップ数ポリフェーズFIR"
+                android:textColor="#777777"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <Spinner
+            android:id="@+id/dialogSpinnerUpsample"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:background="@drawable/bg_spinner_dap"
+            android:popupBackground="#1A1A1A"
+            android:gravity="center_vertical" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1F1F1F"
+        android:layout_marginBottom="14dp" />
+
+    <!-- 項目 3: 0dB Volume Lock -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="14dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/dialogTextVolLockTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0dB VOLUME LOCK"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium" />
+
+            <TextView
+                android:id="@+id/dialogTextVolLockSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="USB DAC接続時のビット落ち回避（最大音量固定）"
+                android:textColor="#777777"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/dialogSwitchVolLock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@null"
+            app:trackTint="@null"
+            android:thumb="@drawable/switch_thumb_white"
+            app:track="@drawable/switch_track_walkman_outline" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1F1F1F"
+        android:layout_marginBottom="14dp" />
+
+    <!-- 項目 4: AD BLOCK (広告カット) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="AD CUT (広告自動カット)"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="YouTube Music 動画広告の自動スキップ"
+                android:textColor="#777777"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/dialogSwitchAdBlock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@null"
+            app:trackTint="@null"
+            android:thumb="@drawable/switch_thumb_white"
+            app:track="@drawable/switch_track_walkman_outline"
+            android:checked="true" />
+    </LinearLayout>
+
+</LinearLayout>

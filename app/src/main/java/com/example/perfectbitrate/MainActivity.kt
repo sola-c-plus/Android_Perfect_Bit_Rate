@@ -39,6 +39,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -63,10 +64,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var geckoSession: GeckoSession
     private var geckoRuntime: GeckoRuntime? = null
     private lateinit var audioManager: AudioManager
-    private lateinit var spinnerBitDepth: Spinner
-    private lateinit var spinnerUpsample: Spinner
-    private lateinit var switchAdBlock: SwitchCompat
-    private lateinit var switchVolLock: SwitchCompat
     private lateinit var prefs: SharedPreferences
 
     private var playbackService: BitPerfectPlaybackService? = null
@@ -88,7 +85,7 @@ class MainActivity : AppCompatActivity() {
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
 
-    private val upsampleOptions = arrayOf("1x Direct", "2x Hi-Res", "4x Ultra", "8x Master")
+    private val upsampleOptions = arrayOf("1x Direct (Bypass)", "2x Hi-Res (96k/88k)", "4x Ultra (192k/176k)", "8x Master (384k/352k)")
     private val upsampleFactorValues = arrayOf(1, 2, 4, 8)
 
     private var peakDbL = -60f
@@ -99,6 +96,8 @@ class MainActivity : AppCompatActivity() {
     private var isAdBlockOn = true
     private var isVolLockOn = false
     private var isPlayingState = false
+
+    private var currentSettingsDialog: BottomSheetDialog? = null
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
@@ -155,10 +154,6 @@ class MainActivity : AppCompatActivity() {
                     if (actualMode != currentBitMode) {
                         currentBitMode = actualMode
                         sendBitModeSetting(actualMode)
-                        val idx = bitModeValues.indexOf(actualMode)
-                        if (idx >= 0 && spinnerBitDepth.selectedItemPosition != idx) {
-                            spinnerBitDepth.setSelection(idx)
-                        }
                         updateStatus()
                     }
                 }
@@ -175,7 +170,6 @@ class MainActivity : AppCompatActivity() {
             playbackService?.onDeviceDisconnectedListener = {
                 runOnUiThread {
                     isVolLockOn = false
-                    switchVolLock.isChecked = false
                     prefs.edit { putBoolean("vol_lock_enabled", false) }
                     detectAudioOutputDevice()
                 }
@@ -222,87 +216,14 @@ class MainActivity : AppCompatActivity() {
         walkmanLevelMeter = findViewById(R.id.walkmanLevelMeter)
 
         geckoView = findViewById(R.id.geckoview)
-        spinnerBitDepth = findViewById(R.id.spinnerBitDepth)
-        spinnerUpsample = findViewById(R.id.spinnerUpsample)
-        switchAdBlock = findViewById(R.id.switchAdBlock)
-        switchVolLock = findViewById(R.id.switchVolLock)
         val btnReload = findViewById<Button>(R.id.btnReload)
+        val btnSettings = findViewById<Button>(R.id.btnSettings)
 
         prefs = getSharedPreferences("bp_settings", Context.MODE_PRIVATE)
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
-
-        switchAdBlock.isChecked = isAdBlockOn
-        switchVolLock.isChecked = false
-        
-        updateVolLockSwitchUi(false)
-
-        val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
-        bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
-        spinnerBitDepth.adapter = bitAdapter
-        val initialBitIdx = bitModeValues.indexOf(currentBitMode).let { if (it >= 0) it else 0 }
-        spinnerBitDepth.setSelection(initialBitIdx)
-
-        spinnerBitDepth.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedMode = bitModeValues[position]
-                if (selectedMode != currentBitMode) {
-                    currentBitMode = selectedMode
-                    prefs.edit { putString("selected_bit_mode", selectedMode) }
-                    sendBitModeSetting(selectedMode)
-                    playbackService?.initAudioTrack(selectedMode, baseSampleRate, upsampleFactor, activeOutputDevice)
-                    bitActivityMask = 0
-                    peakDbL = -60f
-                    peakDbR = -60f
-                    walkmanLevelMeter?.reset()
-                    updateStatus()
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
-        upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
-        spinnerUpsample.adapter = upsampleAdapter
-        val initialUpsampleIdx = upsampleFactorValues.indexOf(upsampleFactor).let { if (it >= 0) it else 0 }
-        spinnerUpsample.setSelection(initialUpsampleIdx)
-
-        spinnerUpsample.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedFactor = upsampleFactorValues[position]
-                if (selectedFactor != upsampleFactor) {
-                    upsampleFactor = selectedFactor
-                    prefs.edit { putInt("selected_upsample_factor", selectedFactor) }
-                    playbackService?.setUpsampling(selectedFactor)
-                    updateStatus()
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
-            isAdBlockOn = isChecked
-            prefs.edit { putBoolean("ad_block_enabled", isChecked) }
-            sendAdBlockSetting(isChecked)
-        }
-
-        switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            val isUsb = isUsbDevice(activeOutputDevice)
-
-            if (isChecked && !isUsb) {
-                switchVolLock.isChecked = false
-                return@setOnCheckedChangeListener
-            }
-            isVolLockOn = isChecked
-            prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
-            playbackService?.isVolumeLocked = isChecked
-            if (isChecked) {
-                playbackService?.lockSystemVolumeToMax()
-            }
-            updateStatus()
-        }
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -320,6 +241,10 @@ class MainActivity : AppCompatActivity() {
             reloadDirectStream()
         }
 
+        btnSettings.setOnClickListener {
+            showSettingsDialog()
+        }
+
         uiHandler.post(uiUpdateRunnable)
     }
 
@@ -328,22 +253,107 @@ class MainActivity : AppCompatActivity() {
         return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
     }
 
-    private fun updateVolLockSwitchUi(isUsb: Boolean) {
+    private fun showSettingsDialog() {
+        val dialog = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.dialog_settings, null)
+        dialog.setContentView(view)
+        currentSettingsDialog = dialog
+
+        val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
+        val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
+        val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
+        val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
+        val btnClose = view.findViewById<Button>(R.id.btnDialogClose)
+        val textVolLockTitle = view.findViewById<TextView>(R.id.dialogTextVolLockTitle)
+        val textVolLockSub = view.findViewById<TextView>(R.id.dialogTextVolLockSub)
+
+        // 1. Bit Depth Spinner
+        val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
+        bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerBitDepth.adapter = bitAdapter
+        val initialBitIdx = bitModeValues.indexOf(currentBitMode).let { if (it >= 0) it else 0 }
+        spinnerBitDepth.setSelection(initialBitIdx)
+
+        spinnerBitDepth.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedMode = bitModeValues[position]
+                if (selectedMode != currentBitMode) {
+                    currentBitMode = selectedMode
+                    prefs.edit { putString("selected_bit_mode", selectedMode) }
+                    sendBitModeSetting(selectedMode)
+                    playbackService?.initAudioTrack(selectedMode, baseSampleRate, upsampleFactor, activeOutputDevice)
+                    bitActivityMask = 0
+                    peakDbL = -60f
+                    peakDbR = -60f
+                    walkmanLevelMeter?.reset()
+                    updateStatus()
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // 2. Upsample Spinner
+        val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
+        upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerUpsample.adapter = upsampleAdapter
+        val initialUpsampleIdx = upsampleFactorValues.indexOf(upsampleFactor).let { if (it >= 0) it else 0 }
+        spinnerUpsample.setSelection(initialUpsampleIdx)
+
+        spinnerUpsample.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedFactor = upsampleFactorValues[position]
+                if (selectedFactor != upsampleFactor) {
+                    upsampleFactor = selectedFactor
+                    prefs.edit { putInt("selected_upsample_factor", selectedFactor) }
+                    playbackService?.setUpsampling(selectedFactor)
+                    updateStatus()
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // 3. 0dB Volume Lock Switch
+        val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
             switchVolLock.alpha = 1.0f
-            switchVolLock.setTextColor(Color.parseColor("#CCCCCC"))
+            textVolLockTitle.setTextColor(Color.WHITE)
+            textVolLockSub.setTextColor(Color.parseColor("#777777"))
         } else {
-            if (switchVolLock.isChecked) {
-                switchVolLock.isChecked = false
-                isVolLockOn = false
-                prefs.edit { putBoolean("vol_lock_enabled", false) }
-                playbackService?.isVolumeLocked = false
-            }
             switchVolLock.isEnabled = false
             switchVolLock.alpha = 0.35f
-            switchVolLock.setTextColor(Color.parseColor("#555555"))
+            textVolLockTitle.setTextColor(Color.parseColor("#666666"))
+            textVolLockSub.setTextColor(Color.parseColor("#444444"))
         }
+        switchVolLock.isChecked = isVolLockOn
+
+        switchVolLock.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked && !isUsbDevice(activeOutputDevice)) {
+                switchVolLock.isChecked = false
+                return@setOnCheckedChangeListener
+            }
+            isVolLockOn = isChecked
+            prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
+            playbackService?.isVolumeLocked = isChecked
+            if (isChecked) {
+                playbackService?.lockSystemVolumeToMax()
+            }
+            updateStatus()
+        }
+
+        // 4. Ad Block Switch
+        switchAdBlock.isChecked = isAdBlockOn
+        switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
+            isAdBlockOn = isChecked
+            prefs.edit { putBoolean("ad_block_enabled", isChecked) }
+            sendAdBlockSetting(isChecked)
+        }
+
+        btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.show()
     }
 
     private fun checkAndRequestPermissions() {
@@ -576,9 +586,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val isUsb = (usbDevice != null)
-        updateVolLockSwitchUi(isUsb)
-
         if (usbDevice != null) {
             activeOutputDevice = usbDevice
             outputDeviceName = usbDevice.productName.toString().replace("USB-Audio - ", "")
@@ -668,7 +675,6 @@ class MainActivity : AppCompatActivity() {
 
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
-        updateVolLockSwitchUi(isUsb)
 
         val dspTag = if (upsampleFactor > 1) " [DSP ${upsampleFactor}x]" else ""
 
