@@ -5,6 +5,16 @@
 
 constexpr double PI = 3.14159265358979323846;
 
+// 高速 TPDF (Triangular Probability Density Function) ディザー生成器
+static uint32_t g_ditherState = 0x87654321;
+inline float generateTpdfDither() {
+    g_ditherState = g_ditherState * 1664525u + 1013904223u;
+    int32_t r1 = static_cast<int32_t>(g_ditherState >> 16);
+    g_ditherState = g_ditherState * 1664525u + 1013904223u;
+    int32_t r2 = static_cast<int32_t>(g_ditherState >> 16);
+    return static_cast<float>(r1 - r2) / 65536.0f; // [-1.0, 1.0]
+}
+
 DspUpsampler::DspUpsampler() {
     configure(1, 48000.0f);
 }
@@ -83,7 +93,7 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     factor_ = (factor == 2 || factor == 4 || factor == 8) ? factor : 1;
     inSampleRate_ = inSampleRate;
     generateFilterCoefficients(factor_);
-    equalizer_.setSampleRate(inSampleRate_ * factor_);
+    equalizer_.setSampleRate(static_cast<double>(inSampleRate_ * factor_));
     reset();
 }
 
@@ -205,10 +215,10 @@ size_t DspUpsampler::process(
         }
     }
 
-    // ★ SONY WALKMAN 10-Band EQ 処理
+    // ★ 64-bit Audiophile 10-Band EQ 処理
     equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-    // 出力PCMエンコード
+    // 出力PCMエンコード (TPDF ディザリング付き)
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
@@ -227,8 +237,11 @@ size_t DspUpsampler::process(
         }
     } else if (outBytesPerSample == 3) {
         for (size_t i = 0; i < numOutFrames; ++i) {
-            float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);
-            float r = std::clamp(tempOutR_[i], -1.0f, 1.0f);
+            float ditherL = generateTpdfDither() / 8388608.0f;
+            float ditherR = generateTpdfDither() / 8388608.0f;
+            float l = std::clamp(tempOutL_[i] + ditherL, -1.0f, 1.0f);
+            float r = std::clamp(tempOutR_[i] + ditherR, -1.0f, 1.0f);
+
             int32_t intL = static_cast<int32_t>(l >= 0.0f ? (l * 8388607.0f) : (l * 8388608.0f));
             int32_t intR = static_cast<int32_t>(r >= 0.0f ? (r * 8388607.0f) : (r * 8388608.0f));
             if (intL < 0) intL = 0x1000000 + intL;
@@ -245,8 +258,11 @@ size_t DspUpsampler::process(
     } else {
         auto* dst16 = reinterpret_cast<int16_t*>(dst);
         for (size_t i = 0; i < numOutFrames; ++i) {
-            float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);
-            float r = std::clamp(tempOutR_[i], -1.0f, 1.0f);
+            float ditherL = generateTpdfDither() / 32768.0f;
+            float ditherR = generateTpdfDither() / 32768.0f;
+            float l = std::clamp(tempOutL_[i] + ditherL, -1.0f, 1.0f);
+            float r = std::clamp(tempOutR_[i] + ditherR, -1.0f, 1.0f);
+
             dst16[i * 2]     = static_cast<int16_t>(l >= 0.0f ? (l * 32767.0f) : (l * 32768.0f));
             dst16[i * 2 + 1] = static_cast<int16_t>(r >= 0.0f ? (r * 32767.0f) : (r * 32768.0f));
         }
