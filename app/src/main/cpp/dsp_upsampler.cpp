@@ -26,6 +26,14 @@ void DspUpsampler::setDitherMode(DitherMode mode) {
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
 }
 
+void DspUpsampler::setFirFilterType(FirFilterType type) {
+    if (filterType_ != type) {
+        filterType_ = type;
+        generateFilterCoefficients(factor_);
+        reset();
+    }
+}
+
 double DspUpsampler::besselI0(double x) {
     double sum = 1.0;
     double term = 1.0;
@@ -39,6 +47,67 @@ double DspUpsampler::besselI0(double x) {
     return sum;
 }
 
+// ★ ヒルベルト/ケプストラム法による完全な最小位相化（プリリンギングゼロ変換）
+void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
+    int fftSize = 512;
+    while (fftSize < totalTaps * 2) fftSize *= 2;
+
+    std::vector<double> logMag(fftSize, 0.0);
+    const double eps = 1e-12;
+
+    for (int k = 0; k < fftSize; ++k) {
+        double real = 0.0, imag = 0.0;
+        for (int n = 0; n < totalTaps; ++n) {
+            double angle = -2.0 * PI * k * n / fftSize;
+            real += h[n] * std::cos(angle);
+            imag += h[n] * std::sin(angle);
+        }
+        double magSq = real * real + imag * imag;
+        logMag[k] = 0.5 * std::log(std::max(magSq, eps));
+    }
+
+    std::vector<double> cepstrum(fftSize, 0.0);
+    for (int n = 0; n < fftSize; ++n) {
+        double sum = 0.0;
+        for (int k = 0; k < fftSize; ++k) {
+            double angle = 2.0 * PI * k * n / fftSize;
+            sum += logMag[k] * std::cos(angle);
+        }
+        cepstrum[n] = sum / fftSize;
+    }
+
+    std::vector<double> causalCepstrum(fftSize, 0.0);
+    causalCepstrum[0] = cepstrum[0];
+    int half = fftSize / 2;
+    for (int n = 1; n < half; ++n) {
+        causalCepstrum[n] = 2.0 * cepstrum[n];
+    }
+    causalCepstrum[half] = cepstrum[half];
+
+    std::vector<double> minReal(fftSize, 0.0);
+    std::vector<double> minImag(fftSize, 0.0);
+    for (int k = 0; k < fftSize; ++k) {
+        double real = 0.0, imag = 0.0;
+        for (int n = 0; n < fftSize; ++n) {
+            double angle = -2.0 * PI * k * n / fftSize;
+            real += causalCepstrum[n] * std::cos(angle);
+            imag += causalCepstrum[n] * std::sin(angle);
+        }
+        double expReal = std::exp(real);
+        minReal[k] = expReal * std::cos(imag);
+        minImag[k] = expReal * std::sin(imag);
+    }
+
+    for (int n = 0; n < totalTaps; ++n) {
+        double sum = 0.0;
+        for (int k = 0; k < fftSize; ++k) {
+            double angle = 2.0 * PI * k * n / fftSize;
+            sum += minReal[k] * std::cos(angle) - minImag[k] * std::sin(angle);
+        }
+        h[n] = sum / fftSize;
+    }
+}
+
 void DspUpsampler::generateFilterCoefficients(int factor) {
     if (factor <= 1) {
         polyCoeffs_.clear();
@@ -49,20 +118,25 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         tapsPerPhase_ = 64;
     } else if (factor == 4) {
         tapsPerPhase_ = 48;
-    } else if (factor == 8) {
-        tapsPerPhase_ = 32;
     } else {
         tapsPerPhase_ = 32;
     }
 
     int totalTaps = factor * tapsPerPhase_;
+    
+    // ★ フィルタータイプ別のパラメータ設定
     double cutoff = 0.94 / (2.0 * factor);
     double beta = 10.5;
+
+    if (filterType_ == FirFilterType::LINEAR_PHASE_SLOW || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW) {
+        cutoff = 0.80 / (2.0 * factor);
+        beta = 6.0;
+    }
+
     double i0Beta = besselI0(beta);
     double center = (totalTaps - 1) * 0.5;
 
     std::vector<double> protoFilter(totalTaps);
-    double sumGain = 0.0;
 
     for (int i = 0; i < totalTaps; ++i) {
         double t = i - center;
@@ -70,12 +144,19 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         double norm = (2.0 * i / (totalTaps - 1)) - 1.0;
         double arg = 1.0 - norm * norm;
         double window = (arg >= 0.0) ? (besselI0(beta * std::sqrt(arg)) / i0Beta) : 0.0;
-
         protoFilter[i] = sinc * window;
-        sumGain += protoFilter[i];
     }
 
-    double scale = static_cast<double>(factor) / sumGain;
+    // ★ 最小位相化の適用 (Minimum Phase Sharp / Slow)
+    if (filterType_ == FirFilterType::MINIMUM_PHASE_SHARP || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW) {
+        convertToMinimumPhase(protoFilter, totalTaps);
+    }
+
+    double sumGain = 0.0;
+    for (int i = 0; i < totalTaps; ++i) {
+        sumGain += protoFilter[i];
+    }
+    double scale = static_cast<double>(factor) / (sumGain != 0.0 ? sumGain : 1.0);
 
     polyCoeffs_.resize(factor);
     for (int p = 0; p < factor; ++p) {
@@ -161,7 +242,7 @@ size_t DspUpsampler::process(
             tempInL_[i] = static_cast<float>(valL) / 8388608.0f;
             tempInR_[i] = static_cast<float>(valR) / 8388608.0f;
         }
-    } else { // 16bit
+    } else {
         numInFrames = inBytes / 4;
         if (numInFrames == 0) return 0;
         tempInL_.resize(numInFrames);
@@ -247,7 +328,7 @@ size_t DspUpsampler::process(
     outBuffer.resize(outTotalBytes);
     uint8_t* dst = outBuffer.data();
 
-    if (outBytesPerSample == 4) { // 32-bit Int
+    if (outBytesPerSample == 4) {
         auto* dst32 = reinterpret_cast<int32_t*>(dst);
         for (size_t i = 0; i < numOutFrames; ++i) {
             float l = std::clamp(tempOutL_[i], -1.0f, 1.0f);
@@ -255,7 +336,7 @@ size_t DspUpsampler::process(
             dst32[i * 2]     = static_cast<int32_t>(l >= 0.0f ? (l * 2147483647.0f) : (l * 2147483648.0f));
             dst32[i * 2 + 1] = static_cast<int32_t>(r >= 0.0f ? (r * 2147483647.0f) : (r * 2147483648.0f));
         }
-    } else if (outBytesPerSample == 3) { // 24-bit PCM
+    } else if (outBytesPerSample == 3) {
         const double scale = 8388607.0;
 
         for (size_t i = 0; i < numOutFrames; ++i) {
@@ -297,7 +378,7 @@ size_t DspUpsampler::process(
             dst[base + 4] = (intR >> 8) & 0xFF;
             dst[base + 5] = (intR >> 16) & 0xFF;
         }
-    } else { // 16-bit PCM
+    } else {
         const double scale = 32767.0;
 
         for (size_t i = 0; i < numOutFrames; ++i) {

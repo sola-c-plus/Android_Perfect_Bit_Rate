@@ -8,6 +8,7 @@ static AAudioEngine* g_engine = nullptr;
 static DspUpsampler* g_upsampler = nullptr;
 static std::vector<uint8_t> g_outDspBuffer;
 static int g_currentDitherMode = 1;
+static int g_currentFirFilterType = 0;
 
 extern "C" {
 
@@ -19,6 +20,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
+        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
     }
 }
 
@@ -28,6 +30,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
+        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
     }
     g_upsampler->configure(factor, static_cast<float>(sample_rate));
 }
@@ -51,11 +54,22 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDitherMode(
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFirFilterType(
+        JNIEnv *env, jobject thiz, jint type) {
+    g_currentFirFilterType = type;
+    if (!g_upsampler) {
+        g_upsampler = new DspUpsampler();
+    }
+    g_upsampler->setFirFilterType(static_cast<FirFilterType>(type));
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
+        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
     }
     g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
     if (gains) {
@@ -76,6 +90,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
+        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
     }
 
     const char* inMode = env->GetStringUTFChars(in_bit_mode, nullptr);

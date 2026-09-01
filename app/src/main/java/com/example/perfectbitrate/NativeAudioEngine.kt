@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import java.nio.ByteBuffer
 
@@ -15,6 +15,7 @@ object NativeAudioEngine {
     external fun nativeConfigureUpsampler(factor: Int, sampleRate: Int)
     external fun nativeResetUpsampler()
     external fun nativeSetDitherMode(mode: Int)
+    external fun nativeSetFirFilterType(type: Int)
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeProcessUpsample(
         inBytes: ByteArray,

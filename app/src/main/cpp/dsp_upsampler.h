@@ -14,10 +14,17 @@
 #endif
 
 enum class DitherMode : int {
-    NONE = 0,               // ディザーなし (Truncation)
-    TPDF = 1,               // 三角PDF (スタジオ標準)
-    HIGH_PASS_SHAPED = 2,   // ハイパス型ノイズシェーピング (高解像・中域クリア)
-    PSYCHOACOUSTIC = 3      // 心理音響4次ノイズシェーピング (Walkman SBM風・超高S/N)
+    NONE = 0,
+    TPDF = 1,
+    HIGH_PASS_SHAPED = 2,
+    PSYCHOACOUSTIC = 3
+};
+
+enum class FirFilterType : int {
+    LINEAR_PHASE_SHARP = 0,  // 直線位相・シャープ (原音忠実)
+    LINEAR_PHASE_SLOW = 1,   // 直線位相・スロー (滑らか)
+    MINIMUM_PHASE_SHARP = 2, // 最小位相・シャープ (プリリンギング0・パンチ力)
+    MINIMUM_PHASE_SLOW = 3   // 最小位相・スロー (プリリンギング0・アナログトーン)
 };
 
 template <typename T, size_t Alignment = 16>
@@ -62,6 +69,9 @@ public:
     void setDitherMode(DitherMode mode);
     DitherMode getDitherMode() const { return ditherMode_; }
 
+    void setFirFilterType(FirFilterType type);
+    FirFilterType getFirFilterType() const { return filterType_; }
+
     size_t process(
         const uint8_t* inPcm,
         size_t inBytes,
@@ -74,6 +84,7 @@ public:
 
 private:
     void generateFilterCoefficients(int factor);
+    void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
 
     int factor_ = 1;
@@ -83,6 +94,7 @@ private:
     int historyWritePos_ = 0;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
+    FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};

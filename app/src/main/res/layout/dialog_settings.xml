@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -48,7 +48,7 @@
             android:padding="0dp" />
     </LinearLayout>
 
-    <!-- ★ SONY WALKMAN 10-BAND EQ セクション -->
+    <!-- 10-BAND EQ セクション -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -179,8 +179,6 @@
 
     </LinearLayout>
 
-    <!-- ★ 下部設定項目（縦一列に配置） -->
-
     <!-- 1. 出力ビット深度 -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -225,7 +223,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 2. ★ DITHERING MODE (ディザリング方式切り替え) -->
+    <!-- 2. ディザリング方式 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -269,7 +267,51 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 3. アップサンプリング DSP -->
+    <!-- 3. ★ FIR フィルター特性切り替え (新規追加) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="FIR FILTER CHARACTER"
+                android:textColor="#FFFFFF"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="直線位相/最小位相 (プリリンギング・余韻)"
+                android:textColor="#777777"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <Spinner
+            android:id="@+id/dialogSpinnerFirFilter"
+            android:layout_width="wrap_content"
+            android:layout_height="30dp"
+            android:background="@drawable/bg_spinner_dap"
+            android:popupBackground="#1A1A1A" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1C1C1C"
+        android:layout_marginBottom="12dp" />
+
+    <!-- 4. アップサンプリング DSP -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -313,7 +355,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 4. 0dB Volume Lock -->
+    <!-- 5. 0dB Volume Lock -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -361,7 +403,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 5. AD CUT (広告自動カット) -->
+    <!-- 6. AD CUT -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
