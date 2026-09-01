@@ -151,7 +151,6 @@ class MainActivity : AppCompatActivity() {
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
 
-            // EQ初期状態を Native DSP へ送信
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -285,11 +284,17 @@ class MainActivity : AppCompatActivity() {
         val btnEqPlus = view.findViewById<Button>(R.id.btnEqPlus)
         val btnEqMinus = view.findViewById<Button>(R.id.btnEqMinus)
         val btnEqFlat = view.findViewById<Button>(R.id.btnEqFlat)
+        val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
+        val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
 
         // EQ View 初期値
         System.arraycopy(eqGains, 0, walkmanEqView.gains, 0, 10)
         walkmanEqView.isDirectBypass = !isEqEnabled
+        walkmanEqView.isEditMode = false
         switchEqEnable.isChecked = isEqEnabled
+        layoutEqAdjustControls.visibility = View.GONE
+        btnEqEdit.text = "調整"
+        btnEqEdit.setTextColor(Color.parseColor("#E5A93C"))
 
         fun updateEqHeader(bandIdx: Int, gain: Float) {
             textEqBandFreq.text = "${walkmanEqView.bandLabels[bandIdx]} Hz"
@@ -307,6 +312,24 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
             prefs.edit {
                 for (i in 0..9) putFloat("eq_gain_$i", eqGains[i])
+            }
+        }
+
+        // ★「調整」⇄「完了」ボタン切り替え
+        btnEqEdit.setOnClickListener {
+            val newEditMode = !walkmanEqView.isEditMode
+            walkmanEqView.isEditMode = newEditMode
+            if (newEditMode) {
+                btnEqEdit.text = "完了"
+                btnEqEdit.setTextColor(Color.WHITE)
+                layoutEqAdjustControls.visibility = View.VISIBLE
+                if (!switchEqEnable.isChecked) {
+                    switchEqEnable.isChecked = true
+                }
+            } else {
+                btnEqEdit.text = "調整"
+                btnEqEdit.setTextColor(Color.parseColor("#E5A93C"))
+                layoutEqAdjustControls.visibility = View.GONE
             }
         }
 

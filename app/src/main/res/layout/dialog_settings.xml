@@ -57,7 +57,7 @@
         android:padding="10dp"
         android:layout_marginBottom="14dp">
 
-        <!-- EQヘッダー: 選択中バンド数値 ＆ [+] [-] ＆ DIRECT ＆ FLAT -->
+        <!-- EQヘッダー: 選択中バンド数値 ＆ [+] [-] ＆ 調整/完了 ＆ FLAT ＆ DIRECT -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -65,51 +65,61 @@
             android:gravity="center_vertical"
             android:layout_marginBottom="6dp">
 
-            <TextView
-                android:id="@+id/textEqBandFreq"
+            <!-- 編集モード時に表示される周波数・ゲイン数値 -->
+            <LinearLayout
+                android:id="@+id/layoutEqAdjustControls"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="4K Hz"
-                android:textColor="#CCCCCC"
-                android:textSize="11.5sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-condensed" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:visibility="gone">
 
-            <TextView
-                android:id="@+id/textEqGainValue"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="+0.0 dB"
-                android:textColor="#E5A93C"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-black" />
+                <TextView
+                    android:id="@+id/textEqBandFreq"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="4K Hz"
+                    android:textColor="#CCCCCC"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-condensed" />
 
-            <!-- [+] [-] ステップボタン -->
-            <Button
-                android:id="@+id/btnEqPlus"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
-                android:text="＋"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:background="@drawable/bg_btn_icon"
-                android:layout_marginStart="10dp"
-                android:padding="0dp" />
+                <TextView
+                    android:id="@+id/textEqGainValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text="+0.0 dB"
+                    android:textColor="#E5A93C"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-black" />
 
-            <Button
-                android:id="@+id/btnEqMinus"
-                android:layout_width="26dp"
-                android:layout_height="26dp"
-                android:text="－"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:background="@drawable/bg_btn_icon"
-                android:layout_marginStart="4dp"
-                android:padding="0dp" />
+                <!-- [+] [-] ボタン -->
+                <Button
+                    android:id="@+id/btnEqPlus"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:text="＋"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_btn_icon"
+                    android:layout_marginStart="8dp"
+                    android:padding="0dp" />
+
+                <Button
+                    android:id="@+id/btnEqMinus"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:text="－"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_btn_icon"
+                    android:layout_marginStart="3dp"
+                    android:padding="0dp" />
+            </LinearLayout>
 
             <View
                 android:layout_width="0dp"
@@ -123,6 +133,20 @@
                 android:layout_height="24dp"
                 android:text="FLAT"
                 android:textColor="#888888"
+                android:textSize="9.5sp"
+                android:textStyle="bold"
+                android:background="@drawable/bg_btn_icon"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:layout_marginEnd="6dp" />
+
+            <!-- ★ 実機準拠「調整」/「完了」ボタン -->
+            <Button
+                android:id="@+id/btnEqEdit"
+                android:layout_width="wrap_content"
+                android:layout_height="24dp"
+                android:text="調整"
+                android:textColor="#E5A93C"
                 android:textSize="9.5sp"
                 android:textStyle="bold"
                 android:background="@drawable/bg_btn_icon"
@@ -151,15 +175,17 @@
                 android:checked="false" />
         </LinearLayout>
 
-        <!-- WALKMAN 1Z 10-Band グラフィカル・カーブ View -->
+        <!-- WALKMAN 1Z 10-Band スタイリッシュ・カーブ View -->
         <com.example.perfectbitrate.WalkmanEqView
             android:id="@+id/walkmanEqView"
             android:layout_width="match_parent"
-            android:layout_height="130dp" />
+            android:layout_height="125dp" />
 
     </LinearLayout>
 
-    <!-- 項目 1: 出力ビット深度 -->
+    <!-- ★ 下部設定項目（すべて美しい縦一列配置） -->
+
+    <!-- 1. 出力ビット深度 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -203,7 +229,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 項目 2: アップサンプリング DSP -->
+    <!-- 2. アップサンプリング DSP -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -247,7 +273,55 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 項目 3: 0dB Volume Lock & AD CUT -->
+    <!-- 3. 0dB Volume Lock -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/dialogTextVolLockTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0dB VOLUME LOCK"
+                android:textColor="#FFFFFF"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/dialogTextVolLockSub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="USB DAC接続時のビット落ち回避（最大音量固定）"
+                android:textColor="#777777"
+                android:textSize="9.5sp" />
+        </LinearLayout>
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/dialogSwitchVolLock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@null"
+            app:trackTint="@null"
+            android:thumb="@drawable/switch_thumb_white"
+            app:track="@drawable/switch_track_walkman_outline" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#1C1C1C"
+        android:layout_marginBottom="12dp" />
+
+    <!-- 4. AD CUT (広告自動カット) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -261,43 +335,9 @@
             android:orientation="vertical">
 
             <TextView
-                android:id="@+id/dialogTextVolLockTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="0dB VOL LOCK"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/dialogTextVolLockSub"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="DAC最大音量固定"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
-        </LinearLayout>
-
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/dialogSwitchVolLock"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:thumbTint="@null"
-            app:trackTint="@null"
-            android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline"
-            android:layout_marginEnd="16dp" />
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="AD CUT"
+                android:text="AD CUT (広告自動カット)"
                 android:textColor="#FFFFFF"
                 android:textSize="11.5sp"
                 android:textStyle="bold" />
@@ -305,7 +345,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="広告自動カット"
+                android:text="YouTube Music 動画広告の自動スキップ"
                 android:textColor="#777777"
                 android:textSize="9.5sp" />
         </LinearLayout>
