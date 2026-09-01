@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.*
@@ -6,7 +6,6 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 class WalkmanEqView @JvmOverloads constructor(
@@ -32,38 +31,40 @@ class WalkmanEqView @JvmOverloads constructor(
             invalidate()
         }
 
-    var selectedBandIndex = 7 // デフォルト: 4K
+    var selectedBandIndex = 7
         set(value) {
             field = value.coerceIn(0, 9)
             invalidate()
             onBandSelectedListener?.invoke(field, gains[field])
         }
 
-    // ★ ドラッグ中に対象バンドを固定するロック変数
     private var activeDragBandIndex = -1
 
     var onGainChangedListener: ((Int, Float, FloatArray) -> Unit)? = null
     var onBandSelectedListener: ((Int, Float) -> Unit)? = null
 
+    // 1dB 刻みの精細グリッド線
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#181818")
-        strokeWidth = 0.8f * density
+        color = Color.parseColor("#1C1C1C")
+        strokeWidth = 0.75f * density
     }
 
+    // 0dB センターライン
+    private val centerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#3C3C3C")
+        strokeWidth = 1.0f * density
+    }
+
+    // 外枠ボーダー
     private val gridBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#282828")
+        color = Color.parseColor("#2E2E2E")
         strokeWidth = 1.0f * density
         style = Paint.Style.STROKE
     }
 
-    private val centerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#333333")
-        strokeWidth = 1.0f * density
-    }
-
     private val cursorLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E0E0E0")
-        strokeWidth = 1.0f * density
+        color = Color.parseColor("#E5A93C")
+        strokeWidth = 1.2f * density
     }
 
     private val curvePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -87,15 +88,15 @@ class WalkmanEqView @JvmOverloads constructor(
     }
 
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#777777")
-        textSize = 8.5f * density
+        color = Color.parseColor("#888888")
+        textSize = 9.0f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val selectedLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFFFFF")
-        textSize = 9.0f * density
+        textSize = 9.5f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
@@ -114,15 +115,26 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
 
-        val maxGridW = min(w.toFloat() - 48f * density, 340f * density)
-        val horizontalMargin = (w.toFloat() - maxGridW) / 2f
+        val labelAreaHeight = 18f * density
+        val topPadding = 6f * density
+        val availableHeight = h.toFloat() - topPadding - labelAreaHeight
 
-        gridLeft = horizontalMargin
-        gridRight = w.toFloat() - horizontalMargin
-        gridTop = 6f * density
-        gridBottom = h.toFloat() - 18f * density
-        gridWidth = gridRight - gridLeft
-        gridHeight = gridBottom - gridTop
+        // ★ 実機完全準拠: グリッド枠のアスペクト比を厳密に「横 : 縦 ＝ 1.48 : 1 (ほぼ 3 : 2)」に固定！
+        gridHeight = availableHeight
+        gridWidth = gridHeight * 1.48f
+
+        // 画面幅を超えないよう安全マージンチェック
+        val maxAllowedWidth = w.toFloat() - 32f * density
+        if (gridWidth > maxAllowedWidth) {
+            gridWidth = maxAllowedWidth
+            gridHeight = gridWidth / 1.48f
+        }
+
+        // 左右・上下の中央に美しく配置
+        gridLeft = (w.toFloat() - gridWidth) / 2f
+        gridRight = gridLeft + gridWidth
+        gridTop = topPadding + (availableHeight - gridHeight) / 2f
+        gridBottom = gridTop + gridHeight
 
         val stepX = gridWidth / (bandLabels.size - 1)
         for (i in bandLabels.indices) {
@@ -145,21 +157,21 @@ class WalkmanEqView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (gridWidth <= 0) return
+        if (gridWidth <= 0 || gridHeight <= 0) return
 
-        // 1. 水平グリッド線 (2dB おき = 10分割、11本)
-        val numHoriz = 10
+        // 1. 1dB 刻みの水平グリッド線 (20分割 = 21本)
+        val numHoriz = 20
         for (i in 0..numHoriz) {
             val y = gridTop + i * (gridHeight / numHoriz)
             if (i == numHoriz / 2) {
-                canvas.drawLine(gridLeft, y, gridRight, y, centerLinePaint)
+                canvas.drawLine(gridLeft, y, gridRight, y, centerLinePaint) // 0dB
             } else {
-                canvas.drawLine(gridLeft, y, gridRight, y, gridPaint)
+                canvas.drawLine(gridLeft, y, gridRight, y, gridPaint) // 1dB刻み
             }
         }
 
         // 2. 垂直グリッド線 & 周波数ラベル
-        val labelY = height.toFloat() - 3f * density
+        val labelY = height.toFloat() - 4f * density
         for (i in bandLabels.indices) {
             val x = bandX[i]
             canvas.drawLine(x, gridTop, x, gridBottom, gridPaint)
@@ -170,13 +182,13 @@ class WalkmanEqView @JvmOverloads constructor(
         // 外枠
         canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
-        // 3. 編集モード時: 選択中バンドの垂直カーソル線
+        // 3. 編集時カーソル
         if (isEditMode && !isDirectBypass && selectedBandIndex in 0..9) {
             val curX = bandX[selectedBandIndex]
             canvas.drawLine(curX, gridTop, curX, gridBottom, cursorLinePaint)
         }
 
-        // 4. Monotone Cubic Spline (自然な曲線補間)
+        // 4. Monotone Cubic Spline 曲線描画
         curvePath.reset()
         val n = 10
         val xArr = FloatArray(n)
@@ -204,7 +216,7 @@ class WalkmanEqView @JvmOverloads constructor(
         curvePath.moveTo(xArr[0], yArr[0])
         for (i in 0 until n - 1) {
             val hx = xArr[i + 1] - xArr[i]
-            val steps = 16
+            val steps = 24
             for (step in 1..steps) {
                 val t = step.toFloat() / steps
                 val t2 = t * t
@@ -221,13 +233,13 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawPath(curvePath, if (isDirectBypass) bypassCurvePaint else curvePaint)
 
-        // 5. まるぽちょ (編集モード時のみ描画)
+        // 5. 選択中ポイント描画
         if (isEditMode && !isDirectBypass) {
             for (i in 0 until n) {
                 val x = xArr[i]
                 val y = yArr[i]
                 if (i == selectedBandIndex) {
-                    pointPaint.color = Color.WHITE
+                    pointPaint.color = Color.parseColor("#E5A93C")
                     canvas.drawCircle(x, y, 5.0f * density, pointPaint)
                     pointPaint.color = Color.parseColor("#121212")
                     canvas.drawCircle(x, y, 2.0f * density, pointPaint)
@@ -241,16 +253,13 @@ class WalkmanEqView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!isEditMode || isDirectBypass) {
-            return false
-        }
+        if (!isEditMode || isDirectBypass) return false
 
         val x = event.x
         val y = event.y
 
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                // ★ 1. タッチ開始時に最も近いバンドを特定し、操作対象として完全ロック
                 var closestIdx = 0
                 var minDiff = Float.MAX_VALUE
                 for (i in bandX.indices) {
@@ -274,7 +283,6 @@ class WalkmanEqView @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                // ★ 2. ドラッグ中: 指が左右にブレても、最初に触ったバンド(activeDragBandIndex)のみを上下調整！
                 if (activeDragBandIndex in 0..9) {
                     val newGain = yToGain(y)
                     if (gains[activeDragBandIndex] != newGain) {
@@ -287,7 +295,6 @@ class WalkmanEqView @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                // ★ 3. 指を離したときにロック解除
                 activeDragBandIndex = -1
                 parent?.requestDisallowInterceptTouchEvent(false)
                 return true
