@@ -253,3 +253,13 @@ cd Perfect_Bit_Rate
 ## ⚠️ 免責事項
 * 本ソフトウェアは個人利用および研究・音質検証目的で開発されたオープンソースプロジェクトです。
 * YouTube および YouTube Music は Google LLC の商標です。本プロジェクトは Google LLC とは一切関係ありません。
+
+---
+
+## ライセンス　謝辞
+本アプリケーションに搭載されている多段カスケードFIRアップサンプラーおよび関連するDSPアルゴリズムの一部は、Michihito Takami 氏のオープンソースプロジェクト『totton-audio-de-mirroring』で公開されている先進的な音響信号処理技術に深く影響を受けています。
+同プロジェクトはMITライセンスのもとで公開されています。素晴らしい研究成果を公開してくださった作者に心より感謝申し上げます。
+
+- **totton-audio-de-mirroring** by Michihito Takami
+  - **URL:** https://github.com/michihitoTakami/totton-audio-de-mirroring
+  - **License:** MIT License
