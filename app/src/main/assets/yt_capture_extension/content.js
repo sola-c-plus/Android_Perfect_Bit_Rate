@@ -2,16 +2,20 @@ if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
 
+// ★ 画面消灯・バックグラウンド移行を完全に偽装 (常時アクティブ表示)
 try {
     Object.defineProperty(document, 'hidden', { value: false, writable: false });
     Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
     document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
+    window.addEventListener('blur', (e) => e.stopImmediatePropagation(), true);
+    window.addEventListener('pagehide', (e) => e.stopImmediatePropagation(), true);
 } catch(e) {}
 
 let port = null;
 let lastCodecName = "";
 let adBlockEnabled = true;
 let currentSampleRate = 48000;
+let userWantsPlaying = false;
 
 let audioCtx = null;
 let processor = null;
@@ -82,6 +86,18 @@ function forceFullVolume() {
     }
 }
 setInterval(forceFullVolume, 2000);
+
+// ★ 画面消灯時の自動一時停止（バックグラウンド停止）を阻止し、再生を常時維持
+function keepPlayingInBackground() {
+    const video = activeMediaElement || document.querySelector('video');
+    if (userWantsPlaying && video && video.paused && !video.ended) {
+        video.play().catch(() => {});
+    }
+    if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
+        audioCtx.resume().catch(() => {});
+    }
+}
+setInterval(keepPlayingInBackground, 1500);
 
 function scanStreamCodec() {
     let detectedName = "";
@@ -199,7 +215,6 @@ function attachAudioPipeline(mediaEl) {
                     }
                 }
 
-                // 生の 32-bit Float PCM (Little Endian)
                 const buffer = new ArrayBuffer(len * 8);
                 const view = new DataView(buffer);
                 for (let i = 0; i < len; i++) {
@@ -239,11 +254,18 @@ function attachAudioPipeline(mediaEl) {
 const origPlay = HTMLMediaElement.prototype.play;
 HTMLMediaElement.prototype.play = function() {
     const mediaEl = this;
+    userWantsPlaying = true;
     getAudioContext();
     attachAudioPipeline(mediaEl);
     scanStreamCodec();
     postNativeMessage({ type: "state", playing: true });
     return origPlay.apply(this, arguments);
+};
+
+const origPause = HTMLMediaElement.prototype.pause;
+HTMLMediaElement.prototype.pause = function() {
+    // ユーザー操作や Native コマンド以外での自動 pause は抑制可能
+    return origPause.apply(this, arguments);
 };
 
 function findAndAttachVideo() {
@@ -265,10 +287,12 @@ function handleNativeMessage(msg) {
     const video = activeMediaElement || document.querySelector('video');
 
     if (cmd === 'play') {
+        userWantsPlaying = true;
         getAudioContext();
         if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
         document.querySelector('#play-pause-button')?.click();
     } else if (cmd === 'pause') {
+        userWantsPlaying = false;
         if (video) video.pause();
         document.querySelector('#play-pause-button')?.click();
     } else if (cmd === 'resume_audio') {

@@ -25,6 +25,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
@@ -65,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     private var geckoRuntime: GeckoRuntime? = null
     private lateinit var audioManager: AudioManager
     private lateinit var prefs: SharedPreferences
+    private var appWakeLock: PowerManager.WakeLock? = null
 
     private var playbackService: BitPerfectPlaybackService? = null
     private var isServiceBound = false
@@ -110,8 +112,7 @@ class MainActivity : AppCompatActivity() {
     )
     private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
 
-    // ★ LPC スペクトル外挿 ＆ DSEE HX AI モード
-    private var currentDseeMode = 1 // デフォルト: DSEE_AI
+    private var currentDseeMode = 1
     private val dseeOptions = arrayOf(
         "OFF (Bypass)",
         "DSEE HX AI (LPC Adaptive / 自動適応)",
@@ -246,6 +247,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 画面消灯時でもバックグラウンド処理を維持する WakeLock
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        appWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::MainActivityWakeLock")
+        appWakeLock?.acquire()
+
         badgeDirect = findViewById(R.id.badgeDirect)
         textDacName = findViewById(R.id.textDacName)
         textRateBits = findViewById(R.id.textRateBits)
@@ -268,7 +274,7 @@ class MainActivity : AppCompatActivity() {
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
-        currentDseeMode = prefs.getInt("selected_dsee_mode", 1) // Default: DSEE_AI
+        currentDseeMode = prefs.getInt("selected_dsee_mode", 1)
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -982,7 +988,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupGeckoView() {
         val runtimeSettings = GeckoRuntimeSettings.Builder()
             .consoleOutput(true)
-            .aboutConfigEnabled(false)
+            .aboutConfigEnabled(true)
             .build()
 
         geckoRuntime = GeckoRuntime.getDefault(this)
@@ -1060,11 +1066,13 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         geckoSession.setActive(true)
+        geckoSession.setFocused(true)
     }
 
     override fun onStop() {
         super.onStop()
         geckoSession.setActive(true)
+        geckoSession.setFocused(true)
     }
 
     @SuppressLint("MissingPermission")
@@ -1072,6 +1080,9 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         uiHandler.removeCallbacks(uiUpdateRunnable)
         uiHandler.removeCallbacks(deviceDetectRunnable)
+        if (appWakeLock?.isHeld == true) {
+            appWakeLock?.release()
+        }
         try {
             unregisterReceiver(btReceiver)
         } catch (e: Exception) {}
