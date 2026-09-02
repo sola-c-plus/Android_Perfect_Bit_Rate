@@ -16,10 +16,13 @@ object NativeAudioEngine {
     external fun nativeResetUpsampler()
     external fun nativeSetDirectSource(enabled: Boolean)
     external fun nativeSetDitherMode(mode: Int)
+    external fun nativeSetLrIndependentDither(enabled: Boolean)
     external fun nativeSetFirFilterType(type: Int)
     external fun nativeSetDcPhaseType(type: Int)
     external fun nativeSetDseeMode(mode: Int)
+    external fun nativeSetDseeCustomParams(lpcAlgo: Int, gain: Float, extractFreq: Float, useQmf: Boolean)
     external fun nativeSetTransientMode(mode: Int)
+    external fun nativeSetTransientCustomParams(useGroupDelay: Boolean, useLattice: Boolean)
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeProcessUpsample(
         inBytes: ByteArray,

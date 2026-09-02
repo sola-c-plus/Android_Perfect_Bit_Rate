@@ -108,7 +108,6 @@
         android:paddingEnd="6dp"
         android:layout_marginBottom="14dp">
 
-        <!-- 1. ヘッダー: 「10-BAND EQUALIZER」 ＋ 「64bit IIR」 ＋ 右側に高さを揃えた「EQ スイッチ」 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -151,7 +150,6 @@
                 android:checked="false" />
         </LinearLayout>
 
-        <!-- 2. 下部コンテンツ: 左にEQグラフ、右にパラメータ調整ボタン (上揃え固定) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -349,52 +347,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 3. FIR フィルター特性切り替え -->
-    <LinearLayout
-        android:id="@+id/layoutSectionFir"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="FIR FILTER CHARACTER"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="直線位相/最小位相 (プリリンギング・余韻)"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
-        </LinearLayout>
-
-        <Spinner
-            android:id="@+id/dialogSpinnerFirFilter"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 4. DC PHASE LINEARIZER -->
+    <!-- 3. DC PHASE LINEARIZER -->
     <LinearLayout
         android:id="@+id/layoutSectionDcPhase"
         android:layout_width="match_parent"
@@ -439,52 +392,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 5. ★ TRANSIENT RECOVERY (トランジェント復元 / 新規追加) -->
-    <LinearLayout
-        android:id="@+id/layoutSectionTransient"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="TRANSIENT RECOVERY"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="音の立ち上がり・ドラム打撃感の復元 (FLAC/CD品質)"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
-        </LinearLayout>
-
-        <Spinner
-            android:id="@+id/dialogSpinnerTransient"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 6. HIGH-FREQ RESTORATION (高音補完) -->
+    <!-- 4. ★ HIGH-FREQ RESTORATION (構想通りシンプル 6 択) -->
     <LinearLayout
         android:id="@+id/layoutSectionDsee"
         android:layout_width="match_parent"
@@ -529,7 +437,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 7. アップサンプリング DSP -->
+    <!-- 5. アップサンプリング DSP -->
     <LinearLayout
         android:id="@+id/layoutSectionUpsample"
         android:layout_width="match_parent"
@@ -574,7 +482,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 8. 0dB Volume Lock -->
+    <!-- 6. 0dB Volume Lock -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -622,7 +530,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 9. AD CUT -->
+    <!-- 7. AD CUT -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

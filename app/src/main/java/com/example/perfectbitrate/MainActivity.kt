@@ -8,6 +8,8 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -35,6 +37,7 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -84,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
 
     private var isDirectSource = false
+    private var isLrIndependentDither = true
 
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
@@ -95,10 +99,6 @@ class MainActivity : AppCompatActivity() {
     private var currentDitherMode = 1
     private val ditherOptions = arrayOf("TPDF (Studio Standard)", "High-Pass Shaped (Clear)", "Psychoacoustic (Walkman SBM)", "None (Direct Bypass)")
     private val ditherModeValues = arrayOf(1, 2, 3, 0)
-
-    private var currentFirFilterType = 0
-    private val firFilterOptions = arrayOf("Linear Phase Sharp (Ref)", "Linear Phase Slow (Smooth)", "Minimum Phase Sharp (Punch)", "Minimum Phase Slow (Warm)")
-    private val firFilterTypeValues = arrayOf(0, 1, 2, 3)
 
     private var currentDcPhaseType = 2
     private val dcPhaseOptions = arrayOf(
@@ -114,22 +114,66 @@ class MainActivity : AppCompatActivity() {
 
     private var currentDseeMode = 1
     private val dseeOptions = arrayOf(
-        "OFF (Bypass)",
-        "DSEE HX AI (LPC Adaptive / 自動適応)",
-        "K2 LPC Natural (Linear Predictive / 上品)",
-        "Adaptive Exciter (Detail-Protected / 輪郭)"
+        "OFF",
+        "Auto AI",
+        "男性ボーカル",
+        "女性ボーカル",
+        "パーカッション",
+        "ストリングス"
     )
-    private val dseeModeValues = arrayOf(0, 1, 2, 3)
+    private val dseeModeValues = arrayOf(0, 1, 2, 3, 4, 5)
 
-    // ★ トランジェント復元オプション
-    private var currentTransientMode = 1 // デフォルト: NATURAL
-    private val transientOptions = arrayOf(
-        "OFF (Bypass)",
-        "Natural (CD Standard / 原音自然復元)",
-        "Punch (Dynamic Beat / 打撃感強化)",
-        "Acoustic (Pluck & Hammer / 弦・打鍵重視)"
+    // ★ プロファイル構造体 (QMF / 群遅延 / 格子型 を統合)
+    data class PresetProfile(
+        var firType: Int,
+        var transientMode: Int,
+        var lpcAlgo: Int,
+        var gain: Float,
+        var extractFreq: Float,
+        var useQmf: Boolean = false,
+        var useGroupDelay: Boolean = false,
+        var useLattice: Boolean = false
     )
-    private val transientModeValues = arrayOf(0, 1, 2, 3)
+
+    private val presetProfiles = mutableMapOf<Int, PresetProfile>()
+
+    private fun initDefaultProfiles() {
+        // [1] Auto AI (DSEE HX AI / QMF + 格子型適応)
+        presetProfiles[1] = PresetProfile(0, 1, 1, 0.12f, 10000.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        // [2] 男性ボーカル (K2 LPC + 温かみ)
+        presetProfiles[2] = PresetProfile(3, 3, 2, 0.09f, 8000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
+        // [3] 女性ボーカル (DSEE AI + 艶)
+        presetProfiles[3] = PresetProfile(2, 1, 1, 0.14f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        // [4] パーカッション (群遅延補正 + パンチ打撃)
+        presetProfiles[4] = PresetProfile(2, 2, 3, 0.16f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
+        // [5] ストリングス (K2 LPC + 空間余韻)
+        presetProfiles[5] = PresetProfile(1, 3, 2, 0.10f, 9000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
+
+        for (id in 1..5) {
+            val p = presetProfiles[id]!!
+            p.firType = prefs.getInt("prof_${id}_fir", p.firType)
+            p.transientMode = prefs.getInt("prof_${id}_trans", p.transientMode)
+            p.lpcAlgo = prefs.getInt("prof_${id}_lpc", p.lpcAlgo)
+            p.gain = prefs.getFloat("prof_${id}_gain", p.gain)
+            p.extractFreq = prefs.getFloat("prof_${id}_freq", p.extractFreq)
+            p.useQmf = prefs.getBoolean("prof_${id}_qmf", p.useQmf)
+            p.useGroupDelay = prefs.getBoolean("prof_${id}_gd", p.useGroupDelay)
+            p.useLattice = prefs.getBoolean("prof_${id}_lat", p.useLattice)
+        }
+    }
+
+    private fun applyPresetToDsp(presetId: Int) {
+        if (presetId == 0) {
+            NativeAudioEngine.nativeSetDseeMode(0)
+            return
+        }
+        val p = presetProfiles[presetId] ?: presetProfiles[1]!!
+        NativeAudioEngine.nativeSetFirFilterType(p.firType)
+        NativeAudioEngine.nativeSetTransientMode(p.transientMode)
+        NativeAudioEngine.nativeSetTransientCustomParams(p.useGroupDelay, p.useLattice)
+        NativeAudioEngine.nativeSetDseeMode(presetId)
+        NativeAudioEngine.nativeSetDseeCustomParams(p.lpcAlgo, p.gain, p.extractFreq, p.useQmf)
+    }
 
     private var isEqEnabled = false
     private val eqGains = FloatArray(10) { 0.0f }
@@ -195,10 +239,9 @@ class MainActivity : AppCompatActivity() {
 
             NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
-            NativeAudioEngine.nativeSetFirFilterType(currentFirFilterType)
+            NativeAudioEngine.nativeSetLrIndependentDither(isLrIndependentDither)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
-            NativeAudioEngine.nativeSetDseeMode(currentDseeMode)
-            NativeAudioEngine.nativeSetTransientMode(currentTransientMode)
+            applyPresetToDsp(currentDseeMode)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -277,15 +320,16 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("bp_settings", Context.MODE_PRIVATE)
         isDirectSource = prefs.getBoolean("direct_source_enabled", false)
+        isLrIndependentDither = prefs.getBoolean("lr_dither_enabled", true)
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
-        currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
         currentDseeMode = prefs.getInt("selected_dsee_mode", 1)
-        currentTransientMode = prefs.getInt("selected_transient_mode", 1) // Default: NATURAL
+
+        initDefaultProfiles()
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -308,8 +352,16 @@ class MainActivity : AppCompatActivity() {
             reloadDirectStream()
         }
 
+        // 通常タップ: 表設定 (シンプル)
         btnSettings.setOnClickListener {
             showSettingsDialog()
+        }
+
+        // 長押し: 裏設定 (開発者プリセットチューナー)
+        btnSettings.setOnLongClickListener {
+            Toast.makeText(this, "🔧 DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
+            showDevPresetsDialog()
+            true
         }
 
         uiHandler.post(uiUpdateRunnable)
@@ -320,6 +372,9 @@ class MainActivity : AppCompatActivity() {
         return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
     }
 
+    // =========================================================================
+    // 表設定 (シンプル操作画面)
+    // =========================================================================
     private fun showSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
@@ -331,27 +386,20 @@ class MainActivity : AppCompatActivity() {
         }
 
         val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
-
         val layoutSectionEq = view.findViewById<View>(R.id.layoutSectionEq)
         val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
-        val layoutSectionFir = view.findViewById<View>(R.id.layoutSectionFir)
         val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
-        val layoutSectionTransient = view.findViewById<View>(R.id.layoutSectionTransient)
         val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
         val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
 
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
-        val spinnerFirFilter = view.findViewById<Spinner>(R.id.dialogSpinnerFirFilter)
         val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
-        val spinnerTransient = view.findViewById<Spinner>(R.id.dialogSpinnerTransient)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
         val btnClose = view.findViewById<Button>(R.id.btnDialogClose)
-        val textVolLockTitle = view.findViewById<TextView>(R.id.dialogTextVolLockTitle)
-        val textVolLockSub = view.findViewById<TextView>(R.id.dialogTextVolLockSub)
 
         val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
         val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
@@ -369,16 +417,12 @@ class MainActivity : AppCompatActivity() {
 
             layoutSectionEq.alpha = alpha
             layoutSectionDither.alpha = alpha
-            layoutSectionFir.alpha = alpha
             layoutSectionDcPhase.alpha = alpha
-            layoutSectionTransient?.alpha = alpha
             layoutSectionDsee.alpha = alpha
             layoutSectionUpsample.alpha = alpha
 
             spinnerDither.isEnabled = enabled
-            spinnerFirFilter.isEnabled = enabled
             spinnerDcPhase.isEnabled = enabled
-            spinnerTransient?.isEnabled = enabled
             spinnerDsee.isEnabled = enabled
             spinnerUpsample.isEnabled = enabled
 
@@ -430,52 +474,31 @@ class MainActivity : AppCompatActivity() {
         setEditMode(false)
         updateEqHeader(walkmanEqView.selectedBandIndex, walkmanEqView.gains[walkmanEqView.selectedBandIndex])
 
-        walkmanEqView.onBandSelectedListener = { bandIdx, gain ->
-            updateEqHeader(bandIdx, gain)
-        }
-
+        walkmanEqView.onBandSelectedListener = { bandIdx, gain -> updateEqHeader(bandIdx, gain) }
         walkmanEqView.onGainChangedListener = { bandIdx, gain, allGains ->
             updateEqHeader(bandIdx, gain)
             System.arraycopy(allGains, 0, eqGains, 0, 10)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
-            prefs.edit {
-                for (i in 0..9) putFloat("eq_gain_$i", eqGains[i])
-            }
+            prefs.edit { for (i in 0..9) putFloat("eq_gain_$i", eqGains[i]) }
         }
 
-        btnEqEdit.setOnClickListener {
-            setEditMode(!walkmanEqView.isEditMode)
-        }
-
+        btnEqEdit.setOnClickListener { setEditMode(!walkmanEqView.isEditMode) }
         switchEqEnable.setOnCheckedChangeListener { _, isChecked ->
             isEqEnabled = isChecked
             walkmanEqView.isDirectBypass = !isChecked
             prefs.edit { putBoolean("eq_enabled", isChecked) }
             NativeAudioEngine.nativeSetEqualizer(isChecked, eqGains)
-            if (!isChecked) {
-                setEditMode(false)
-            }
+            if (!isChecked) setEditMode(false)
         }
 
-        btnEqPlus.setOnClickListener {
-            walkmanEqView.stepGain(+0.5f)
-        }
+        btnEqPlus.setOnClickListener { walkmanEqView.stepGain(+0.5f) }
+        btnEqMinus.setOnClickListener { walkmanEqView.stepGain(-0.5f) }
+        btnEqFlat.setOnClickListener { walkmanEqView.resetAllFlat() }
 
-        btnEqMinus.setOnClickListener {
-            walkmanEqView.stepGain(-0.5f)
-        }
-
-        btnEqFlat.setOnClickListener {
-            walkmanEqView.resetAllFlat()
-        }
-
-        // 1. Bit Depth Spinner
         val bitAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, bitOptions)
         bitAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerBitDepth.adapter = bitAdapter
-        val initialBitIdx = bitModeValues.indexOf(currentBitMode).let { if (it >= 0) it else 0 }
-        spinnerBitDepth.setSelection(initialBitIdx)
-
+        spinnerBitDepth.setSelection(bitModeValues.indexOf(currentBitMode).coerceAtLeast(0))
         spinnerBitDepth.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 val selectedMode = bitModeValues[position]
@@ -494,13 +517,10 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 2. Dithering Spinner
         val ditherAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, ditherOptions)
         ditherAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDither.adapter = ditherAdapter
-        val initialDitherIdx = ditherModeValues.indexOf(currentDitherMode).let { if (it >= 0) it else 0 }
-        spinnerDither.setSelection(initialDitherIdx)
-
+        spinnerDither.setSelection(ditherModeValues.indexOf(currentDitherMode).coerceAtLeast(0))
         spinnerDither.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 val selectedMode = ditherModeValues[position]
@@ -513,32 +533,10 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 3. FIR Filter Spinner
-        val firAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, firFilterOptions)
-        firAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
-        spinnerFirFilter.adapter = firAdapter
-        val initialFirIdx = firFilterTypeValues.indexOf(currentFirFilterType).let { if (it >= 0) it else 0 }
-        spinnerFirFilter.setSelection(initialFirIdx)
-
-        spinnerFirFilter.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedType = firFilterTypeValues[position]
-                if (selectedType != currentFirFilterType) {
-                    currentFirFilterType = selectedType
-                    prefs.edit { putInt("selected_fir_filter_type", selectedType) }
-                    NativeAudioEngine.nativeSetFirFilterType(selectedType)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        // 4. DC Phase Linearizer Spinner
         val dcPhaseAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dcPhaseOptions)
         dcPhaseAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDcPhase.adapter = dcPhaseAdapter
-        val initialDcPhaseIdx = dcPhaseTypeValues.indexOf(currentDcPhaseType).let { if (it >= 0) it else 1 }
-        spinnerDcPhase.setSelection(initialDcPhaseIdx)
-
+        spinnerDcPhase.setSelection(dcPhaseTypeValues.indexOf(currentDcPhaseType).coerceAtLeast(0))
         spinnerDcPhase.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 val selectedType = dcPhaseTypeValues[position]
@@ -551,51 +549,26 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 5. ★ TRANSIENT RECOVERY Spinner (新規追加)
-        val transientAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, transientOptions)
-        transientAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
-        spinnerTransient?.adapter = transientAdapter
-        val initialTransientIdx = transientModeValues.indexOf(currentTransientMode).let { if (it >= 0) it else 1 }
-        spinnerTransient?.setSelection(initialTransientIdx)
-
-        spinnerTransient?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedMode = transientModeValues[position]
-                if (selectedMode != currentTransientMode) {
-                    currentTransientMode = selectedMode
-                    prefs.edit { putInt("selected_transient_mode", selectedMode) }
-                    NativeAudioEngine.nativeSetTransientMode(selectedMode)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        // 6. HIGH-FREQ RESTORATION Spinner
         val dseeAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dseeOptions)
         dseeAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDsee.adapter = dseeAdapter
-        val initialDseeIdx = dseeModeValues.indexOf(currentDseeMode).let { if (it >= 0) it else 1 }
-        spinnerDsee.setSelection(initialDseeIdx)
-
+        spinnerDsee.setSelection(dseeModeValues.indexOf(currentDseeMode).coerceAtLeast(0))
         spinnerDsee.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 val selectedMode = dseeModeValues[position]
                 if (selectedMode != currentDseeMode) {
                     currentDseeMode = selectedMode
                     prefs.edit { putInt("selected_dsee_mode", selectedMode) }
-                    NativeAudioEngine.nativeSetDseeMode(selectedMode)
+                    applyPresetToDsp(selectedMode)
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 7. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
-        val initialUpsampleIdx = upsampleFactorValues.indexOf(upsampleFactor).let { if (it >= 0) it else 0 }
-        spinnerUpsample.setSelection(initialUpsampleIdx)
-
+        spinnerUpsample.setSelection(upsampleFactorValues.indexOf(upsampleFactor).coerceAtLeast(0))
         spinnerUpsample.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 val selectedFactor = upsampleFactorValues[position]
@@ -611,21 +584,15 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 8. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
             switchVolLock.alpha = 1.0f
-            textVolLockTitle.setTextColor(Color.WHITE)
-            textVolLockSub.setTextColor(Color.parseColor("#777777"))
         } else {
             switchVolLock.isEnabled = false
             switchVolLock.alpha = 0.35f
-            textVolLockTitle.setTextColor(Color.parseColor("#666666"))
-            textVolLockSub.setTextColor(Color.parseColor("#444444"))
         }
         switchVolLock.isChecked = isVolLockOn
-
         switchVolLock.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked && !isUsbDevice(activeOutputDevice)) {
                 switchVolLock.isChecked = false
@@ -634,13 +601,10 @@ class MainActivity : AppCompatActivity() {
             isVolLockOn = isChecked
             prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
             playbackService?.isVolumeLocked = isChecked
-            if (isChecked) {
-                playbackService?.lockSystemVolumeToMax()
-            }
+            if (isChecked) playbackService?.lockSystemVolumeToMax()
             updateStatus()
         }
 
-        // 9. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked
@@ -648,10 +612,179 @@ class MainActivity : AppCompatActivity() {
             sendAdBlockSetting(isChecked)
         }
 
-        btnClose.setOnClickListener {
-            dialog.dismiss()
+        btnClose.setOnClickListener { dialog.dismiss() }
+        dialog.show()
+    }
+
+    // =========================================================================
+    // 裏設定 (開発者専用 プリセットチューナー ＆ コードコピー)
+    // =========================================================================
+    private fun showDevPresetsDialog() {
+        val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
+        val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
+        dialog.setContentView(view)
+
+        dialog.setOnShowListener {
+            val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.setBackgroundColor(Color.TRANSPARENT)
         }
 
+        val spinnerTargetPreset = view.findViewById<Spinner>(R.id.spinnerTargetPreset)
+        val devSpinnerFir = view.findViewById<Spinner>(R.id.devSpinnerFir)
+        val devSpinnerTransient = view.findViewById<Spinner>(R.id.devSpinnerTransient)
+        val devSpinnerLpcAlgo = view.findViewById<Spinner>(R.id.devSpinnerLpcAlgo)
+        val devSpinnerGain = view.findViewById<Spinner>(R.id.devSpinnerGain)
+        val devSpinnerExtractFreq = view.findViewById<Spinner>(R.id.devSpinnerExtractFreq)
+        val devSwitchQmf = view.findViewById<SwitchCompat>(R.id.devSwitchQmf)
+        val devSwitchGroupDelay = view.findViewById<SwitchCompat>(R.id.devSwitchGroupDelay)
+        val devSwitchLattice = view.findViewById<SwitchCompat>(R.id.devSwitchLattice)
+        val devSwitchLrDither = view.findViewById<SwitchCompat>(R.id.devSwitchLrDither)
+        val btnDevCopyConfig = view.findViewById<Button>(R.id.btnDevCopyConfig)
+        val btnDevResetDefault = view.findViewById<Button>(R.id.btnDevResetDefault)
+        val btnDevClose = view.findViewById<Button>(R.id.btnDevClose)
+
+        val targetNames = arrayOf("Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
+        val targetIds = arrayOf(1, 2, 3, 4, 5)
+
+        val firOptions = arrayOf("Linear Phase Sharp", "Linear Phase Slow", "Minimum Phase Sharp", "Minimum Phase Slow")
+        val transientOptions = arrayOf("OFF", "Natural (CD)", "Punch (打撃)", "Acoustic (弦・打鍵)")
+        val lpcOptions = arrayOf("DSEE HX AI (適応)", "K2 LPC Natural (物理)", "Adaptive Exciter (輪郭)")
+        val gainOptions = arrayOf("控えめ (0.08)", "標準 (0.12)", "豊か (0.14)", "強力 (0.16)")
+        val gainValues = floatArrayOf(0.08f, 0.12f, 0.14f, 0.16f)
+        val freqOptions = arrayOf("8,000 Hz", "9,000 Hz", "10,000 Hz", "10,500 Hz", "12,000 Hz")
+        val freqValues = floatArrayOf(8000.0f, 9000.0f, 10000.0f, 10500.0f, 12000.0f)
+
+        fun setupAdapter(sp: Spinner, items: Array<String>) {
+            val ad = ArrayAdapter(this, R.layout.item_spinner_dap, items)
+            ad.setDropDownViewResource(R.layout.item_spinner_dap)
+            sp.adapter = ad
+        }
+
+        setupAdapter(spinnerTargetPreset, targetNames)
+        setupAdapter(devSpinnerFir, firOptions)
+        setupAdapter(devSpinnerTransient, transientOptions)
+        setupAdapter(devSpinnerLpcAlgo, lpcOptions)
+        setupAdapter(devSpinnerGain, gainOptions)
+        setupAdapter(devSpinnerExtractFreq, freqOptions)
+
+        var currentEditTargetId = currentDseeMode.let { if (it in 1..5) it else 1 }
+        spinnerTargetPreset.setSelection(targetIds.indexOf(currentEditTargetId).coerceAtLeast(0))
+
+        devSwitchLrDither.isChecked = isLrIndependentDither
+        devSwitchLrDither.setOnCheckedChangeListener { _, isChecked ->
+            isLrIndependentDither = isChecked
+            prefs.edit { putBoolean("lr_dither_enabled", isChecked) }
+            NativeAudioEngine.nativeSetLrIndependentDither(isChecked)
+        }
+
+        fun updateUiForProfile(targetId: Int) {
+            val p = presetProfiles[targetId] ?: return
+            devSpinnerFir.setSelection(p.firType.coerceIn(0, 3))
+            devSpinnerTransient.setSelection(p.transientMode.coerceIn(0, 3))
+            devSpinnerLpcAlgo.setSelection((p.lpcAlgo - 1).coerceIn(0, 2))
+
+            var closestGainIdx = 1
+            var minGDiff = Float.MAX_VALUE
+            for (i in gainValues.indices) {
+                val d = Math.abs(gainValues[i] - p.gain)
+                if (d < minGDiff) { minGDiff = d; closestGainIdx = i }
+            }
+            devSpinnerGain.setSelection(closestGainIdx)
+
+            var closestFIdx = 2
+            var minFDiff = Float.MAX_VALUE
+            for (i in freqValues.indices) {
+                val d = Math.abs(freqValues[i] - p.extractFreq)
+                if (d < minFDiff) { minFDiff = d; closestFIdx = i }
+            }
+            devSpinnerExtractFreq.setSelection(closestFIdx)
+
+            devSwitchQmf.isChecked = p.useQmf
+            devSwitchGroupDelay.isChecked = p.useGroupDelay
+            devSwitchLattice.isChecked = p.useLattice
+        }
+
+        updateUiForProfile(currentEditTargetId)
+
+        spinnerTargetPreset.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                currentEditTargetId = targetIds[position]
+                updateUiForProfile(currentEditTargetId)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        fun saveCurrentEditProfile() {
+            val p = presetProfiles[currentEditTargetId] ?: return
+            p.firType = devSpinnerFir.selectedItemPosition
+            p.transientMode = devSpinnerTransient.selectedItemPosition
+            p.lpcAlgo = devSpinnerLpcAlgo.selectedItemPosition + 1
+            p.gain = gainValues[devSpinnerGain.selectedItemPosition]
+            p.extractFreq = freqValues[devSpinnerExtractFreq.selectedItemPosition]
+            p.useQmf = devSwitchQmf.isChecked
+            p.useGroupDelay = devSwitchGroupDelay.isChecked
+            p.useLattice = devSwitchLattice.isChecked
+
+            prefs.edit {
+                putInt("prof_${currentEditTargetId}_fir", p.firType)
+                putInt("prof_${currentEditTargetId}_trans", p.transientMode)
+                putInt("prof_${currentEditTargetId}_lpc", p.lpcAlgo)
+                putFloat("prof_${currentEditTargetId}_gain", p.gain)
+                putFloat("prof_${currentEditTargetId}_freq", p.extractFreq)
+                putBoolean("prof_${currentEditTargetId}_qmf", p.useQmf)
+                putBoolean("prof_${currentEditTargetId}_gd", p.useGroupDelay)
+                putBoolean("prof_${currentEditTargetId}_lat", p.useLattice)
+            }
+
+            if (currentDseeMode == currentEditTargetId) {
+                applyPresetToDsp(currentDseeMode)
+            }
+        }
+
+        val listener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                saveCurrentEditProfile()
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        devSpinnerFir.onItemSelectedListener = listener
+        devSpinnerTransient.onItemSelectedListener = listener
+        devSpinnerLpcAlgo.onItemSelectedListener = listener
+        devSpinnerGain.onItemSelectedListener = listener
+        devSpinnerExtractFreq.onItemSelectedListener = listener
+
+        devSwitchQmf.setOnCheckedChangeListener { _, _ -> saveCurrentEditProfile() }
+        devSwitchGroupDelay.setOnCheckedChangeListener { _, _ -> saveCurrentEditProfile() }
+        devSwitchLattice.setOnCheckedChangeListener { _, _ -> saveCurrentEditProfile() }
+
+        // ★ 製品(APK)固定用コードコピーボタンの実装
+        btnDevCopyConfig.setOnClickListener {
+            val sb = StringBuilder()
+            sb.append("// ========================================================\n")
+            sb.append("// ★ 製品版(APK)固定用 デフォルトプリセット設定コード\n")
+            sb.append("// MainActivity.kt の initDefaultProfiles() に上書きしてください\n")
+            sb.append("// ========================================================\n")
+            for (id in 1..5) {
+                val p = presetProfiles[id]!!
+                val name = targetNames[id - 1]
+                sb.append("presetProfiles[$id] = PresetProfile(${p.firType}, ${p.transientMode}, ${p.lpcAlgo}, ${p.gain}f, ${p.extractFreq}f, ${p.useQmf}, ${p.useGroupDelay}, ${p.useLattice}) // [$id] $name\n")
+            }
+
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("PresetConfig", sb.toString())
+            clipboard.setPrimaryClip(clip)
+            Toast.makeText(this, "📋 製品用設定コードをクリップボードにコピーしました！", Toast.LENGTH_LONG).show()
+        }
+
+        btnDevResetDefault.setOnClickListener {
+            initDefaultProfiles()
+            updateUiForProfile(currentEditTargetId)
+            saveCurrentEditProfile()
+            Toast.makeText(this, "初期値にリセットしました", Toast.LENGTH_SHORT).show()
+        }
+
+        btnDevClose.setOnClickListener { dialog.dismiss() }
         dialog.show()
     }
 

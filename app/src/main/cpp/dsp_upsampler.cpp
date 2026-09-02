@@ -5,117 +5,42 @@
 
 constexpr double PI = 3.14159265358979323846;
 
-static uint32_t g_ditherState1 = 0x87654321;
-static uint32_t g_ditherState2 = 0x12345678;
+// ★ 左右完全独立の 2 系統 PRNG (無相関ディザ・空間拡散)
+static uint32_t g_ditherStateL1 = 0x87654321;
+static uint32_t g_ditherStateL2 = 0x12345678;
+static uint32_t g_ditherStateR1 = 0xDEADBEEF;
+static uint32_t g_ditherStateR2 = 0xCAFEBABE;
 
-inline double getTpdfDither() {
-    g_ditherState1 = g_ditherState1 * 1664525u + 1013904223u;
-    g_ditherState2 = g_ditherState2 * 1103515245u + 12345u;
-    double r1 = static_cast<double>(g_ditherState1 >> 9) * (1.0 / 8388608.0);
-    double r2 = static_cast<double>(g_ditherState2 >> 9) * (1.0 / 8388608.0);
+inline double getTpdfDitherL() {
+    g_ditherStateL1 = g_ditherStateL1 * 1664525u + 1013904223u;
+    g_ditherStateL2 = g_ditherStateL2 * 1103515245u + 12345u;
+    double r1 = static_cast<double>(g_ditherStateL1 >> 9) * (1.0 / 8388608.0);
+    double r2 = static_cast<double>(g_ditherStateL2 >> 9) * (1.0 / 8388608.0);
+    return (r1 - r2);
+}
+
+inline double getTpdfDitherR(bool independent) {
+    if (!independent) return getTpdfDitherL();
+    g_ditherStateR1 = g_ditherStateR1 * 1664525u + 1013904223u;
+    g_ditherStateR2 = g_ditherStateR2 * 1103515245u + 12345u;
+    double r1 = static_cast<double>(g_ditherStateR1 >> 9) * (1.0 / 8388608.0);
+    double r2 = static_cast<double>(g_ditherStateR2 >> 9) * (1.0 / 8388608.0);
     return (r1 - r2);
 }
 
 // -----------------------------------------------------------------------------
-// DspTransientRestorer 実装 (過渡応答・アタック感復元)
-// -----------------------------------------------------------------------------
-DspTransientRestorer::DspTransientRestorer() {
-    configure(TransientMode::NATURAL, 48000.0);
-}
-
-void DspTransientRestorer::configure(TransientMode mode, double sampleRate) {
-    mode_ = mode;
-    sampleRate_ = std::max(8000.0, sampleRate);
-    reset();
-
-    if (mode_ == TransientMode::OFF) {
-        isBypass_ = true;
-        return;
-    }
-
-    isBypass_ = false;
-
-    // サンプリング周波数に応じた時定数スケーリング
-    double timeScale = 48000.0 / sampleRate_;
-
-    switch (mode_) {
-        case TransientMode::NATURAL:
-            attackGain_ = 1.5;
-            fastAlpha_ = std::clamp(0.04 * timeScale, 0.005, 0.2);
-            slowAlpha_ = std::clamp(0.002 * timeScale, 0.0002, 0.02);
-            break;
-        case TransientMode::PUNCH:
-            attackGain_ = 2.4;
-            fastAlpha_ = std::clamp(0.06 * timeScale, 0.008, 0.25);
-            slowAlpha_ = std::clamp(0.0015 * timeScale, 0.0001, 0.015);
-            break;
-        case TransientMode::ACOUSTIC:
-            attackGain_ = 1.8;
-            fastAlpha_ = std::clamp(0.08 * timeScale, 0.01, 0.3);
-            slowAlpha_ = std::clamp(0.003 * timeScale, 0.0003, 0.03);
-            break;
-        default:
-            attackGain_ = 1.5;
-            fastAlpha_ = 0.04;
-            slowAlpha_ = 0.002;
-            break;
-    }
-}
-
-void DspTransientRestorer::reset() {
-    envFastL_ = 0.0; envSlowL_ = 0.0;
-    envFastR_ = 0.0; envSlowR_ = 0.0;
-    prevSampleL_ = 0.0; prevSampleR_ = 0.0;
-}
-
-void DspTransientRestorer::processStereo(float* left, float* right, size_t numFrames) {
-    if (isBypass_ || !left || !right || numFrames == 0) return;
-
-    for (size_t i = 0; i < numFrames; ++i) {
-        // L チャンネル
-        double inL = static_cast<double>(left[i]);
-        double absInL = std::abs(inL);
-
-        envFastL_ = envFastL_ * (1.0 - fastAlpha_) + absInL * fastAlpha_;
-        envSlowL_ = envSlowL_ * (1.0 - slowAlpha_) + absInL * slowAlpha_;
-
-        double diffL = std::max(0.0, envFastL_ - envSlowL_);
-        double transientRatioL = std::min(diffL / (envSlowL_ + 1e-4), 2.2);
-
-        double deltaL = inL - prevSampleL_;
-        prevSampleL_ = inL;
-
-        double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.4);
-        left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
-
-        // R チャンネル
-        double inR = static_cast<double>(right[i]);
-        double absInR = std::abs(inR);
-
-        envFastR_ = envFastR_ * (1.0 - fastAlpha_) + absInR * fastAlpha_;
-        envSlowR_ = envSlowR_ * (1.0 - slowAlpha_) + absInR * slowAlpha_;
-
-        double diffR = std::max(0.0, envFastR_ - envSlowR_);
-        double transientRatioR = std::min(diffR / (envSlowR_ + 1e-4), 2.2);
-
-        double deltaR = inR - prevSampleR_;
-        prevSampleR_ = inR;
-
-        double outR = inR + (deltaR * attackGain_ * transientRatioR * 0.4);
-        right[i] = static_cast<float>(std::clamp(outR, -1.0, 1.0));
-    }
-}
-
-// -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装
+// DspLpcHarmonicAi 実装 (QMF サブバンド Noise-to-Tone 分離対応)
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
-    configure(DseeMode::DSEE_AI, 48000.0);
+    configure(DseeMode::AUTO_AI, 48000.0);
 }
 
-void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate) {
+void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, float gain, float extractFreq, bool useQmf) {
     mode_ = mode;
     sampleRate_ = std::max(8000.0, sampleRate);
+    lpcAlgo_ = lpcAlgo;
+    targetGain_ = static_cast<double>(gain);
+    useQmf_ = useQmf;
     reset();
 
     if (mode_ == DseeMode::OFF) {
@@ -125,15 +50,16 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate) {
 
     isBypass_ = false;
 
-    double fExtract = 10000.0;
+    double fExtract = static_cast<double>(extractFreq);
+    double fCenter = (sampleRate_ >= 176400.0) ? 28000.0 : ((sampleRate_ >= 88200.0) ? 22000.0 : 16000.0);
+    double Q = 1.15;
+    fCenter = std::min(fCenter, sampleRate_ * 0.45);
+
     double kExtract = std::tan(PI * fExtract / sampleRate_);
     hp_b0_ = 1.0 / (1.0 + kExtract);
     hp_b1_ = -hp_b0_;
     hp_a1_ = -(1.0 - kExtract) / (1.0 + kExtract);
 
-    double fCenter = (sampleRate_ >= 176400.0) ? 28000.0 : ((sampleRate_ >= 88200.0) ? 22000.0 : 16000.0);
-    fCenter = std::min(fCenter, sampleRate_ * 0.45);
-    double Q = 1.15;
     double w0 = 2.0 * PI * fCenter / sampleRate_;
     double alpha = std::sin(w0) / (2.0 * Q);
 
@@ -185,28 +111,29 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
         lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
 
+        // ★ QMF Noise-to-Tone 分離演算
         double harmL = 0.0;
-        double dynamicGainL = 0.0;
-
-        if (mode_ == DseeMode::DSEE_AI) {
-            double lpcExtrapolated = hiL * lpcAlphaL_ * 2.2 + (hiL * hiL * 1.8 - 0.05);
-            if (isTransientL) {
-                lpcExtrapolated += (hiL - hp_s1_L_) * 0.4;
-            }
-            harmL = lpcExtrapolated;
-            dynamicGainL = std::min(envHfL_ * 7.5, 0.14);
-        } else if (mode_ == DseeMode::K2_LPC) {
-            harmL = hiL * lpcAlphaL_ * 1.8 + (hiL * hiL * 0.9);
-            dynamicGainL = std::min(envHfL_ * 5.5, 0.10);
+        if (useQmf_) {
+            // トーン成分(純倍音)とノイズ成分(空気感)を完全分離合成
+            double toneL = hiL * lpcAlphaL_ * 2.0;
+            double noiseL = (hiL * hiL * 1.5 - 0.05) + (isTransientL ? (hiL - hp_s1_L_) * 0.5 : 0.0);
+            harmL = toneL * 0.65 + noiseL * 0.35;
         } else {
-            harmL = isTransientL ? (hiL * 2.0 + (hiL - hp_s1_L_) * 0.8) : (hiL * 0.5);
-            dynamicGainL = std::min(envHfL_ * 6.0, 0.12);
+            if (lpcAlgo_ == 1) {
+                harmL = hiL * lpcAlphaL_ * 2.2 + (hiL * hiL * 1.8 - 0.05);
+                if (isTransientL) harmL += (hiL - hp_s1_L_) * 0.4;
+            } else if (lpcAlgo_ == 2) {
+                harmL = hiL * lpcAlphaL_ * 1.8 + (hiL * hiL * 0.9);
+            } else {
+                harmL = isTransientL ? (hiL * 2.2 + (hiL - hp_s1_L_) * 0.8) : (hiL * 0.6);
+            }
         }
 
         double outHarmL = bp_b0_ * harmL + bp_s1_L_;
         bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
         bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
 
+        double dynamicGainL = std::min(envHfL_ * 8.0, targetGain_);
         left[i] = static_cast<float>(inL + outHarmL * dynamicGainL);
 
         // R チャンネル
@@ -228,28 +155,141 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaR_ = std::clamp(lpcAlphaR_, 0.1, 0.9);
 
         double harmR = 0.0;
-        double dynamicGainR = 0.0;
-
-        if (mode_ == DseeMode::DSEE_AI) {
-            double lpcExtrapolated = hiR * lpcAlphaR_ * 2.2 + (hiR * hiR * 1.8 - 0.05);
-            if (isTransientR) {
-                lpcExtrapolated += (hiR - hp_s1_R_) * 0.4;
-            }
-            harmR = lpcExtrapolated;
-            dynamicGainR = std::min(envHfR_ * 7.5, 0.14);
-        } else if (mode_ == DseeMode::K2_LPC) {
-            harmR = hiR * lpcAlphaR_ * 1.8 + (hiR * hiR * 0.9);
-            dynamicGainR = std::min(envHfR_ * 5.5, 0.10);
+        if (useQmf_) {
+            double toneR = hiR * lpcAlphaR_ * 2.0;
+            double noiseR = (hiR * hiR * 1.5 - 0.05) + (isTransientR ? (hiR - hp_s1_R_) * 0.5 : 0.0);
+            harmR = toneR * 0.65 + noiseR * 0.35;
         } else {
-            harmR = isTransientR ? (hiR * 2.0 + (hiR - hp_s1_R_) * 0.8) : (hiR * 0.5);
-            dynamicGainR = std::min(envHfR_ * 6.0, 0.12);
+            if (lpcAlgo_ == 1) {
+                harmR = hiR * lpcAlphaR_ * 2.2 + (hiR * hiR * 1.8 - 0.05);
+                if (isTransientR) harmR += (hiR - hp_s1_R_) * 0.4;
+            } else if (lpcAlgo_ == 2) {
+                harmR = hiR * lpcAlphaR_ * 1.8 + (hiR * hiR * 0.9);
+            } else {
+                harmR = isTransientR ? (hiR * 2.2 + (hiR - hp_s1_R_) * 0.8) : (hiR * 0.6);
+            }
         }
 
         double outHarmR = bp_b0_ * harmR + bp_s1_R_;
         bp_s1_R_ = bp_b1_ * harmR - bp_a1_ * outHarmR + bp_s2_R_;
         bp_s2_R_ = bp_b2_ * harmR - bp_a2_ * outHarmR;
 
+        double dynamicGainR = std::min(envHfR_ * 8.0, targetGain_);
         right[i] = static_cast<float>(inR + outHarmR * dynamicGainR);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// DspTransientRestorer 実装 (群遅延補正 ＆ 格子型適応過渡予測対応)
+// -----------------------------------------------------------------------------
+DspTransientRestorer::DspTransientRestorer() {
+    configure(TransientMode::NATURAL, 48000.0);
+}
+
+void DspTransientRestorer::configure(TransientMode mode, double sampleRate, bool useGroupDelay, bool useLattice) {
+    mode_ = mode;
+    sampleRate_ = std::max(8000.0, sampleRate);
+    useGroupDelay_ = useGroupDelay;
+    useLattice_ = useLattice;
+    reset();
+
+    if (mode_ == TransientMode::OFF) {
+        isBypass_ = true;
+        return;
+    }
+
+    isBypass_ = false;
+    double timeScale = 48000.0 / sampleRate_;
+
+    switch (mode_) {
+        case TransientMode::NATURAL:
+            attackGain_ = 1.5;
+            fastAlpha_ = std::clamp(0.04 * timeScale, 0.005, 0.2);
+            slowAlpha_ = std::clamp(0.002 * timeScale, 0.0002, 0.02);
+            break;
+        case TransientMode::PUNCH:
+            attackGain_ = 2.4;
+            fastAlpha_ = std::clamp(0.06 * timeScale, 0.008, 0.25);
+            slowAlpha_ = std::clamp(0.0015 * timeScale, 0.0001, 0.015);
+            break;
+        case TransientMode::ACOUSTIC:
+            attackGain_ = 1.8;
+            fastAlpha_ = std::clamp(0.08 * timeScale, 0.01, 0.3);
+            slowAlpha_ = std::clamp(0.003 * timeScale, 0.0003, 0.03);
+            break;
+        default:
+            attackGain_ = 1.5;
+            fastAlpha_ = 0.04;
+            slowAlpha_ = 0.002;
+            break;
+    }
+}
+
+void DspTransientRestorer::reset() {
+    envFastL_ = 0.0; envSlowL_ = 0.0;
+    envFastR_ = 0.0; envSlowR_ = 0.0;
+    prevSampleL_ = 0.0; prevSampleR_ = 0.0;
+    latK1_L_ = 0.0; latK2_L_ = 0.0;
+    latK1_R_ = 0.0; latK2_R_ = 0.0;
+    latB1_L_ = 0.0; latB2_L_ = 0.0;
+    latB1_R_ = 0.0; latB2_R_ = 0.0;
+}
+
+void DspTransientRestorer::processStereo(float* left, float* right, size_t numFrames) {
+    if (isBypass_ || !left || !right || numFrames == 0) return;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        // L チャンネル
+        double inL = static_cast<double>(left[i]);
+        double absInL = std::abs(inL);
+        envFastL_ = envFastL_ * (1.0 - fastAlpha_) + absInL * fastAlpha_;
+        envSlowL_ = envSlowL_ * (1.0 - slowAlpha_) + absInL * slowAlpha_;
+
+        double diffL = std::max(0.0, envFastL_ - envSlowL_);
+        double transientRatioL = std::min(diffL / (envSlowL_ + 1e-4), 2.2);
+
+        // ★ 格子型適応過渡予測 (PARCOR Lattice)
+        double predL = inL;
+        if (useLattice_) {
+            double f1 = inL - latK1_L_ * latB1_L_;
+            double b1 = latB1_L_ - latK1_L_ * inL;
+            latB1_L_ = inL;
+            latK1_L_ = std::clamp(latK1_L_ * 0.995 + (f1 * b1) * 0.005, -0.9, 0.9);
+            predL = inL + f1 * 0.4;
+        }
+
+        double deltaL = predL - prevSampleL_;
+        prevSampleL_ = inL;
+
+        // ★ トランジェント群遅延補正
+        double gdL = useGroupDelay_ ? (deltaL * 0.25) : 0.0;
+        double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.4) + gdL;
+        left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
+
+        // R チャンネル
+        double inR = static_cast<double>(right[i]);
+        double absInR = std::abs(inR);
+        envFastR_ = envFastR_ * (1.0 - fastAlpha_) + absInR * fastAlpha_;
+        envSlowR_ = envSlowR_ * (1.0 - slowAlpha_) + absInR * slowAlpha_;
+
+        double diffR = std::max(0.0, envFastR_ - envSlowR_);
+        double transientRatioR = std::min(diffR / (envSlowR_ + 1e-4), 2.2);
+
+        double predR = inR;
+        if (useLattice_) {
+            double f1 = inR - latK1_R_ * latB1_R_;
+            double b1 = latB1_R_ - latK1_R_ * inR;
+            latB1_R_ = inR;
+            latK1_R_ = std::clamp(latK1_R_ * 0.995 + (f1 * b1) * 0.005, -0.9, 0.9);
+            predR = inR + f1 * 0.4;
+        }
+
+        double deltaR = predR - prevSampleR_;
+        prevSampleR_ = inR;
+
+        double gdR = useGroupDelay_ ? (deltaR * 0.25) : 0.0;
+        double outR = inR + (deltaR * attackGain_ * transientRatioR * 0.4) + gdR;
+        right[i] = static_cast<float>(std::clamp(outR, -1.0, 1.0));
     }
 }
 
@@ -273,7 +313,6 @@ void DspDcPhaseLinearizer::configure(DcPhaseType type, double sampleRate) {
     }
 
     isBypass_ = false;
-
     double f0 = 45.0;
     double Q = 0.707;
     double gainDb = 1.2;
@@ -351,6 +390,10 @@ void DspUpsampler::setDitherMode(DitherMode mode) {
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
 }
 
+void DspUpsampler::setLrIndependentDither(bool enabled) {
+    lrIndependentDither_ = enabled;
+}
+
 void DspUpsampler::setFirFilterType(FirFilterType type) {
     if (filterType_ != type) {
         filterType_ = type;
@@ -366,12 +409,26 @@ void DspUpsampler::setDcPhaseType(DcPhaseType type) {
 
 void DspUpsampler::setDseeMode(DseeMode mode) {
     dseeMode_ = mode;
-    lpcHarmonicAi_.configure(mode, static_cast<double>(inSampleRate_ * factor_));
+    lpcHarmonicAi_.configure(mode, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
+}
+
+void DspUpsampler::setDseeCustomParams(int lpcAlgo, float gain, float extractFreq, bool useQmf) {
+    customLpcAlgo_ = lpcAlgo;
+    customGain_ = gain;
+    customExtractFreq_ = extractFreq;
+    customUseQmf_ = useQmf;
+    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
 }
 
 void DspUpsampler::setTransientMode(TransientMode mode) {
     transientMode_ = mode;
-    transientRestorer_.configure(mode, static_cast<double>(inSampleRate_ * factor_));
+    transientRestorer_.configure(mode, static_cast<double>(inSampleRate_ * factor_), customUseGroupDelay_, customUseLattice_);
+}
+
+void DspUpsampler::setTransientCustomParams(bool useGroupDelay, bool useLattice) {
+    customUseGroupDelay_ = useGroupDelay;
+    customUseLattice_ = useLattice;
+    transientRestorer_.configure(transientMode_, static_cast<double>(inSampleRate_ * factor_), customUseGroupDelay_, customUseLattice_);
 }
 
 double DspUpsampler::besselI0(double x) {
@@ -519,8 +576,8 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     generateFilterCoefficients(factor_);
     equalizer_.setSampleRate(static_cast<double>(inSampleRate_ * factor_));
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(inSampleRate_ * factor_));
-    transientRestorer_.configure(transientMode_, static_cast<double>(inSampleRate_ * factor_));
-    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_));
+    transientRestorer_.configure(transientMode_, static_cast<double>(inSampleRate_ * factor_), customUseGroupDelay_, customUseLattice_);
+    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
     reset();
 }
 
@@ -601,7 +658,6 @@ size_t DspUpsampler::process(
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    // 1. Sinc FIR アップサンプリング (広大なハイレゾ空間へ展開)
     if (currentFactor <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
@@ -662,22 +718,14 @@ size_t DspUpsampler::process(
         }
     }
 
-    // マスターDSPパイプライン (Direct Source OFF 時)
     if (!isDirectSource_) {
-        // 2. 10-Band EQ (周波数バランス調整)
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-
-        // 3. DC Phase Linearizer (Walkman 1Z 低域位相)
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-
-        // 4. ★ Transient Restorer (音の立ち上がり・アタックパンチ力復元)
         transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-
-        // 5. DSEE HX AI (LPC 超高域倍音復元)
         lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // PCM パッキング
+    // ★ LR 独立シードによるディザリング & PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
@@ -705,15 +753,18 @@ size_t DspUpsampler::process(
             double shapedR = rawR;
 
             if (!isDirectSource_) {
+                double dL = getTpdfDitherL();
+                double dR = getTpdfDitherR(lrIndependentDither_);
+
                 if (ditherMode_ == DitherMode::TPDF) {
-                    shapedL += getTpdfDither();
-                    shapedR += getTpdfDither();
+                    shapedL += dL;
+                    shapedR += dR;
                 } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
-                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + getTpdfDither();
-                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + getTpdfDither();
+                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
+                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
                 } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
-                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + getTpdfDither();
-                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + getTpdfDither();
+                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + dL;
+                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + dR;
                 }
             }
 
@@ -749,15 +800,18 @@ size_t DspUpsampler::process(
             double shapedR = rawR;
 
             if (!isDirectSource_) {
+                double dL = getTpdfDitherL();
+                double dR = getTpdfDitherR(lrIndependentDither_);
+
                 if (ditherMode_ == DitherMode::TPDF) {
-                    shapedL += getTpdfDither();
-                    shapedR += getTpdfDither();
+                    shapedL += dL;
+                    shapedR += dR;
                 } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
-                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + getTpdfDither();
-                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + getTpdfDither();
+                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
+                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
                 } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
-                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + getTpdfDither();
-                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + getTpdfDither();
+                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + dL;
+                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + dR;
                 }
             }
 

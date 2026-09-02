@@ -40,17 +40,18 @@ enum class DcPhaseType : int {
 
 enum class DseeMode : int {
     OFF = 0,
-    DSEE_AI = 1,
-    K2_LPC = 2,
-    ADAPTIVE_EXCITER = 3
+    AUTO_AI = 1,
+    MALE_VOCAL = 2,
+    FEMALE_VOCAL = 3,
+    PERCUSSION = 4,
+    STRINGS = 5
 };
 
-// ★ トランジェント復元 (アタック・打撃感復元) モード
 enum class TransientMode : int {
     OFF = 0,
-    NATURAL = 1,  // 自然な立ち上がり (CD標準クオリティ)
-    PUNCH = 2,    // ドラム・キックの打撃感・パンチ力強化
-    ACOUSTIC = 3  // ギターのピッキング・ピアノの打鍵感重視
+    NATURAL = 1,
+    PUNCH = 2,
+    ACOUSTIC = 3
 };
 
 class DspDcPhaseLinearizer {
@@ -71,11 +72,10 @@ private:
     double s1_R_ = 0.0, s2_R_ = 0.0;
 };
 
-// ★ トランジェント・アタック復元 DSP
 class DspTransientRestorer {
 public:
     DspTransientRestorer();
-    void configure(TransientMode mode, double sampleRate);
+    void configure(TransientMode mode, double sampleRate, bool useGroupDelay = false, bool useLattice = false);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
 
@@ -83,10 +83,18 @@ private:
     TransientMode mode_ = TransientMode::NATURAL;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
+    bool useGroupDelay_ = false;
+    bool useLattice_ = false;
 
     double attackGain_ = 1.5;
     double fastAlpha_ = 0.04;
     double slowAlpha_ = 0.002;
+
+    // 格子型適応フィルタ係数 (PARCOR k1, k2)
+    double latK1_L_ = 0.0, latK2_L_ = 0.0;
+    double latK1_R_ = 0.0, latK2_R_ = 0.0;
+    double latB1_L_ = 0.0, latB2_L_ = 0.0;
+    double latB1_R_ = 0.0, latB2_R_ = 0.0;
 
     double envFastL_ = 0.0, envSlowL_ = 0.0;
     double envFastR_ = 0.0, envSlowR_ = 0.0;
@@ -96,14 +104,16 @@ private:
 class DspLpcHarmonicAi {
 public:
     DspLpcHarmonicAi();
-    void configure(DseeMode mode, double sampleRate);
+    void configure(DseeMode mode, double sampleRate, int lpcAlgo = 1, float gain = 0.12f, float extractFreq = 10000.0f, bool useQmf = false);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
 
 private:
-    DseeMode mode_ = DseeMode::DSEE_AI;
+    DseeMode mode_ = DseeMode::AUTO_AI;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
+    int lpcAlgo_ = 1;
+    bool useQmf_ = false;
 
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
@@ -118,6 +128,7 @@ private:
     double envTotalL_ = 0.0, envTotalR_ = 0.0;
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
     double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
+    double targetGain_ = 0.12;
 };
 
 template <typename T, size_t Alignment = 16>
@@ -165,6 +176,9 @@ public:
     void setDitherMode(DitherMode mode);
     DitherMode getDitherMode() const { return ditherMode_; }
 
+    void setLrIndependentDither(bool enabled);
+    bool isLrIndependentDither() const { return lrIndependentDither_; }
+
     void setFirFilterType(FirFilterType type);
     FirFilterType getFirFilterType() const { return filterType_; }
 
@@ -172,9 +186,11 @@ public:
     DcPhaseType getDcPhaseType() const { return dcPhaseType_; }
 
     void setDseeMode(DseeMode mode);
+    void setDseeCustomParams(int lpcAlgo, float gain, float extractFreq, bool useQmf);
     DseeMode getDseeMode() const { return dseeMode_; }
 
     void setTransientMode(TransientMode mode);
+    void setTransientCustomParams(bool useGroupDelay, bool useLattice);
     TransientMode getTransientMode() const { return transientMode_; }
 
     size_t process(
@@ -199,12 +215,21 @@ private:
     int historyWritePos_ = 0;
 
     bool isDirectSource_ = false;
+    bool lrIndependentDither_ = true; // ★ LR独立シード (デフォルトON)
 
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
-    DseeMode dseeMode_ = DseeMode::DSEE_AI;
+    DseeMode dseeMode_ = DseeMode::AUTO_AI;
     TransientMode transientMode_ = TransientMode::NATURAL;
+
+    int customLpcAlgo_ = 1;
+    float customGain_ = 0.12f;
+    float customExtractFreq_ = 10000.0f;
+    bool customUseQmf_ = false;
+
+    bool customUseGroupDelay_ = false;
+    bool customUseLattice_ = false;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};

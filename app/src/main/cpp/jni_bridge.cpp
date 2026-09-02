@@ -11,16 +11,14 @@ static int g_currentDitherMode = 1;
 static int g_currentFirFilterType = 0;
 static int g_currentDcPhaseType = 2;
 static int g_currentDseeMode = 1;
-static int g_currentTransientMode = 1; // Default: NATURAL
+static int g_currentTransientMode = 1;
 static bool g_isDirectSource = false;
 
 extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobject thiz) {
-    if (!g_engine) {
-        g_engine = new AAudioEngine();
-    }
+    if (!g_engine) g_engine = new AAudioEngine();
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDirectSource(g_isDirectSource);
@@ -35,24 +33,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
         JNIEnv *env, jobject thiz, jint factor, jint sample_rate) {
-    if (!g_upsampler) {
-        g_upsampler = new DspUpsampler();
-        g_upsampler->setDirectSource(g_isDirectSource);
-        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
-        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
-        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
-        g_upsampler->setDseeMode(static_cast<DseeMode>(g_currentDseeMode));
-        g_upsampler->setTransientMode(static_cast<TransientMode>(g_currentTransientMode));
-    }
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->configure(factor, static_cast<float>(sample_rate));
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeResetUpsampler(
         JNIEnv *env, jobject thiz) {
-    if (g_upsampler) {
-        g_upsampler->reset();
-    }
+    if (g_upsampler) g_upsampler->reset();
 }
 
 JNIEXPORT void JNICALL
@@ -69,6 +57,13 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDitherMode(
     g_currentDitherMode = mode;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDitherMode(static_cast<DitherMode>(mode));
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetLrIndependentDither(
+        JNIEnv *env, jobject thiz, jboolean enabled) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setLrIndependentDither(enabled == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL
@@ -96,6 +91,13 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeMode(
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeCustomParams(
+        JNIEnv *env, jobject thiz, jint lpcAlgo, jfloat gain, jfloat extractFreq, jboolean useQmf) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setDseeCustomParams(lpcAlgo, gain, extractFreq, useQmf == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
         JNIEnv *env, jobject thiz, jint mode) {
     g_currentTransientMode = mode;
@@ -104,17 +106,16 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientCustomParams(
+        JNIEnv *env, jobject thiz, jboolean useGroupDelay, jboolean useLattice) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setTransientCustomParams(useGroupDelay == JNI_TRUE, useLattice == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
-    if (!g_upsampler) {
-        g_upsampler = new DspUpsampler();
-        g_upsampler->setDirectSource(g_isDirectSource);
-        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
-        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
-        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
-        g_upsampler->setDseeMode(static_cast<DseeMode>(g_currentDseeMode));
-        g_upsampler->setTransientMode(static_cast<TransientMode>(g_currentTransientMode));
-    }
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
     if (gains) {
         jfloat* gainElements = env->GetFloatArrayElements(gains, nullptr);
@@ -131,21 +132,12 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
         jbyteArray in_bytes, jint in_length,
         jstring in_bit_mode, jstring out_bit_mode, jint factor) {
     if (!in_bytes || in_length <= 0) return nullptr;
-    if (!g_upsampler) {
-        g_upsampler = new DspUpsampler();
-        g_upsampler->setDirectSource(g_isDirectSource);
-        g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
-        g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
-        g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
-        g_upsampler->setDseeMode(static_cast<DseeMode>(g_currentDseeMode));
-        g_upsampler->setTransientMode(static_cast<TransientMode>(g_currentTransientMode));
-    }
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
 
     const char* inMode = env->GetStringUTFChars(in_bit_mode, nullptr);
     const char* outMode = env->GetStringUTFChars(out_bit_mode, nullptr);
 
     int effectiveFactor = g_isDirectSource ? 1 : factor;
-
     if (g_upsampler->getFactor() != effectiveFactor) {
         g_upsampler->configure(effectiveFactor);
     }
@@ -183,12 +175,10 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeOpen(
         JNIEnv *env, jobject thiz,
         jint sample_rate, jint channel_count, jint encoding, jint device_id) {
     if (!g_engine) g_engine = new AAudioEngine();
-
     aaudio_format_t format = AAUDIO_FORMAT_PCM_I16;
     if (encoding == 4) format = AAUDIO_FORMAT_PCM_FLOAT;
     else if (encoding == 2) format = AAUDIO_FORMAT_PCM_I16;
     else if (encoding == 21 || encoding == 3) format = AAUDIO_FORMAT_PCM_I24_PACKED;
-
     return g_engine->openStream(sample_rate, channel_count, format, device_id);
 }
 
