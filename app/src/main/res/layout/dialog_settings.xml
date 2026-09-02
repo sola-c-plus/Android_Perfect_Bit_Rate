@@ -18,7 +18,7 @@
         android:background="#444444"
         android:layout_marginBottom="10dp" />
 
-    <!-- タイトルバー -->
+    <!-- タイトルバー (「DSP」に変更) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -30,9 +30,9 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="WALKMAN 1Z MASTER DSP"
+            android:text="DSP"
             android:textColor="#E5A93C"
-            android:textSize="13.5sp"
+            android:textSize="14sp"
             android:textStyle="bold"
             android:fontFamily="sans-serif-black"
             android:letterSpacing="0.05" />
@@ -48,7 +48,7 @@
             android:padding="0dp" />
     </LinearLayout>
 
-    <!-- DIRECT SOURCE (全DSPバイパス) スイッチ -->
+    <!-- DIRECT SOURCE スイッチ -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -70,7 +70,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="DIRECT SOURCE (全DSPバイパス)"
+                android:text="DIRECT SOURCE"
                 android:textColor="#E5A93C"
                 android:textSize="12sp"
                 android:textStyle="bold"
@@ -79,7 +79,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="全DSPを無効化し、原音生ストリームを1:1ダイレクト伝送"
+                android:text="全DSPを無効化しダイレクト送信します"
                 android:textColor="#888888"
                 android:textSize="9.5sp" />
         </LinearLayout>
@@ -95,7 +95,7 @@
             android:checked="false" />
     </LinearLayout>
 
-    <!-- ★ 10-BAND EQUALIZER セクション -->
+    <!-- 10-BAND EQUALIZER セクション -->
     <LinearLayout
         android:id="@+id/layoutSectionEq"
         android:layout_width="match_parent"
@@ -108,7 +108,7 @@
         android:paddingEnd="6dp"
         android:layout_marginBottom="14dp">
 
-        <!-- 1. ヘッダー: 「10-BAND EQUALIZER」 ＋ 右側に高さを揃えた「EQ スイッチ」 -->
+        <!-- 1. ヘッダー: 「10-BAND EQUALIZER」 ＋ 「64bit IIR」 ＋ 右側に高さを揃えた「EQ スイッチ」 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -135,7 +135,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="64-bit IIR 高精度周波数バランス調整"
+                    android:text="64bit IIR"
                     android:textColor="#777777"
                     android:textSize="9.5sp" />
             </LinearLayout>
@@ -158,13 +158,11 @@
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
-            <!-- 左: WalkmanEqView (3:2 実機比率・隙間なし) -->
             <com.example.perfectbitrate.WalkmanEqView
                 android:id="@+id/walkmanEqView"
                 android:layout_width="wrap_content"
                 android:layout_height="170dp" />
 
-            <!-- 右: ボタン群 (上揃え固定: 調整/完了を押してもボタン位置がガタつかない) -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_weight="1"
@@ -175,7 +173,6 @@
                 android:paddingStart="4dp"
                 android:paddingEnd="4dp">
 
-                <!-- 調整 / 完了 ボタン (位置完全固定) -->
                 <Button
                     android:id="@+id/btnEqEdit"
                     android:layout_width="58dp"
@@ -188,7 +185,6 @@
                     android:padding="0dp"
                     android:layout_marginBottom="8dp" />
 
-                <!-- FLAT ボタン (位置完全固定) -->
                 <Button
                     android:id="@+id/btnEqFlat"
                     android:layout_width="58dp"
@@ -201,7 +197,6 @@
                     android:padding="0dp"
                     android:layout_marginBottom="8dp" />
 
-                <!-- 調整時のみ出現する Hz / dB / ＋ / － (下に追加されても上のボタンは動かない) -->
                 <LinearLayout
                     android:id="@+id/layoutEqAdjustControls"
                     android:layout_width="wrap_content"
@@ -309,7 +304,7 @@
         android:background="#1C1C1C"
         android:layout_marginBottom="12dp" />
 
-    <!-- 2. ディザリング方式 -->
+    <!-- 2. ディザリング方式 (「量子化ノイズ分散・SMBシェービング」に変更) -->
     <LinearLayout
         android:id="@+id/layoutSectionDither"
         android:layout_width="match_parent"
@@ -335,7 +330,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="量子化ノイズ分散・SBM心理音響シェーピング"
+                android:text="量子化ノイズ分散・SMBシェービング"
                 android:textColor="#777777"
                 android:textSize="9.5sp" />
         </LinearLayout>
@@ -470,7 +465,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Opus 251 高域補完 (DSEE風 20k〜40kHz+ 倍音合成)"
+                android:text="OPUS251などの圧縮コーデックで不足しがちの、高域(20k~40kHz)を補完"
                 android:textColor="#777777"
                 android:textSize="9.5sp" />
         </LinearLayout>

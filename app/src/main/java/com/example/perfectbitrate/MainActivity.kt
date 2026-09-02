@@ -303,9 +303,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettingsDialog() {
-        val dialog = BottomSheetDialog(this)
+        val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
+
+        // ★ 上部角の白飛びを完全解消 (親コンテナ背景を透明化)
+        dialog.setOnShowListener {
+            val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.setBackgroundColor(Color.TRANSPARENT)
+        }
 
         val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
 
@@ -524,7 +530,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 5. HIGH-FREQ RESTORATION (高音補完) Spinner
+        // 5. HIGH-FREQ RESTORATION Spinner
         val dseeAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dseeOptions)
         dseeAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDsee.adapter = dseeAdapter
