@@ -28,6 +28,7 @@ import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.media.VolumeProviderCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import java.net.URL
 import java.nio.ByteBuffer
@@ -49,7 +50,6 @@ class BitPerfectPlaybackService : Service() {
     var baseSampleRate = 48000
     var effectiveSampleRate = 48000
     
-    // ★ 出力ビットモード (UIで選択されたフォーマット: 16bit / 24bit / 32bit)
     var currentBitMode = "16bit"
     var upsampleFactor = 1
     var activeOutputDevice: AudioDeviceInfo? = null
@@ -75,9 +75,7 @@ class BitPerfectPlaybackService : Service() {
     var isVolumeLocked = false
         set(value) {
             field = value
-            if (value) {
-                lockSystemVolumeToMax()
-            }
+            updateVolumeControlMode()
         }
 
     private lateinit var mediaSession: MediaSessionCompat
@@ -92,6 +90,42 @@ class BitPerfectPlaybackService : Service() {
     @Volatile var isCurrentlyPlaying = false
     private var currentArtwork: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
+
+    // ★ 画面消灯・バックグラウンド時の音量ボタン操作フック
+    private var lastVolumeKeyTime = 0L
+    private val volumeProvider = object : VolumeProviderCompat(
+        VOLUME_CONTROL_RELATIVE,
+        100,
+        100
+    ) {
+        override fun onAdjustVolume(direction: Int) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastVolumeKeyTime < 350L) return
+            lastVolumeKeyTime = now
+
+            lockSystemVolumeToMax()
+            if (direction > 0) {
+                Log.i("BitPerfect", "★ [Background] Volume UP -> Next Track")
+                onCommandListener?.invoke("next")
+            } else if (direction < 0) {
+                Log.i("BitPerfect", "★ [Background] Volume DOWN -> Prev Track")
+                onCommandListener?.invoke("prev")
+            }
+        }
+    }
+
+    fun updateVolumeControlMode() {
+        try {
+            if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
+                lockSystemVolumeToMax()
+                mediaSession.setPlaybackToRemote(volumeProvider)
+            } else {
+                mediaSession.setPlaybackToLocal(AudioManager.STREAM_MUSIC)
+            }
+        } catch (e: Exception) {
+            Log.e("BitPerfect", "Volume mode update error", e)
+        }
+    }
 
     private val volumeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -288,6 +322,8 @@ class BitPerfectPlaybackService : Service() {
             clearPreviousMixerAttributes()
         }
 
+        updateVolumeControlMode()
+
         if (changed && audioTrack != null) {
             isBuffering.set(true)
             trackExecutor.execute {
@@ -345,6 +381,7 @@ class BitPerfectPlaybackService : Service() {
             })
             isActive = true
         }
+        updateVolumeControlMode()
     }
 
     fun updateProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean) {
