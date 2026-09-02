@@ -28,7 +28,7 @@ inline double getTpdfDitherR(bool independent) {
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装 (1次HPF修正 + 2次チェビシェフ倍音生成)
+// DspLpcHarmonicAi 実装
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
     configure(DseeMode::AUTO_AI, 48000.0);
@@ -54,7 +54,6 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
     double Q = 1.15;
     fCenter = std::min(fCenter, sampleRate_ * 0.45);
 
-    // ★ 1次HPF (Direct Form II Transposed 設計)
     double kExtract = std::tan(PI * fExtract / sampleRate_);
     double a0 = 1.0 + kExtract;
     hp_b0_ = 1.0 / a0;
@@ -96,7 +95,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
     for (size_t i = 0; i < numFrames; ++i) {
         // L チャンネル
         double inL = static_cast<double>(left[i]);
-        // ★ 1次HPF Direct Form II Transposed (フィードバック修正)
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
 
@@ -114,11 +112,9 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
         lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
 
-        // ★ 第2種チェビシェフ多項式 T2(x) = 2x^2 - 1 に基づく DC成分ゼロの純粋倍音生成
         double normHiL = std::clamp(hiL * 2.0, -1.0, 1.0);
         double cheb2_L = (2.0 * normHiL * normHiL - 1.0) * envHfL_;
 
-        // ★ QMF Noise-to-Tone 分離演算
         double harmL = 0.0;
         if (useQmf_) {
             double toneL = hiL * lpcAlphaL_ * 2.0;
@@ -144,7 +140,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
 
         // R チャンネル
         double inR = static_cast<double>(right[i]);
-        // ★ 1次HPF Direct Form II Transposed (フィードバック修正)
         double hiR = hp_b0_ * inR + hp_s1_R_;
         hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
 
@@ -162,7 +157,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaR_ = lpcAlphaR_ * 0.99 + (absHfR / (envTotalR_ + 1e-6)) * 0.01;
         lpcAlphaR_ = std::clamp(lpcAlphaR_, 0.1, 0.9);
 
-        // ★ 第2種チェビシェフ多項式
         double normHiR = std::clamp(hiR * 2.0, -1.0, 1.0);
         double cheb2_R = (2.0 * normHiR * normHiR - 1.0) * envHfR_;
 
@@ -731,9 +725,13 @@ size_t DspUpsampler::process(
     if (!isDirectSource_) {
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-        transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-        // ★ HIGH-FREQ RESTORATION は x2 以上でのみ動作 (1x ではバイパス)
-        if (currentFactor >= 2) {
+
+        // ★★★ 修正の核心 ★★★
+        // Transient Restorer（裏設定の過渡復元・Lattice・群遅延）および DSEE（倍音付加）は
+        // 「currentFactor >= 2（x2以上）」かつ「dseeMode != OFF」の時のみ動作！
+        // これにより 1x や HIGH-FREQ OFF の時に裏設定が原音を叩いてシャリつく現象を 100% 根絶。
+        if (currentFactor >= 2 && dseeMode_ != DseeMode::OFF) {
+            transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         }
     }

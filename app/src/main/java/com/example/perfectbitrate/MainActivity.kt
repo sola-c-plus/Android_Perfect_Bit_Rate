@@ -159,6 +159,7 @@ class MainActivity : AppCompatActivity() {
     private fun applyPresetToDsp(presetId: Int) {
         if (presetId == 0) {
             NativeAudioEngine.nativeSetDseeMode(0)
+            NativeAudioEngine.nativeSetTransientMode(0)
             return
         }
         val p = presetProfiles[presetId] ?: presetProfiles[1]!!
@@ -420,7 +421,6 @@ class MainActivity : AppCompatActivity() {
             btnEqMinus.isEnabled = dspEnabled
             walkmanEqView.isEnabled = dspEnabled
 
-            // ★ HIGH-FREQ RESTORATION (DSEE) は Direct Source が OFF かつ x2 以上でのみ有効化
             val isDseeActive = dspEnabled && factor >= 2
             layoutSectionDsee.alpha = if (isDseeActive) 1.0f else 0.3f
             spinnerDsee.isEnabled = isDseeActive
