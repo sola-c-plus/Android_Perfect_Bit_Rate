@@ -121,6 +121,16 @@ class MainActivity : AppCompatActivity() {
     )
     private val dseeModeValues = arrayOf(0, 1, 2, 3)
 
+    // ★ トランジェント復元オプション
+    private var currentTransientMode = 1 // デフォルト: NATURAL
+    private val transientOptions = arrayOf(
+        "OFF (Bypass)",
+        "Natural (CD Standard / 原音自然復元)",
+        "Punch (Dynamic Beat / 打撃感強化)",
+        "Acoustic (Pluck & Hammer / 弦・打鍵重視)"
+    )
+    private val transientModeValues = arrayOf(0, 1, 2, 3)
+
     private var isEqEnabled = false
     private val eqGains = FloatArray(10) { 0.0f }
 
@@ -188,6 +198,7 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetFirFilterType(currentFirFilterType)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
             NativeAudioEngine.nativeSetDseeMode(currentDseeMode)
+            NativeAudioEngine.nativeSetTransientMode(currentTransientMode)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -247,7 +258,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // 画面消灯時でもバックグラウンド処理を維持する WakeLock
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         appWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::MainActivityWakeLock")
         appWakeLock?.acquire()
@@ -275,6 +285,7 @@ class MainActivity : AppCompatActivity() {
         currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
         currentDseeMode = prefs.getInt("selected_dsee_mode", 1)
+        currentTransientMode = prefs.getInt("selected_transient_mode", 1) // Default: NATURAL
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -325,6 +336,7 @@ class MainActivity : AppCompatActivity() {
         val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
         val layoutSectionFir = view.findViewById<View>(R.id.layoutSectionFir)
         val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
+        val layoutSectionTransient = view.findViewById<View>(R.id.layoutSectionTransient)
         val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
         val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
 
@@ -332,6 +344,7 @@ class MainActivity : AppCompatActivity() {
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerFirFilter = view.findViewById<Spinner>(R.id.dialogSpinnerFirFilter)
         val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
+        val spinnerTransient = view.findViewById<Spinner>(R.id.dialogSpinnerTransient)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
@@ -358,12 +371,14 @@ class MainActivity : AppCompatActivity() {
             layoutSectionDither.alpha = alpha
             layoutSectionFir.alpha = alpha
             layoutSectionDcPhase.alpha = alpha
+            layoutSectionTransient?.alpha = alpha
             layoutSectionDsee.alpha = alpha
             layoutSectionUpsample.alpha = alpha
 
             spinnerDither.isEnabled = enabled
             spinnerFirFilter.isEnabled = enabled
             spinnerDcPhase.isEnabled = enabled
+            spinnerTransient?.isEnabled = enabled
             spinnerDsee.isEnabled = enabled
             spinnerUpsample.isEnabled = enabled
 
@@ -536,7 +551,26 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 5. HIGH-FREQ RESTORATION Spinner
+        // 5. ★ TRANSIENT RECOVERY Spinner (新規追加)
+        val transientAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, transientOptions)
+        transientAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerTransient?.adapter = transientAdapter
+        val initialTransientIdx = transientModeValues.indexOf(currentTransientMode).let { if (it >= 0) it else 1 }
+        spinnerTransient?.setSelection(initialTransientIdx)
+
+        spinnerTransient?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedMode = transientModeValues[position]
+                if (selectedMode != currentTransientMode) {
+                    currentTransientMode = selectedMode
+                    prefs.edit { putInt("selected_transient_mode", selectedMode) }
+                    NativeAudioEngine.nativeSetTransientMode(selectedMode)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // 6. HIGH-FREQ RESTORATION Spinner
         val dseeAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, dseeOptions)
         dseeAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerDsee.adapter = dseeAdapter
@@ -555,7 +589,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 6. Upsample Spinner
+        // 7. Upsample Spinner
         val upsampleAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, upsampleOptions)
         upsampleAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
         spinnerUpsample.adapter = upsampleAdapter
@@ -577,7 +611,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // 7. 0dB Volume Lock Switch
+        // 8. 0dB Volume Lock Switch
         val isUsb = isUsbDevice(activeOutputDevice)
         if (isUsb) {
             switchVolLock.isEnabled = true
@@ -606,7 +640,7 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
         }
 
-        // 8. Ad Block Switch
+        // 9. Ad Block Switch
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked

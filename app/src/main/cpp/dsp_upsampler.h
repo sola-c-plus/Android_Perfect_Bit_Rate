@@ -38,12 +38,19 @@ enum class DcPhaseType : int {
     B_HIGH = 6
 };
 
-// ★ LPC スペクトル外挿 ＆ DSEE HX AI モード
 enum class DseeMode : int {
     OFF = 0,
-    DSEE_AI = 1,       // DSEE HX AI (LPC + リアルタイム音響特徴量自動適応)
-    K2_LPC = 2,        // JVC K2風 純粋LPC線形予測外挿 (上品・破綻ゼロ)
-    ADAPTIVE_EXCITER = 3 // ディテール保護型 トランジェント進相エキサイター
+    DSEE_AI = 1,
+    K2_LPC = 2,
+    ADAPTIVE_EXCITER = 3
+};
+
+// ★ トランジェント復元 (アタック・打撃感復元) モード
+enum class TransientMode : int {
+    OFF = 0,
+    NATURAL = 1,  // 自然な立ち上がり (CD標準クオリティ)
+    PUNCH = 2,    // ドラム・キックの打撃感・パンチ力強化
+    ACOUSTIC = 3  // ギターのピッキング・ピアノの打鍵感重視
 };
 
 class DspDcPhaseLinearizer {
@@ -64,7 +71,28 @@ private:
     double s1_R_ = 0.0, s2_R_ = 0.0;
 };
 
-// ★ LPC スペクトル外挿 ＆ リアルタイム音響解析 AI エンジン
+// ★ トランジェント・アタック復元 DSP
+class DspTransientRestorer {
+public:
+    DspTransientRestorer();
+    void configure(TransientMode mode, double sampleRate);
+    void reset();
+    void processStereo(float* left, float* right, size_t numFrames);
+
+private:
+    TransientMode mode_ = TransientMode::NATURAL;
+    double sampleRate_ = 48000.0;
+    bool isBypass_ = false;
+
+    double attackGain_ = 1.5;
+    double fastAlpha_ = 0.04;
+    double slowAlpha_ = 0.002;
+
+    double envFastL_ = 0.0, envSlowL_ = 0.0;
+    double envFastR_ = 0.0, envSlowR_ = 0.0;
+    double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
+};
+
 class DspLpcHarmonicAi {
 public:
     DspLpcHarmonicAi();
@@ -77,23 +105,18 @@ private:
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
 
-    // 10kHz〜16kHz 帯域抽出フィルター
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
-    // 20kHz〜38kHz 超高域 LPC シェーピング BPF
     double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
     double bp_a1_ = 0.0, bp_a2_ = 0.0;
     double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
     double bp_s1_R_ = 0.0, bp_s2_R_ = 0.0;
 
-    // リアルタイム音響特徴量アナライザー
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
     double envHfL_ = 0.0, envHfR_ = 0.0;
     double envTotalL_ = 0.0, envTotalR_ = 0.0;
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
-
-    // LPC 自己相関・減衰スロープ
     double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
 };
 
@@ -151,6 +174,9 @@ public:
     void setDseeMode(DseeMode mode);
     DseeMode getDseeMode() const { return dseeMode_; }
 
+    void setTransientMode(TransientMode mode);
+    TransientMode getTransientMode() const { return transientMode_; }
+
     size_t process(
         const uint8_t* inPcm,
         size_t inBytes,
@@ -178,12 +204,14 @@ private:
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
     DseeMode dseeMode_ = DseeMode::DSEE_AI;
+    TransientMode transientMode_ = TransientMode::NATURAL;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
     DspEqualizer equalizer_;
     DspDcPhaseLinearizer dcPhaseLinearizer_;
+    DspTransientRestorer transientRestorer_;
     DspLpcHarmonicAi lpcHarmonicAi_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;

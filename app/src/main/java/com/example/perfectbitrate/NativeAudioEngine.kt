@@ -19,6 +19,7 @@ object NativeAudioEngine {
     external fun nativeSetFirFilterType(type: Int)
     external fun nativeSetDcPhaseType(type: Int)
     external fun nativeSetDseeMode(mode: Int)
+    external fun nativeSetTransientMode(mode: Int)
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeProcessUpsample(
         inBytes: ByteArray,
