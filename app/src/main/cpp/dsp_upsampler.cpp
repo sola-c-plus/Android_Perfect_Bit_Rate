@@ -28,7 +28,7 @@ inline double getTpdfDitherR(bool independent) {
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装
+// DspLpcHarmonicAi 実装 (定常/過渡ブレンド & TV平滑化)
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
     configure(DseeMode::AUTO_AI, 48000.0);
@@ -87,13 +87,19 @@ void DspLpcHarmonicAi::reset() {
     envTotalL_ = 0.0; envTotalR_ = 0.0;
     transientFluxL_ = 0.0; transientFluxR_ = 0.0;
     lpcAlphaL_ = 0.5; lpcAlphaR_ = 0.5;
+    smoothedGainL_ = 0.0; smoothedGainR_ = 0.0;
 }
 
 void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
+    // ★ TV (Total Variation) 最大変化量制限 (急激な変調歪み・サイドバンドノイズを完全抑制)
+    const double maxSlewPerSample = 0.0008;
+
     for (size_t i = 0; i < numFrames; ++i) {
+        // ---------------------------------------------------------------------
         // L チャンネル
+        // ---------------------------------------------------------------------
         double inL = static_cast<double>(left[i]);
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
@@ -103,31 +109,36 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envHfL_ = envHfL_ * 0.992 + absHfL * 0.008;
         envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
 
+        // ★ 定常/過渡スコアの連続計算 (0.0: 完全定常 〜 1.0: 急峻な過渡)
         double diffL = std::abs(inL - prevSampleL_);
-        double prevL = prevSampleL_;
         prevSampleL_ = inL;
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
-        bool isTransientL = (diffL > transientFluxL_ * 2.5);
+        double transientScoreL = std::clamp((diffL - transientFluxL_) / (transientFluxL_ + 1e-5), 0.0, 1.0);
+        double stationaryScoreL = 1.0 - transientScoreL;
 
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
         lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
 
+        // 2次チェビシェフ多項式 T2(x) = 2x^2 - 1 (DC成分ゼロ)
         double normHiL = std::clamp(hiL * 2.0, -1.0, 1.0);
         double cheb2_L = (2.0 * normHiL * normHiL - 1.0) * envHfL_;
 
+        // ★ 定常/過渡ブレンド演算
+        // ・定常部: 豊かなチェビシェフ倍音とエア感 (純度最大)
+        // ・過渡部: 倍音付加率を抑え、アタックの音割れ・シャリつき・プリエコーを完全防止
         double harmL = 0.0;
-        if (useQmf_) {
+        if (useQmf_ || mode_ == DseeMode::AUTO_AI) {
             double toneL = hiL * lpcAlphaL_ * 2.0;
-            double noiseL = (cheb2_L * 1.5) + (isTransientL ? (hiL - prevL) * 0.5 : 0.0);
-            harmL = toneL * 0.65 + noiseL * 0.35;
+            double noiseL = cheb2_L * 1.5;
+            double steadyHarm = toneL * 0.70 + noiseL * 0.30;
+            harmL = steadyHarm * stationaryScoreL; // 過渡時はフェードアウト
         } else {
             if (lpcAlgo_ == 1) {
-                harmL = hiL * lpcAlphaL_ * 2.2 + cheb2_L * 1.4;
-                if (isTransientL) harmL += (hiL - prevL) * 0.4;
+                harmL = (hiL * lpcAlphaL_ * 2.2 + cheb2_L * 1.4) * stationaryScoreL;
             } else if (lpcAlgo_ == 2) {
-                harmL = hiL * lpcAlphaL_ * 1.8 + cheb2_L * 0.8;
+                harmL = (hiL * lpcAlphaL_ * 1.8 + cheb2_L * 0.8) * stationaryScoreL;
             } else {
-                harmL = isTransientL ? (hiL * 2.2 + (hiL - prevL) * 0.8) : (hiL * 0.6);
+                harmL = (hiL * 0.8) * stationaryScoreL;
             }
         }
 
@@ -135,10 +146,16 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
         bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
 
-        double dynamicGainL = std::min(envHfL_ * 8.0, targetGain_);
-        left[i] = static_cast<float>(inL + outHarmL * dynamicGainL);
+        // ★ TV (Total Variation) 平滑化スルーレート制限
+        double targetDynGainL = std::min(envHfL_ * 8.0, targetGain_);
+        double gainDiffL = targetDynGainL - smoothedGainL_;
+        smoothedGainL_ += std::clamp(gainDiffL, -maxSlewPerSample, maxSlewPerSample);
 
+        left[i] = static_cast<float>(inL + outHarmL * smoothedGainL_);
+
+        // ---------------------------------------------------------------------
         // R チャンネル
+        // ---------------------------------------------------------------------
         double inR = static_cast<double>(right[i]);
         double hiR = hp_b0_ * inR + hp_s1_R_;
         hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
@@ -149,10 +166,10 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envTotalR_ = envTotalR_ * 0.995 + absTotalR * 0.005;
 
         double diffR = std::abs(inR - prevSampleR_);
-        double prevR = prevSampleR_;
         prevSampleR_ = inR;
         transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
-        bool isTransientR = (diffR > transientFluxR_ * 2.5);
+        double transientScoreR = std::clamp((diffR - transientFluxR_) / (transientFluxR_ + 1e-5), 0.0, 1.0);
+        double stationaryScoreR = 1.0 - transientScoreR;
 
         lpcAlphaR_ = lpcAlphaR_ * 0.99 + (absHfR / (envTotalR_ + 1e-6)) * 0.01;
         lpcAlphaR_ = std::clamp(lpcAlphaR_, 0.1, 0.9);
@@ -161,18 +178,18 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         double cheb2_R = (2.0 * normHiR * normHiR - 1.0) * envHfR_;
 
         double harmR = 0.0;
-        if (useQmf_) {
+        if (useQmf_ || mode_ == DseeMode::AUTO_AI) {
             double toneR = hiR * lpcAlphaR_ * 2.0;
-            double noiseR = (cheb2_R * 1.5) + (isTransientR ? (hiR - prevR) * 0.5 : 0.0);
-            harmR = toneR * 0.65 + noiseR * 0.35;
+            double noiseR = cheb2_R * 1.5;
+            double steadyHarm = toneR * 0.70 + noiseR * 0.30;
+            harmR = steadyHarm * stationaryScoreR;
         } else {
             if (lpcAlgo_ == 1) {
-                harmR = hiR * lpcAlphaR_ * 2.2 + cheb2_R * 1.4;
-                if (isTransientR) harmR += (hiR - prevR) * 0.4;
+                harmR = (hiR * lpcAlphaR_ * 2.2 + cheb2_R * 1.4) * stationaryScoreR;
             } else if (lpcAlgo_ == 2) {
-                harmR = hiR * lpcAlphaR_ * 1.8 + cheb2_R * 0.8;
+                harmR = (hiR * lpcAlphaR_ * 1.8 + cheb2_R * 0.8) * stationaryScoreR;
             } else {
-                harmR = isTransientR ? (hiR * 2.2 + (hiR - prevR) * 0.8) : (hiR * 0.6);
+                harmR = (hiR * 0.8) * stationaryScoreR;
             }
         }
 
@@ -180,8 +197,11 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         bp_s1_R_ = bp_b1_ * harmR - bp_a1_ * outHarmR + bp_s2_R_;
         bp_s2_R_ = bp_b2_ * harmR - bp_a2_ * outHarmR;
 
-        double dynamicGainR = std::min(envHfR_ * 8.0, targetGain_);
-        right[i] = static_cast<float>(inR + outHarmR * dynamicGainR);
+        double targetDynGainR = std::min(envHfR_ * 8.0, targetGain_);
+        double gainDiffR = targetDynGainR - smoothedGainR_;
+        smoothedGainR_ += std::clamp(gainDiffR, -maxSlewPerSample, maxSlewPerSample);
+
+        right[i] = static_cast<float>(inR + outHarmR * smoothedGainR_);
     }
 }
 
@@ -726,10 +746,7 @@ size_t DspUpsampler::process(
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-        // ★★★ 修正の核心 ★★★
-        // Transient Restorer（裏設定の過渡復元・Lattice・群遅延）および DSEE（倍音付加）は
-        // 「currentFactor >= 2（x2以上）」かつ「dseeMode != OFF」の時のみ動作！
-        // これにより 1x や HIGH-FREQ OFF の時に裏設定が原音を叩いてシャリつく現象を 100% 根絶。
+        // ★ HIGH-FREQ RESTORATION (DSEE & Transient Restorer) は x2 以上かつ ON の時のみ動作
         if (currentFactor >= 2 && dseeMode_ != DseeMode::OFF) {
             transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);

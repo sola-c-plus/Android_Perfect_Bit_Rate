@@ -130,6 +130,10 @@ private:
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
     double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
     double targetGain_ = 0.12;
+
+    // ★ TV (Total Variation) 平滑化用 連続追従ゲイン
+    double smoothedGainL_ = 0.0;
+    double smoothedGainR_ = 0.0;
 };
 
 template <typename T, size_t Alignment = 16>
