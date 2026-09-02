@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -137,17 +137,11 @@ class MainActivity : AppCompatActivity() {
 
     private val presetProfiles = mutableMapOf<Int, PresetProfile>()
 
-    // ★ 全プリセット黄金値（プロスタジオ最適化パラメータ）
     private fun initDefaultProfiles() {
-        // [1] Auto AI: リファレンス (Min Phase Sharp, Acoustic, DSEE AI, 0.13, 11kHz, QMF=ON, GD=ON, Lattice=OFF)
         presetProfiles[1] = PresetProfile(2, 3, 1, 0.13f, 11000.0f, useQmf = true, useGroupDelay = true, useLattice = false)
-        // [2] 男性ボーカル: サ行刺さり防止 ＆ 厚み (Min Phase Slow, Natural, K2 LPC, 0.08, 9kHz, QMF=ON, GD=OFF, Lattice=OFF)
         presetProfiles[2] = PresetProfile(3, 1, 2, 0.08f, 9000.0f, useQmf = true, useGroupDelay = false, useLattice = false)
-        // [3] 女性ボーカル: ブレス透明感 ＆ 伸び (Min Phase Sharp, Natural, DSEE AI, 0.12, 10.5kHz, QMF=ON, GD=OFF, Lattice=ON)
         presetProfiles[3] = PresetProfile(2, 1, 1, 0.12f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
-        // [4] パーカッション: ドラムアタック ＆ パンチ (Min Phase Sharp, Punch, Exciter, 0.14, 12kHz, QMF=ON, GD=ON, Lattice=ON)
         presetProfiles[4] = PresetProfile(2, 2, 3, 0.14f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
-        // [5] ストリングス: 完全線形位相 ＆ 広大音場 (Linear Phase Slow, Acoustic, K2 LPC, 0.10, 9.5kHz, QMF=ON, GD=OFF, Lattice=OFF)
         presetProfiles[5] = PresetProfile(1, 3, 2, 0.10f, 9500.0f, useQmf = true, useGroupDelay = false, useLattice = false)
 
         for (id in 1..5) {
@@ -966,15 +960,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ 0dB SW ON時: 音量UPで次へ、音量DOWNで前へスキップ + 最大音量固定
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
             val isUsb = isUsbDevice(activeOutputDevice)
             if (isUsb) {
                 playbackService?.lockSystemVolumeToMax()
+                if (event?.repeatCount == 0) {
+                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                        try {
+                            activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "next") })
+                        } catch (e: Exception) {
+                            Log.e("BitPerfect", "Next track error", e)
+                        }
+                    } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                        try {
+                            activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "prev") })
+                        } catch (e: Exception) {
+                            Log.e("BitPerfect", "Prev track error", e)
+                        }
+                    }
+                }
                 return true
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
+            if (isUsbDevice(activeOutputDevice)) {
+                return true
+            }
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     private fun sendAdBlockSetting(enabled: Boolean) {

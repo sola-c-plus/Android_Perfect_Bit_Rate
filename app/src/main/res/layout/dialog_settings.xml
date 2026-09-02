@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -481,7 +481,7 @@
                 android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <!-- ★ 5-2. MULTISTAGE CASCADE FIR スイッチ (他の行と同一デザイン・インデント揃え) -->
+        <!-- 5-2. MULTISTAGE CASCADE FIR スイッチ -->
         <LinearLayout
             android:id="@+id/layoutSectionCascadeFir"
             android:layout_width="match_parent"
@@ -529,7 +529,7 @@
             android:background="#1C1C1C"
             android:layout_marginBottom="12dp" />
 
-        <!-- 6. 0dB Volume Lock -->
+        <!-- 6. 0dB Volume Lock (音量キーで曲スキップ) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -556,7 +556,7 @@
                     android:id="@+id/dialogTextVolLockSub"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="USB DAC接続時のビット落ち回避（最大音量固定）"
+                    android:text="最大音量固定（ビット落ち防止） / 音量UP:次へ / DOWN:前へ"
                     android:textColor="#777777"
                     android:textSize="9.5sp" />
             </LinearLayout>
