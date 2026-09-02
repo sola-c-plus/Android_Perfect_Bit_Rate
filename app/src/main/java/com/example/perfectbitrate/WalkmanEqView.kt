@@ -6,6 +6,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class WalkmanEqView @JvmOverloads constructor(
@@ -89,14 +90,14 @@ class WalkmanEqView @JvmOverloads constructor(
 
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#888888")
-        textSize = 9.0f * density
+        textSize = 8.5f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val selectedLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFFFFF")
-        textSize = 9.5f * density
+        textSize = 9.0f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
@@ -119,21 +120,15 @@ class WalkmanEqView @JvmOverloads constructor(
         val topPadding = 6f * density
         val availableHeight = h.toFloat() - topPadding - labelAreaHeight
 
-        // ★ 実機完全準拠: グリッド枠のアスペクト比を厳密に「横 : 縦 ＝ 1.48 : 1 (ほぼ 3 : 2)」に固定！
+        // ★ 3:2 (1.45:1) のアスペクト比を維持
         gridHeight = availableHeight
-        gridWidth = gridHeight * 1.48f
+        val desiredWidth = gridHeight * 1.45f
+        gridWidth = min(w.toFloat() - 8f * density, desiredWidth)
 
-        // 画面幅を超えないよう安全マージンチェック
-        val maxAllowedWidth = w.toFloat() - 32f * density
-        if (gridWidth > maxAllowedWidth) {
-            gridWidth = maxAllowedWidth
-            gridHeight = gridWidth / 1.48f
-        }
-
-        // 左右・上下の中央に美しく配置
-        gridLeft = (w.toFloat() - gridWidth) / 2f
+        // ★ 左寄せ配置
+        gridLeft = 4f * density
         gridRight = gridLeft + gridWidth
-        gridTop = topPadding + (availableHeight - gridHeight) / 2f
+        gridTop = topPadding
         gridBottom = gridTop + gridHeight
 
         val stepX = gridWidth / (bandLabels.size - 1)
@@ -164,9 +159,9 @@ class WalkmanEqView @JvmOverloads constructor(
         for (i in 0..numHoriz) {
             val y = gridTop + i * (gridHeight / numHoriz)
             if (i == numHoriz / 2) {
-                canvas.drawLine(gridLeft, y, gridRight, y, centerLinePaint) // 0dB
+                canvas.drawLine(gridLeft, y, gridRight, y, centerLinePaint)
             } else {
-                canvas.drawLine(gridLeft, y, gridRight, y, gridPaint) // 1dB刻み
+                canvas.drawLine(gridLeft, y, gridRight, y, gridPaint)
             }
         }
 
