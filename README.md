@@ -166,3 +166,86 @@ app/src/main/
 └── res/
     ├── layout/                          # メイン画面, DSP設定 BottomSheet, スピナー用レイアウト
     └── drawable/                        # WALKMAN 風トグルスイッチ, バッジ, ボタン背景
+
+## 🖥 UI & 操作ガイド
+
+### メイン画面インフォメーションパネル
+
+| 表示項目 | 説明・仕様 |
+| :--- | :--- |
+| **DIRECT / BT バッジ** | ・`DIRECT SOURCE`: DSP バイパス完全ダイレクト伝送<br>・`DIRECT STREAM [DSP nx]`: USB DAC クロック同期 + アップサンプリング<br>・`BT [コーデック名]`: Bluetooth 高音質伝送（LDAC/aptX/AAC等）<br>・`STANDARD MIX`: 内蔵スピーカー出力中 |
+| **出力先デバイス名** | 接続中の USB DAC 名（例: `WALKMAN`, `RP2350 USB DAC`）や Bluetooth 機器名を表示。 |
+| **サンプリングレート & ビット** | 現在の出力サンプリングレートおよびビット深度（例: `48.0 kHz / 24 bit`, `192.0 kHz / 32 bit`）。 |
+| **PEAK (L/R)** | リアルタイムの True Peak レベル（dBFS）。 |
+| **BIT: ACTIVE** | 伝送中の PCM 信号で実際に振幅変調しているビット幅（有効ビットアクティビティ）を表示。 |
+| **レベルメーター** | -∞ 〜 0 dBFS の対数スケール。ホワイトバー ＋ ゴールド Peak ホールド（約750ms）＋ 0dB 超過クリッピング警告。 |
+
+### DSP 設定ダイアログ（⚙ ボタン）
+
+1. **DIRECT SOURCE スイッチ:**  
+   全 DSP 処理をバイパスし、音源データを 1:1 で出力。
+2. **10-BAND EQUALIZER:**  
+   各帯域（31Hz 〜 16kHz）を ±10.0dB（0.5dB 刻み）で調整。画面上のドラッグまたは「＋/－」ボタンで設定可能。
+3. **BIT DEPTH FORMAT:**  
+   `16-bit (Std)` / `24-bit (Hi-Res)` / `32-bit (Int32)`。
+4. **DITHERING ALGORITHM:**  
+   `TPDF` / `High-Pass Shaped` / `Psychoacoustic` / `None`。
+5. **FIR FILTER CHARACTER:**  
+   `Linear Phase Sharp` / `Linear Phase Slow` / `Minimum Phase Sharp` / `Minimum Phase Slow`。
+6. **DC PHASE LINEARIZER:**  
+   `OFF` / `Type A (Low/Std/High)` / `Type B (Low/Std/High)`。
+7. **HIGH-FREQ RESTORATION:**  
+   `OFF` / `DSEE HX AI` / `K2 LPC Natural` / `Adaptive Exciter`。
+8. **ULTRA HQ UPSAMPLING:**  
+   `1x (Bypass)` / `2x (88k/96k)` / `4x (176k/192k)` / `8x (352k/384k)`。
+9. **0dB VOLUME LOCK:**  
+   USB DAC 接続時のみ有効化可能。Android OS の音量を 100% に固定し、ビット落ちを防止。
+10. **AD CUT (広告自動カット):**  
+    YouTube Music の動画広告を自動検知してスキップ。
+
+---
+
+## 🎧 Bluetooth / USB DAC 最適設定
+
+### 1. USB DAC 接続時（ビットパーフェクト推奨）
+1. 端末に USB DAC を接続し、上部バッジが **`DIRECT STREAM`** または **`DIRECT SOURCE`** になることを確認。
+2. 設定メニュー（⚙）を開き、**`DIRECT SOURCE`** を ON（またはお好みでアップサンプリングを設定）。
+3. **`0dB VOLUME LOCK`** を ON に設定（DAC 側の物理ボリュームで音量を調整）。
+
+### 2. Bluetooth 接続時（LDAC / aptX）
+1. Android の `設定` ＞ `接続済みのデバイス` ＞ イヤホンの設定で **「LDAC」** または **「HDオーディオ」** を有効化。
+2. メーカー専用アプリ（Sony Sound Connect 等）で接続品質を **「音質優先（Priority on Sound Quality: 990kbps）」** に設定。
+3. 本アプリの設定メニューで `BIT DEPTH FORMAT` を **`24-bit (Hi-Res)`** に設定。
+
+---
+
+## 📦 ビルド & 導入手順
+
+### 前提要件
+* **Android Studio:** Ladybug / Koala 以降
+* **Android SDK Platform:** 34 (Android 14)
+* **Android NDK:** 25.x 以上
+* **CMake:** 3.22.1 以上
+* **JDK:** 17 (Java 11 コンパイルターゲット)
+
+### ビルド手順
+```bash
+# 1. リポジトリをクローン
+git clone https://github.com/<your-username>/Perfect_Bit_Rate.git
+cd Perfect_Bit_Rate
+
+# 2. Gradle ビルド
+./gradlew assembleDebug
+
+# 3. 端末へインストール
+./gradlew installDebug
+
+> [!NOTE]
+> **WebExtension キャッシュについて:**  
+> `content.js` などの拡張機能コードを改修した場合は、GeckoView のキャッシュをリフレッシュするため、一度端末から旧アプリをアンインストールしてから新規インストールしてください。
+
+---
+
+## ⚠️ 免責事項
+* 本ソフトウェアは個人利用および研究・音質検証目的で開発されたオープンソースプロジェクトです。
+* YouTube および YouTube Music は Google LLC の商標です。本プロジェクトは Google LLC とは一切関係ありません。
