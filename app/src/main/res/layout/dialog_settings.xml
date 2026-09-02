@@ -122,37 +122,37 @@
                 android:paddingEnd="4dp"
                 android:layout_marginBottom="8dp">
 
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="10-BAND EQUALIZER"
-                        android:textColor="#FFFFFF"
-                        android:textSize="11.5sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="64bit IIR"
-                        android:textColor="#777777"
-                        android:textSize="9.5sp" />
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchEqEnable"
+                <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    app:thumbTint="@null"
-                    app:trackTint="@null"
-                    android:thumb="@drawable/switch_thumb_white"
-                    app:track="@drawable/switch_track_walkman_outline"
-                    android:checked="false" />
+                    android:text="10-BAND EQUALIZER"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="64bit IIR"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchEqEnable"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:thumbTint="@null"
+                app:trackTint="@null"
+                android:thumb="@drawable/switch_thumb_white"
+                app:track="@drawable/switch_track_walkman_outline"
+                android:checked="false" />
             </LinearLayout>
 
             <LinearLayout
@@ -481,15 +481,13 @@
                 android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <!-- ★ 5-2. MULTISTAGE CASCADE FIR スイッチ (2x以上で有効) -->
+        <!-- ★ 5-2. MULTISTAGE CASCADE FIR スイッチ (他の行と同一デザイン・インデント揃え) -->
         <LinearLayout
             android:id="@+id/layoutSectionCascadeFir"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:background="#111111"
-            android:padding="8dp"
             android:layout_marginBottom="12dp">
 
             <LinearLayout
@@ -502,7 +500,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="MULTISTAGE CASCADE FIR"
-                    android:textColor="#E5A93C"
+                    android:textColor="#FFFFFF"
                     android:textSize="11.5sp"
                     android:textStyle="bold" />
 
@@ -510,7 +508,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="3段2x多段接続 (255→63→39 taps) で-140dB超低ノイズ化"
-                    android:textColor="#888888"
+                    android:textColor="#777777"
                     android:textSize="9.5sp" />
             </LinearLayout>
 

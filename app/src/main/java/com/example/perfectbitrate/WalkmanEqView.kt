@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.*
@@ -113,9 +113,11 @@ class WalkmanEqView @JvmOverloads constructor(
         val h = MeasureSpec.getSize(heightMeasureSpec).coerceAtLeast((150 * density).toInt())
         val topPadding = 6f * density
         val labelAreaHeight = 18f * density
+        val leftPadding = 14f * density   // ★ 枠0.5コ分右シフト ＆ 31Hz見切れ防止
+        val rightPadding = 10f * density
         val gridH = h.toFloat() - topPadding - labelAreaHeight
-        val desiredGridW = gridH * 1.42f
-        val totalW = (desiredGridW + 8f * density).toInt()
+        val desiredGridW = gridH * 1.38f
+        val totalW = (desiredGridW + leftPadding + rightPadding).toInt()
 
         val widthMode = MeasureSpec.getMode(widthMeasureSpec)
         val finalW = if (widthMode == MeasureSpec.EXACTLY) {
@@ -132,13 +134,16 @@ class WalkmanEqView @JvmOverloads constructor(
 
         val labelAreaHeight = 18f * density
         val topPadding = 6f * density
+        val leftPadding = 14f * density   // ★ 枠0.5コ分右シフト
+        val rightPadding = 10f * density
         val availableHeight = h.toFloat() - topPadding - labelAreaHeight
 
         gridHeight = availableHeight
-        val desiredWidth = gridHeight * 1.42f
-        gridWidth = min(w.toFloat() - 6f * density, desiredWidth)
+        val desiredWidth = gridHeight * 1.38f
+        val availableWidth = (w.toFloat() - leftPadding - rightPadding).coerceAtLeast(10f)
+        gridWidth = min(availableWidth, desiredWidth)
 
-        gridLeft = 2f * density
+        gridLeft = leftPadding
         gridRight = gridLeft + gridWidth
         gridTop = topPadding
         gridBottom = gridTop + gridHeight
