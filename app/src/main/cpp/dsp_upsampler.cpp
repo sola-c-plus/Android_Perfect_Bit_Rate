@@ -17,7 +17,7 @@ inline double getTpdfDither() {
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装 (JVC K2 / DSEE HX AI 特化型 リアルタイム音響推論)
+// DspLpcHarmonicAi 実装 (サンプリングレート自動追従型)
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
     configure(DseeMode::DSEE_AI, 48000.0);
@@ -42,10 +42,10 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate) {
     hp_b1_ = -hp_b0_;
     hp_a1_ = -(1.0 - kExtract) / (1.0 + kExtract);
 
-    // 2. 20kHz〜35kHz LPC 超高域外挿 BPF
-    double fCenter = (sampleRate_ >= 88200.0) ? 22000.0 : 16000.0;
+    // 2. 超高域 LPC 外挿 BPF (サンプリングレートに応じて 20k〜40kHz+ へ自動スケール)
+    double fCenter = (sampleRate_ >= 176400.0) ? 28000.0 : ((sampleRate_ >= 88200.0) ? 22000.0 : 16000.0);
     fCenter = std::min(fCenter, sampleRate_ * 0.45);
-    double Q = 1.1;
+    double Q = 1.15;
     double w0 = 2.0 * PI * fCenter / sampleRate_;
     double alpha = std::sin(w0) / (2.0 * Q);
 
@@ -82,50 +82,40 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         // ==================== L チャンネル ====================
         double inL = static_cast<double>(left[i]);
 
-        // 1. 高域抽出 (10kHz以上)
         double hiL = hp_b0_ * inL + hp_b1_ * hp_s1_L_ - hp_a1_ * hp_s1_L_;
         hp_s1_L_ = inL;
 
-        // 2. リアルタイム音響特徴量アナライザー (AI推論)
         double absHfL = std::abs(hiL);
         double absTotalL = std::abs(inL);
         envHfL_ = envHfL_ * 0.992 + absHfL * 0.008;
         envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
 
-        // トランジェント検知 (差分フラックス)
         double diffL = std::abs(inL - prevSampleL_);
         prevSampleL_ = inL;
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
         bool isTransientL = (diffL > transientFluxL_ * 2.5);
 
-        // LPC 自己相関スロープ予測 (音色の物理モデル)
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
         lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
 
-        // 3. LPC スペクトル外挿 ＆ 適応型倍音生成
         double harmL = 0.0;
         double dynamicGainL = 0.0;
 
         if (mode_ == DseeMode::DSEE_AI) {
-            // ★ DSEE HX AI モード: LPC外挿 ＋ トランジェント保護型進相
             double lpcExtrapolated = hiL * lpcAlphaL_ * 2.2 + (hiL * hiL * 1.8 - 0.05);
             if (isTransientL) {
-                // 打撃瞬間のみ微小な進相を付加してアタック感を鮮明化
                 lpcExtrapolated += (hiL - hp_s1_L_) * 0.4;
             }
             harmL = lpcExtrapolated;
             dynamicGainL = std::min(envHfL_ * 7.5, 0.14);
         } else if (mode_ == DseeMode::K2_LPC) {
-            // ★ JVC K2 モード: 純粋な線形予測物理モデル (歪み感ゼロ・極上自然感)
             harmL = hiL * lpcAlphaL_ * 1.8 + (hiL * hiL * 0.9);
             dynamicGainL = std::min(envHfL_ * 5.5, 0.10);
         } else {
-            // ★ ディテール保護型エキサイター: アタック時のみ適応進相
             harmL = isTransientL ? (hiL * 2.0 + (hiL - hp_s1_L_) * 0.8) : (hiL * 0.5);
             dynamicGainL = std::min(envHfL_ * 6.0, 0.12);
         }
 
-        // 4. 超高域整形 BPF
         double outHarmL = bp_b0_ * harmL + bp_s1_L_;
         bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
         bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
@@ -518,6 +508,9 @@ size_t DspUpsampler::process(
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
+    // =========================================================================
+    // ★ ステップ 1: Sinc FIR アップサンプリング (最初に帯域を広大な空間へ展開)
+    // =========================================================================
     if (currentFactor <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
@@ -578,19 +571,23 @@ size_t DspUpsampler::process(
         }
     }
 
-    // Direct Source OFF 時の DSP 処理
+    // =========================================================================
+    // ★ ステップ 2〜4: マスターDSPパイプライン (Direct Source OFF 時)
+    // =========================================================================
     if (!isDirectSource_) {
-        // 1. 10-Band EQ
+        // ステップ 2: 10-Band EQ (高サンプリングレート下で理想のアナログトーンを確定)
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-        // 2. DC Phase Linearizer (Walkman 1Z 低域位相)
+        // ステップ 3: DC Phase Linearizer (低域位相・沈み込みの重心を確定)
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-        // 3. ★ LPC スペクトル外挿 ＆ リアルタイム音響解析 AI
+        // ステップ 4: DSEE HX AI (整った完全な原音波形から 20k〜40kHz+ をリアルタイム復元)
         lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // PCM パッキング
+    // =========================================================================
+    // ★ ステップ 5: ディザリング ＆ 最終 PCM パッキング (DAC 出力)
+    // =========================================================================
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
