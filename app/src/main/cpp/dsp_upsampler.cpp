@@ -1,11 +1,10 @@
-#include "dsp_upsampler.h"
+﻿#include "dsp_upsampler.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
 
 constexpr double PI = 3.14159265358979323846;
 
-// ★ 左右完全独立の 2 系統 PRNG (無相関ディザ・空間拡散)
 static uint32_t g_ditherStateL1 = 0x87654321;
 static uint32_t g_ditherStateL2 = 0x12345678;
 static uint32_t g_ditherStateR1 = 0xDEADBEEF;
@@ -29,7 +28,7 @@ inline double getTpdfDitherR(bool independent) {
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装 (QMF サブバンド Noise-to-Tone 分離対応)
+// DspLpcHarmonicAi 実装 (1次HPF修正 + 2次チェビシェフ倍音生成)
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
     configure(DseeMode::AUTO_AI, 48000.0);
@@ -55,10 +54,12 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
     double Q = 1.15;
     fCenter = std::min(fCenter, sampleRate_ * 0.45);
 
+    // ★ 1次HPF (Direct Form II Transposed 設計)
     double kExtract = std::tan(PI * fExtract / sampleRate_);
-    hp_b0_ = 1.0 / (1.0 + kExtract);
-    hp_b1_ = -hp_b0_;
-    hp_a1_ = -(1.0 - kExtract) / (1.0 + kExtract);
+    double a0 = 1.0 + kExtract;
+    hp_b0_ = 1.0 / a0;
+    hp_b1_ = -1.0 / a0;
+    hp_a1_ = (kExtract - 1.0) / a0;
 
     double w0 = 2.0 * PI * fCenter / sampleRate_;
     double alpha = std::sin(w0) / (2.0 * Q);
@@ -95,8 +96,9 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
     for (size_t i = 0; i < numFrames; ++i) {
         // L チャンネル
         double inL = static_cast<double>(left[i]);
-        double hiL = hp_b0_ * inL + hp_b1_ * hp_s1_L_ - hp_a1_ * hp_s1_L_;
-        hp_s1_L_ = inL;
+        // ★ 1次HPF Direct Form II Transposed (フィードバック修正)
+        double hiL = hp_b0_ * inL + hp_s1_L_;
+        hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
 
         double absHfL = std::abs(hiL);
         double absTotalL = std::abs(inL);
@@ -104,6 +106,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
 
         double diffL = std::abs(inL - prevSampleL_);
+        double prevL = prevSampleL_;
         prevSampleL_ = inL;
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
         bool isTransientL = (diffL > transientFluxL_ * 2.5);
@@ -111,21 +114,24 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
         lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
 
+        // ★ 第2種チェビシェフ多項式 T2(x) = 2x^2 - 1 に基づく DC成分ゼロの純粋倍音生成
+        double normHiL = std::clamp(hiL * 2.0, -1.0, 1.0);
+        double cheb2_L = (2.0 * normHiL * normHiL - 1.0) * envHfL_;
+
         // ★ QMF Noise-to-Tone 分離演算
         double harmL = 0.0;
         if (useQmf_) {
-            // トーン成分(純倍音)とノイズ成分(空気感)を完全分離合成
             double toneL = hiL * lpcAlphaL_ * 2.0;
-            double noiseL = (hiL * hiL * 1.5 - 0.05) + (isTransientL ? (hiL - hp_s1_L_) * 0.5 : 0.0);
+            double noiseL = (cheb2_L * 1.5) + (isTransientL ? (hiL - prevL) * 0.5 : 0.0);
             harmL = toneL * 0.65 + noiseL * 0.35;
         } else {
             if (lpcAlgo_ == 1) {
-                harmL = hiL * lpcAlphaL_ * 2.2 + (hiL * hiL * 1.8 - 0.05);
-                if (isTransientL) harmL += (hiL - hp_s1_L_) * 0.4;
+                harmL = hiL * lpcAlphaL_ * 2.2 + cheb2_L * 1.4;
+                if (isTransientL) harmL += (hiL - prevL) * 0.4;
             } else if (lpcAlgo_ == 2) {
-                harmL = hiL * lpcAlphaL_ * 1.8 + (hiL * hiL * 0.9);
+                harmL = hiL * lpcAlphaL_ * 1.8 + cheb2_L * 0.8;
             } else {
-                harmL = isTransientL ? (hiL * 2.2 + (hiL - hp_s1_L_) * 0.8) : (hiL * 0.6);
+                harmL = isTransientL ? (hiL * 2.2 + (hiL - prevL) * 0.8) : (hiL * 0.6);
             }
         }
 
@@ -138,8 +144,9 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
 
         // R チャンネル
         double inR = static_cast<double>(right[i]);
-        double hiR = hp_b0_ * inR + hp_b1_ * hp_s1_R_ - hp_a1_ * hp_s1_R_;
-        hp_s1_R_ = inR;
+        // ★ 1次HPF Direct Form II Transposed (フィードバック修正)
+        double hiR = hp_b0_ * inR + hp_s1_R_;
+        hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
 
         double absHfR = std::abs(hiR);
         double absTotalR = std::abs(inR);
@@ -147,6 +154,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envTotalR_ = envTotalR_ * 0.995 + absTotalR * 0.005;
 
         double diffR = std::abs(inR - prevSampleR_);
+        double prevR = prevSampleR_;
         prevSampleR_ = inR;
         transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
         bool isTransientR = (diffR > transientFluxR_ * 2.5);
@@ -154,19 +162,23 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaR_ = lpcAlphaR_ * 0.99 + (absHfR / (envTotalR_ + 1e-6)) * 0.01;
         lpcAlphaR_ = std::clamp(lpcAlphaR_, 0.1, 0.9);
 
+        // ★ 第2種チェビシェフ多項式
+        double normHiR = std::clamp(hiR * 2.0, -1.0, 1.0);
+        double cheb2_R = (2.0 * normHiR * normHiR - 1.0) * envHfR_;
+
         double harmR = 0.0;
         if (useQmf_) {
             double toneR = hiR * lpcAlphaR_ * 2.0;
-            double noiseR = (hiR * hiR * 1.5 - 0.05) + (isTransientR ? (hiR - hp_s1_R_) * 0.5 : 0.0);
+            double noiseR = (cheb2_R * 1.5) + (isTransientR ? (hiR - prevR) * 0.5 : 0.0);
             harmR = toneR * 0.65 + noiseR * 0.35;
         } else {
             if (lpcAlgo_ == 1) {
-                harmR = hiR * lpcAlphaR_ * 2.2 + (hiR * hiR * 1.8 - 0.05);
-                if (isTransientR) harmR += (hiR - hp_s1_R_) * 0.4;
+                harmR = hiR * lpcAlphaR_ * 2.2 + cheb2_R * 1.4;
+                if (isTransientR) harmR += (hiR - prevR) * 0.4;
             } else if (lpcAlgo_ == 2) {
-                harmR = hiR * lpcAlphaR_ * 1.8 + (hiR * hiR * 0.9);
+                harmR = hiR * lpcAlphaR_ * 1.8 + cheb2_R * 0.8;
             } else {
-                harmR = isTransientR ? (hiR * 2.2 + (hiR - hp_s1_R_) * 0.8) : (hiR * 0.6);
+                harmR = isTransientR ? (hiR * 2.2 + (hiR - prevR) * 0.8) : (hiR * 0.6);
             }
         }
 
@@ -180,7 +192,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
 }
 
 // -----------------------------------------------------------------------------
-// DspTransientRestorer 実装 (群遅延補正 ＆ 格子型適応過渡予測対応)
+// DspTransientRestorer 実装
 // -----------------------------------------------------------------------------
 DspTransientRestorer::DspTransientRestorer() {
     configure(TransientMode::NATURAL, 48000.0);
@@ -248,7 +260,6 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double diffL = std::max(0.0, envFastL_ - envSlowL_);
         double transientRatioL = std::min(diffL / (envSlowL_ + 1e-4), 2.2);
 
-        // ★ 格子型適応過渡予測 (PARCOR Lattice)
         double predL = inL;
         if (useLattice_) {
             double f1 = inL - latK1_L_ * latB1_L_;
@@ -261,7 +272,6 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double deltaL = predL - prevSampleL_;
         prevSampleL_ = inL;
 
-        // ★ トランジェント群遅延補正
         double gdL = useGroupDelay_ ? (deltaL * 0.25) : 0.0;
         double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.4) + gdL;
         left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
@@ -409,7 +419,7 @@ void DspUpsampler::setDcPhaseType(DcPhaseType type) {
 
 void DspUpsampler::setDseeMode(DseeMode mode) {
     dseeMode_ = mode;
-    lpcHarmonicAi_.configure(mode, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
+    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
 }
 
 void DspUpsampler::setDseeCustomParams(int lpcAlgo, float gain, float extractFreq, bool useQmf) {
@@ -484,7 +494,7 @@ void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) 
     std::vector<double> minImag(fftSize, 0.0);
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
-        for (int n = 0; n < fftSize; ++n) {
+        for (int n = 0; n < totalTaps; ++n) {
             double angle = -2.0 * PI * k * n / fftSize;
             real += causalCepstrum[n] * std::cos(angle);
             imag += causalCepstrum[n] * std::sin(angle);
@@ -722,10 +732,12 @@ size_t DspUpsampler::process(
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-        lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        // ★ HIGH-FREQ RESTORATION は x2 以上でのみ動作 (1x ではバイパス)
+        if (currentFactor >= 2) {
+            lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        }
     }
 
-    // ★ LR 独立シードによるディザリング & PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;

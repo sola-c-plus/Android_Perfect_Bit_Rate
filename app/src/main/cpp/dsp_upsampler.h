@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 #include <cstdint>
@@ -90,7 +90,6 @@ private:
     double fastAlpha_ = 0.04;
     double slowAlpha_ = 0.002;
 
-    // 格子型適応フィルタ係数 (PARCOR k1, k2)
     double latK1_L_ = 0.0, latK2_L_ = 0.0;
     double latK1_R_ = 0.0, latK2_R_ = 0.0;
     double latB1_L_ = 0.0, latB2_L_ = 0.0;
@@ -115,9 +114,11 @@ private:
     int lpcAlgo_ = 1;
     bool useQmf_ = false;
 
+    // 1次HPF (Direct Form II Transposed)
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
+    // 2次BPF (Direct Form II Transposed)
     double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
     double bp_a1_ = 0.0, bp_a2_ = 0.0;
     double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
@@ -215,7 +216,7 @@ private:
     int historyWritePos_ = 0;
 
     bool isDirectSource_ = false;
-    bool lrIndependentDither_ = true; // ★ LR独立シード (デフォルトON)
+    bool lrIndependentDither_ = true;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;

@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -112,7 +112,6 @@ class MainActivity : AppCompatActivity() {
     )
     private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
 
-    // 表設定用 6 項目
     private var currentDseeMode = 1
     private val dseeOptions = arrayOf(
         "OFF",
@@ -137,15 +136,12 @@ class MainActivity : AppCompatActivity() {
 
     private val presetProfiles = mutableMapOf<Int, PresetProfile>()
 
-    // ========================================================
-    // ★ 製品版(APK)固定用 デフォルトプリセット設定
-    // ========================================================
     private fun initDefaultProfiles() {
-        presetProfiles[1] = PresetProfile(3, 2, 1, 0.14f, 12000.0f, true, false, false) // [1] Auto AI
-        presetProfiles[2] = PresetProfile(3, 1, 2, 0.08f, 8000.0f, false, false, false) // [2] 男性ボーカル
-        presetProfiles[3] = PresetProfile(3, 1, 1, 0.14f, 10500.0f, true, false, false) // [3] 女性ボーカル
-        presetProfiles[4] = PresetProfile(2, 2, 3, 0.16f, 12000.0f, true, true, true)   // [4] パーカッション
-        presetProfiles[5] = PresetProfile(1, 3, 2, 0.12f, 9000.0f, false, false, false)  // [5] ストリングス
+        presetProfiles[1] = PresetProfile(0, 1, 1, 0.12f, 10000.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        presetProfiles[2] = PresetProfile(3, 3, 2, 0.09f, 8000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
+        presetProfiles[3] = PresetProfile(2, 1, 1, 0.14f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        presetProfiles[4] = PresetProfile(2, 2, 3, 0.16f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
+        presetProfiles[5] = PresetProfile(1, 3, 2, 0.10f, 9000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
 
         for (id in 1..5) {
             val p = presetProfiles[id]!!
@@ -404,39 +400,43 @@ class MainActivity : AppCompatActivity() {
         val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
         val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
 
-        fun updateDspSectionsState(isDirect: Boolean) {
-            val alpha = if (isDirect) 0.3f else 1.0f
-            val enabled = !isDirect
+        fun updateDspSectionsState(isDirect: Boolean, factor: Int) {
+            val dspAlpha = if (isDirect) 0.3f else 1.0f
+            val dspEnabled = !isDirect
 
-            layoutSectionEq.alpha = alpha
-            layoutSectionDither.alpha = alpha
-            layoutSectionDcPhase.alpha = alpha
-            layoutSectionDsee.alpha = alpha
-            layoutSectionUpsample.alpha = alpha
+            layoutSectionEq.alpha = dspAlpha
+            layoutSectionDither.alpha = dspAlpha
+            layoutSectionDcPhase.alpha = dspAlpha
+            layoutSectionUpsample.alpha = dspAlpha
 
-            spinnerDither.isEnabled = enabled
-            spinnerDcPhase.isEnabled = enabled
-            spinnerDsee.isEnabled = enabled
-            spinnerUpsample.isEnabled = enabled
+            spinnerDither.isEnabled = dspEnabled
+            spinnerDcPhase.isEnabled = dspEnabled
+            spinnerUpsample.isEnabled = dspEnabled
 
-            switchEqEnable.isEnabled = enabled
-            btnEqEdit.isEnabled = enabled
-            btnEqFlat.isEnabled = enabled
-            btnEqPlus.isEnabled = enabled
-            btnEqMinus.isEnabled = enabled
-            walkmanEqView.isEnabled = enabled
+            switchEqEnable.isEnabled = dspEnabled
+            btnEqEdit.isEnabled = dspEnabled
+            btnEqFlat.isEnabled = dspEnabled
+            btnEqPlus.isEnabled = dspEnabled
+            btnEqMinus.isEnabled = dspEnabled
+            walkmanEqView.isEnabled = dspEnabled
+
+            // ★ HIGH-FREQ RESTORATION (DSEE) は Direct Source が OFF かつ x2 以上でのみ有効化
+            val isDseeActive = dspEnabled && factor >= 2
+            layoutSectionDsee.alpha = if (isDseeActive) 1.0f else 0.3f
+            spinnerDsee.isEnabled = isDseeActive
         }
 
         switchDirectSource.isChecked = isDirectSource
-        updateDspSectionsState(isDirectSource)
+        val initialEffectiveFactor = if (isDirectSource) 1 else upsampleFactor
+        updateDspSectionsState(isDirectSource, initialEffectiveFactor)
 
         switchDirectSource.setOnCheckedChangeListener { _, isChecked ->
             isDirectSource = isChecked
             prefs.edit { putBoolean("direct_source_enabled", isChecked) }
             NativeAudioEngine.nativeSetDirectSource(isChecked)
-            updateDspSectionsState(isChecked)
 
             val effectiveFactor = if (isChecked) 1 else upsampleFactor
+            updateDspSectionsState(isChecked, effectiveFactor)
             playbackService?.setUpsampling(effectiveFactor)
             updateStatus()
         }
@@ -571,6 +571,7 @@ class MainActivity : AppCompatActivity() {
                     if (!isDirectSource) {
                         playbackService?.setUpsampling(selectedFactor)
                     }
+                    updateDspSectionsState(isDirectSource, if (isDirectSource) 1 else selectedFactor)
                     updateStatus()
                 }
             }
@@ -609,9 +610,6 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    // =========================================================================
-    // 裏設定 (開発者用 プリセットチューナー)
-    // =========================================================================
     private fun showDevPresetsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
         val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
@@ -770,30 +768,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnDevResetDefault.setOnClickListener {
-            // ★ チューニングされた新初期値へリセット
-            presetProfiles[1] = PresetProfile(3, 2, 1, 0.14f, 12000.0f, true, false, false)
-            presetProfiles[2] = PresetProfile(3, 1, 2, 0.08f, 8000.0f, false, false, false)
-            presetProfiles[3] = PresetProfile(3, 1, 1, 0.14f, 10500.0f, true, false, false)
-            presetProfiles[4] = PresetProfile(2, 2, 3, 0.16f, 12000.0f, true, true, true)
-            presetProfiles[5] = PresetProfile(1, 3, 2, 0.12f, 9000.0f, false, false, false)
-
-            for (id in 1..5) {
-                val p = presetProfiles[id]!!
-                prefs.edit {
-                    putInt("prof_${id}_fir", p.firType)
-                    putInt("prof_${id}_trans", p.transientMode)
-                    putInt("prof_${id}_lpc", p.lpcAlgo)
-                    putFloat("prof_${id}_gain", p.gain)
-                    putFloat("prof_${id}_freq", p.extractFreq)
-                    putBoolean("prof_${id}_qmf", p.useQmf)
-                    putBoolean("prof_${id}_gd", p.useGroupDelay)
-                    putBoolean("prof_${id}_lat", p.useLattice)
-                }
-            }
-
+            initDefaultProfiles()
             updateUiForProfile(currentEditTargetId)
-            applyPresetToDsp(currentDseeMode)
-            Toast.makeText(this, "チューニング初期値にリセットしました", Toast.LENGTH_SHORT).show()
+            saveCurrentEditProfile()
+            Toast.makeText(this, "初期値にリセットしました", Toast.LENGTH_SHORT).show()
         }
 
         btnDevClose.setOnClickListener { dialog.dismiss() }
