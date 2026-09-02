@@ -112,6 +112,7 @@ YouTube Music に多い **44.1kHz（AAC）音源を 48kHz や 192kHz に変換�
 │ - setPreferredMixerAttributes│ │ - OS二重SRCバイパス          │
 │ - 44.1k / 48k ハードクロック  │ │ - 24-bit PCM 直結            │
 └──────────────────────────────┘ └─────────────────────────────┘
+```
 
 ## 🎛 C++ DSP エンジン詳細
 
@@ -166,6 +167,8 @@ app/src/main/
 └── res/
     ├── layout/                          # メイン画面, DSP設定 BottomSheet, スピナー用レイアウト
     └── drawable/                        # WALKMAN 風トグルスイッチ, バッジ, ボタン背景
+
+```
 
 ## 🖥 UI & 操作ガイド
 
@@ -239,6 +242,7 @@ cd Perfect_Bit_Rate
 
 # 3. 端末へインストール
 ./gradlew installDebug
+```
 
 > [!NOTE]
 > **WebExtension キャッシュについて:**  
