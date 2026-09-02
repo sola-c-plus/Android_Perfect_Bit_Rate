@@ -137,12 +137,18 @@ class MainActivity : AppCompatActivity() {
 
     private val presetProfiles = mutableMapOf<Int, PresetProfile>()
 
+    // ★ 全プリセット黄金値（プロスタジオ最適化パラメータ）
     private fun initDefaultProfiles() {
-        presetProfiles[1] = PresetProfile(2, 3, 1, 0.14f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = false)
-        presetProfiles[2] = PresetProfile(3, 3, 2, 0.09f, 8000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
-        presetProfiles[3] = PresetProfile(2, 1, 1, 0.14f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
-        presetProfiles[4] = PresetProfile(2, 2, 3, 0.16f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
-        presetProfiles[5] = PresetProfile(1, 3, 2, 0.10f, 9000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
+        // [1] Auto AI: リファレンス (Min Phase Sharp, Acoustic, DSEE AI, 0.13, 11kHz, QMF=ON, GD=ON, Lattice=OFF)
+        presetProfiles[1] = PresetProfile(2, 3, 1, 0.13f, 11000.0f, useQmf = true, useGroupDelay = true, useLattice = false)
+        // [2] 男性ボーカル: サ行刺さり防止 ＆ 厚み (Min Phase Slow, Natural, K2 LPC, 0.08, 9kHz, QMF=ON, GD=OFF, Lattice=OFF)
+        presetProfiles[2] = PresetProfile(3, 1, 2, 0.08f, 9000.0f, useQmf = true, useGroupDelay = false, useLattice = false)
+        // [3] 女性ボーカル: ブレス透明感 ＆ 伸び (Min Phase Sharp, Natural, DSEE AI, 0.12, 10.5kHz, QMF=ON, GD=OFF, Lattice=ON)
+        presetProfiles[3] = PresetProfile(2, 1, 1, 0.12f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        // [4] パーカッション: ドラムアタック ＆ パンチ (Min Phase Sharp, Punch, Exciter, 0.14, 12kHz, QMF=ON, GD=ON, Lattice=ON)
+        presetProfiles[4] = PresetProfile(2, 2, 3, 0.14f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
+        // [5] ストリングス: 完全線形位相 ＆ 広大音場 (Linear Phase Slow, Acoustic, K2 LPC, 0.10, 9.5kHz, QMF=ON, GD=OFF, Lattice=OFF)
+        presetProfiles[5] = PresetProfile(1, 3, 2, 0.10f, 9500.0f, useQmf = true, useGroupDelay = false, useLattice = false)
 
         for (id in 1..5) {
             val p = presetProfiles[id]!!
@@ -430,7 +436,6 @@ class MainActivity : AppCompatActivity() {
             layoutSectionDsee.alpha = if (isDseeActive) 1.0f else 0.3f
             spinnerDsee.isEnabled = isDseeActive
 
-            // ★ 2x以上アップサンプリング時のみカスケードFIRスイッチを有効化
             val isUpsampleActive = dspEnabled && factor >= 2
             layoutSectionCascadeFir.alpha = if (isUpsampleActive) 1.0f else 0.3f
             switchCascadeFir.isEnabled = isUpsampleActive
@@ -659,8 +664,8 @@ class MainActivity : AppCompatActivity() {
         val lpcOptions = arrayOf("DSEE HX AI (適応)", "K2 LPC Natural (物理)", "Adaptive Exciter (輪郭)")
         val gainOptions = arrayOf("控えめ (0.08)", "標準 (0.12)", "豊か (0.14)", "強力 (0.16)")
         val gainValues = floatArrayOf(0.08f, 0.12f, 0.14f, 0.16f)
-        val freqOptions = arrayOf("8,000 Hz", "9,000 Hz", "10,000 Hz", "10,500 Hz", "12,000 Hz")
-        val freqValues = floatArrayOf(8000.0f, 9000.0f, 10000.0f, 10500.0f, 12000.0f)
+        val freqOptions = arrayOf("8,000 Hz", "9,000 Hz", "9,500 Hz", "10,500 Hz", "11,000 Hz", "12,000 Hz")
+        val freqValues = floatArrayOf(8000.0f, 9000.0f, 9500.0f, 10500.0f, 11000.0f, 12000.0f)
 
         fun setupAdapter(sp: Spinner, items: Array<String>) {
             val ad = ArrayAdapter(this, R.layout.item_spinner_dap, items)
@@ -769,8 +774,7 @@ class MainActivity : AppCompatActivity() {
         btnDevCopyConfig.setOnClickListener {
             val sb = StringBuilder()
             sb.append("// ========================================================\n")
-            sb.append("// ★ 製品版(APK)固定用 デフォルトプリセット設定コード\n")
-            sb.append("// MainActivity.kt の initDefaultProfiles() に上書きしてください\n")
+            sb.append("// ★ 製品版(APK)固定用 最適化プリセット設定コード\n")
             sb.append("// ========================================================\n")
             for (id in 1..5) {
                 val p = presetProfiles[id]!!
@@ -781,14 +785,14 @@ class MainActivity : AppCompatActivity() {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("PresetConfig", sb.toString())
             clipboard.setPrimaryClip(clip)
-            Toast.makeText(this, "📋 製品用設定コードをクリップボードにコピーしました！", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "📋 最適化設定コードをクリップボードにコピーしました！", Toast.LENGTH_LONG).show()
         }
 
         btnDevResetDefault.setOnClickListener {
             initDefaultProfiles()
             updateUiForProfile(currentEditTargetId)
             saveCurrentEditProfile()
-            Toast.makeText(this, "初期値にリセットしました", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "黄金値（最適初期値）にリセットしました", Toast.LENGTH_SHORT).show()
         }
 
         btnDevClose.setOnClickListener { dialog.dismiss() }

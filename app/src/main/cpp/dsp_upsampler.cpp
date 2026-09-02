@@ -106,7 +106,7 @@ void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
 void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz, FirFilterType filterType) {
     numTaps_ = (numTaps % 2 == 0) ? numTaps + 1 : numTaps;
     double normalizedCutoff = std::clamp(cutoffHz / outputRateHz, 0.001, 0.249);
-    double beta = 16.0; // ★ Totton Audio NN 準拠 Kaiser beta=16.0
+    double beta = 16.0;
     if (filterType == FirFilterType::LINEAR_PHASE_SLOW || filterType == FirFilterType::MINIMUM_PHASE_SLOW) {
         normalizedCutoff *= 0.90;
         beta = 10.0;
@@ -133,7 +133,6 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
         for (double d : design) sum += d;
     }
 
-    // ★ DCゲイン 2.0 に正確に正規化
     double scale = 2.0 / (std::abs(sum) > 1e-12 ? sum : 1.0);
 
     poly0_.clear();
@@ -147,7 +146,6 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
         else poly1_.push_back(tapVal);
     }
 
-    // ★ totton と完全一致するリングバッファ長
     tapsPerPhase_ = std::max(poly0_.size(), poly1_.size());
     histLen_ = static_cast<int>(tapsPerPhase_);
     histL_.assign(histLen_, 0.0f);
@@ -163,7 +161,6 @@ void FirStage2x::reset() {
     }
 }
 
-// ★ 不連続（パリパリ音）を 100% 根絶した完全リングバッファ処理
 void FirStage2x::processStereo(
     const float* inL, const float* inR, size_t numFrames,
     std::vector<float, AlignedAllocator<float, 16>>& outL,
@@ -189,7 +186,6 @@ void FirStage2x::processStereo(
         histL_[histWritePos_] = inL[n];
         histR_[histWritePos_] = inR[n];
 
-        // 偶数サンプルの積和 (最新の histWritePos_ から過去に向かって正確にデクリメント)
         float s0_L = 0.0f, s0_R = 0.0f;
         int idx = histWritePos_;
         for (size_t i = 0; i < evenSize; ++i) {
@@ -199,7 +195,6 @@ void FirStage2x::processStereo(
             idx = (idx == 0) ? (hLen - 1) : (idx - 1);
         }
 
-        // 奇数サンプルの積和
         float s1_L = 0.0f, s1_R = 0.0f;
         idx = histWritePos_;
         for (size_t i = 0; i < oddSize; ++i) {
@@ -220,7 +215,7 @@ void FirStage2x::processStereo(
 // DspLpcHarmonicAi 実装
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
-    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.14f, 12000.0f, true);
+    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.13f, 11000.0f, true);
 }
 
 void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, float gain, float extractFreq, bool useQmf) {
@@ -239,7 +234,8 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
     isBypass_ = false;
 
     double fExtract = static_cast<double>(extractFreq);
-    double fCenter = (sampleRate_ >= 176400.0) ? 28000.0 : ((sampleRate_ >= 88200.0) ? 22000.0 : 16000.0);
+    // ★ ハイレゾ出力レートに応じた BPF 最適中心周波数
+    double fCenter = (sampleRate_ >= 352800.0) ? 32000.0 : ((sampleRate_ >= 176400.0) ? 28000.0 : ((sampleRate_ >= 88200.0) ? 22500.0 : 16000.0));
     double Q = 1.15;
     fCenter = std::min(fCenter, sampleRate_ * 0.45);
 
@@ -298,7 +294,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         double diffL = std::abs(inL - prevSampleL_);
         prevSampleL_ = inL;
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
-        double transientScoreL = std::clamp((diffL - transientFluxL_) / (transientFluxL_ + 1e-5), 0.0, 1.0);
+        double transientScoreL = std::clamp((diffL - transientFluxL_ * 1.2) / (transientFluxL_ + 1e-5), 0.0, 1.0);
         double stationaryScoreL = 1.0 - transientScoreL;
 
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
@@ -346,7 +342,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         double diffR = std::abs(inR - prevSampleR_);
         prevSampleR_ = inR;
         transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
-        double transientScoreR = std::clamp((diffR - transientFluxR_) / (transientFluxR_ + 1e-5), 0.0, 1.0);
+        double transientScoreR = std::clamp((diffR - transientFluxR_ * 1.2) / (transientFluxR_ + 1e-5), 0.0, 1.0);
         double stationaryScoreR = 1.0 - transientScoreR;
 
         lpcAlphaR_ = lpcAlphaR_ * 0.99 + (absHfR / (envTotalR_ + 1e-6)) * 0.01;
@@ -771,10 +767,8 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     factor_ = (factor == 2 || factor == 4 || factor == 8) ? factor : 1;
     inSampleRate_ = inSampleRate;
 
-    // 1段ポリフェーズ用
     generateFilterCoefficients(factor_);
 
-    // 多段 2x カスケード段の初期化 (Kaiser beta=16.0)
     cascadeStages_[0].configure(255, inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_);
     cascadeStages_[1].configure(63, inSampleRate_, inSampleRate_ * 4.0, filterType_);
     cascadeStages_[2].configure(39, inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_);
@@ -866,14 +860,11 @@ size_t DspUpsampler::process(
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    // =========================================================================
-    // [Step 1] アップサンプリング (多段カスケード または 1段ポリフェーズ)
-    // =========================================================================
+    // [Step 1] アップサンプリング
     if (currentFactor <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
     } else if (isCascadeFir_) {
-        // 多段 2x カスケード FIR 処理
         if (currentFactor == 2) {
             cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, tempOutL_, tempOutR_);
         } else if (currentFactor == 4) {
@@ -885,7 +876,6 @@ size_t DspUpsampler::process(
             cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, tempOutL_, tempOutR_);
         }
     } else {
-        // 従来の 1段ポリフェーズ FIR 処理
         const int subTaps = tapsPerPhase_;
 
         for (size_t i = 0; i < numInFrames; ++i) {
@@ -942,26 +932,21 @@ size_t DspUpsampler::process(
         }
     }
 
-    // =========================================================================
-    // ★ スタジオ級最適化 DSP パイプライン
-    // =========================================================================
+    // [Step 2 & Step 3] 音源復元ステージ
     if (!isDirectSource_) {
-        // [Step 2 & Step 3] 音源復元ステージ (x2以上でのみ動作)
         if (currentFactor >= 2 && dseeMode_ != DseeMode::OFF) {
             transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         }
 
-        // [Step 4] 64-bit 10-Band イコライザー ＆ オートヘッドルーム保護
+        // [Step 4] 64-bit 10-Band EQ
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-        // [Step 5] アナログアンプ低域位相 (DC Phase Linearizer)
+        // [Step 5] DC Phase Linearizer
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // =========================================================================
     // [Step 6] ディザリング ＆ PCM パッキング
-    // =========================================================================
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
