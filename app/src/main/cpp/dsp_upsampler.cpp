@@ -28,7 +28,7 @@ inline double getTpdfDitherR(bool independent) {
 }
 
 // -----------------------------------------------------------------------------
-// FirStage2x (多段カスケード用 2x ユニット) 実装
+// FirStage2x (totton 完全準拠のリングバッファ多段 2x ユニット) 実装
 // -----------------------------------------------------------------------------
 double FirStage2x::besselI0(double x) {
     double sum = 1.0;
@@ -105,10 +105,8 @@ void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
 
 void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz, FirFilterType filterType) {
     numTaps_ = (numTaps % 2 == 0) ? numTaps + 1 : numTaps;
-    tapsPerPhase_ = (numTaps_ + 1) / 2;
-
     double normalizedCutoff = std::clamp(cutoffHz / outputRateHz, 0.001, 0.249);
-    double beta = 16.0; // ★ Totton Audio 設計の Kaiser beta=16.0 (-140dB 遮断)
+    double beta = 16.0; // ★ Totton Audio NN 準拠 Kaiser beta=16.0
     if (filterType == FirFilterType::LINEAR_PHASE_SLOW || filterType == FirFilterType::MINIMUM_PHASE_SLOW) {
         normalizedCutoff *= 0.90;
         beta = 10.0;
@@ -116,48 +114,56 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
 
     double i0Beta = besselI0(beta);
     double center = static_cast<double>(numTaps_ - 1) * 0.5;
-    std::vector<double> protoFilter(numTaps_, 0.0);
+    std::vector<double> design(numTaps_, 0.0);
+    double sum = 0.0;
 
     for (size_t i = 0; i < numTaps_; ++i) {
-        double t = static_cast<double>(i) - center;
-        double sincVal = (t == 0.0) ? 1.0 : (std::sin(2.0 * PI * normalizedCutoff * t) / (PI * t));
-        double rel = t / center;
-        double arg = 1.0 - rel * rel;
-        double win = (arg >= 0.0) ? (besselI0(beta * std::sqrt(arg)) / i0Beta) : 0.0;
-        protoFilter[i] = 2.0 * normalizedCutoff * sincVal * win;
+        double offset = static_cast<double>(i) - center;
+        double sincVal = (std::abs(offset) < 1e-12) ? 1.0 : (std::sin(PI * 2.0 * normalizedCutoff * offset) / (PI * 2.0 * normalizedCutoff * offset));
+        double rel = offset / center;
+        double arg = std::max(0.0, 1.0 - rel * rel);
+        double window = besselI0(beta * std::sqrt(arg)) / i0Beta;
+        design[i] = 2.0 * normalizedCutoff * sincVal * window;
+        sum += design[i];
     }
 
     if (filterType == FirFilterType::MINIMUM_PHASE_SHARP || filterType == FirFilterType::MINIMUM_PHASE_SLOW) {
-        convertToMinimumPhase(protoFilter, static_cast<int>(numTaps_));
+        convertToMinimumPhase(design, static_cast<int>(numTaps_));
+        sum = 0.0;
+        for (double d : design) sum += d;
     }
 
-    double sumGain = 0.0;
-    for (size_t i = 0; i < numTaps_; ++i) sumGain += protoFilter[i];
-    double scale = 2.0 / (sumGain != 0.0 ? sumGain : 1.0);
+    // ★ DCゲイン 2.0 に正確に正規化
+    double scale = 2.0 / (std::abs(sum) > 1e-12 ? sum : 1.0);
 
-    poly0_.assign(tapsPerPhase_, 0.0f);
-    poly1_.assign(tapsPerPhase_, 0.0f);
+    poly0_.clear();
+    poly1_.clear();
+    poly0_.reserve((numTaps_ + 1) / 2);
+    poly1_.reserve(numTaps_ / 2);
 
     for (size_t i = 0; i < numTaps_; ++i) {
-        float tapVal = static_cast<float>(protoFilter[i] * scale);
-        if (i % 2 == 0) poly0_[i / 2] = tapVal;
-        else poly1_[i / 2] = tapVal;
+        float tapVal = static_cast<float>(design[i] * scale);
+        if (i % 2 == 0) poly0_.push_back(tapVal);
+        else poly1_.push_back(tapVal);
     }
 
-    histLen_ = static_cast<int>(tapsPerPhase_ * 4);
+    // ★ totton と完全一致するリングバッファ長
+    tapsPerPhase_ = std::max(poly0_.size(), poly1_.size());
+    histLen_ = static_cast<int>(tapsPerPhase_);
     histL_.assign(histLen_, 0.0f);
     histR_.assign(histLen_, 0.0f);
-    histWritePos_ = static_cast<int>(tapsPerPhase_ - 1);
+    histWritePos_ = (histLen_ == 0) ? 0 : (histLen_ - 1);
 }
 
 void FirStage2x::reset() {
     if (!histL_.empty()) {
         std::fill(histL_.begin(), histL_.end(), 0.0f);
         std::fill(histR_.begin(), histR_.end(), 0.0f);
-        histWritePos_ = static_cast<int>(tapsPerPhase_ - 1);
+        histWritePos_ = (histLen_ == 0) ? 0 : (histLen_ - 1);
     }
 }
 
+// ★ 不連続（パリパリ音）を 100% 根絶した完全リングバッファ処理
 void FirStage2x::processStereo(
     const float* inL, const float* inR, size_t numFrames,
     std::vector<float, AlignedAllocator<float, 16>>& outL,
@@ -167,66 +173,46 @@ void FirStage2x::processStereo(
     outL.resize(numFrames * 2);
     outR.resize(numFrames * 2);
 
-    const int subTaps = static_cast<int>(tapsPerPhase_);
+    const int hLen = histLen_;
+    if (hLen <= 0) return;
+
+    const size_t evenSize = poly0_.size();
+    const size_t oddSize = poly1_.size();
     const float* c0 = poly0_.data();
     const float* c1 = poly1_.data();
 
-    for (size_t i = 0; i < numFrames; ++i) {
-        histL_[histWritePos_] = inL[i];
-        histR_[histWritePos_] = inR[i];
+    float* dstL = outL.data();
+    float* dstR = outR.data();
 
-        const float* hL = &histL_[histWritePos_ - (subTaps - 1)];
-        const float* hR = &histR_[histWritePos_ - (subTaps - 1)];
+    for (size_t n = 0; n < numFrames; ++n) {
+        histWritePos_ = (histWritePos_ + 1) % hLen;
+        histL_[histWritePos_] = inL[n];
+        histR_[histWritePos_] = inR[n];
 
+        // 偶数サンプルの積和 (最新の histWritePos_ から過去に向かって正確にデクリメント)
         float s0_L = 0.0f, s0_R = 0.0f;
+        int idx = histWritePos_;
+        for (size_t i = 0; i < evenSize; ++i) {
+            float c = c0[i];
+            s0_L += c * histL_[idx];
+            s0_R += c * histR_[idx];
+            idx = (idx == 0) ? (hLen - 1) : (idx - 1);
+        }
+
+        // 奇数サンプルの積和
         float s1_L = 0.0f, s1_R = 0.0f;
-
-#if USE_ARM_NEON
-        float32x4_t a0_L = vdupq_n_f32(0.0f);
-        float32x4_t a0_R = vdupq_n_f32(0.0f);
-        float32x4_t a1_L = vdupq_n_f32(0.0f);
-        float32x4_t a1_R = vdupq_n_f32(0.0f);
-
-        for (int k = 0; k < subTaps; k += 4) {
-            float32x4_t c0_v = vld1q_f32(c0 + k);
-            float32x4_t c1_v = vld1q_f32(c1 + k);
-            float32x4_t xL_v = vld1q_f32(hL + k);
-            float32x4_t xR_v = vld1q_f32(hR + k);
-
-            a0_L = vmlaq_f32(a0_L, c0_v, xL_v);
-            a0_R = vmlaq_f32(a0_R, c0_v, xR_v);
-            a1_L = vmlaq_f32(a1_L, c1_v, xL_v);
-            a1_R = vmlaq_f32(a1_R, c1_v, xR_v);
+        idx = histWritePos_;
+        for (size_t i = 0; i < oddSize; ++i) {
+            float c = c1[i];
+            s1_L += c * histL_[idx];
+            s1_R += c * histR_[idx];
+            idx = (idx == 0) ? (hLen - 1) : (idx - 1);
         }
 
-#if defined(__aarch64__)
-        s0_L = vaddvq_f32(a0_L); s0_R = vaddvq_f32(a0_R);
-        s1_L = vaddvq_f32(a1_L); s1_R = vaddvq_f32(a1_R);
-#else
-        s0_L = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a0_L), vget_high_f32(a0_L)), vadd_f32(vget_low_f32(a0_L), vget_high_f32(a0_L))), 0);
-        s0_R = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a0_R), vget_high_f32(a0_R)), vadd_f32(vget_low_f32(a0_R), vget_high_f32(a0_R))), 0);
-        s1_L = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a1_L), vget_high_f32(a1_L)), vadd_f32(vget_low_f32(a1_L), vget_high_f32(a1_L))), 0);
-        s1_R = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a1_R), vget_high_f32(a1_R)), vadd_f32(vget_low_f32(a1_R), vget_high_f32(a1_R))), 0);
-#endif
-
-#else
-        for (int k = 0; k < subTaps; ++k) {
-            s0_L += c0[k] * hL[k]; s0_R += c0[k] * hR[k];
-            s1_L += c1[k] * hL[k]; s1_R += c1[k] * hR[k];
-        }
-#endif
-        outL[i * 2]     = s0_L;
-        outL[i * 2 + 1] = s1_L;
-        outR[i * 2]     = s0_R;
-        outR[i * 2 + 1] = s1_R;
-
-        histWritePos_++;
-        if (histWritePos_ >= histLen_ - 1) {
-            int overlap = subTaps - 1;
-            std::memmove(&histL_[0], &histL_[histWritePos_ - overlap], overlap * sizeof(float));
-            std::memmove(&histR_[0], &histR_[histWritePos_ - overlap], overlap * sizeof(float));
-            histWritePos_ = overlap;
-        }
+        dstL[n * 2]     = s0_L;
+        dstL[n * 2 + 1] = s1_L;
+        dstR[n * 2]     = s0_R;
+        dstR[n * 2 + 1] = s1_R;
     }
 }
 
@@ -747,11 +733,11 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
 
     for (int i = 0; i < totalTaps; ++i) {
         double t = i - center;
-        double sinc = (t == 0.0) ? 1.0 : (std::sin(2.0 * PI * cutoff * t) / (PI * t));
+        double sincVal = (t == 0.0) ? 1.0 : (std::sin(2.0 * PI * cutoff * t) / (PI * t));
         double norm = (2.0 * i / (totalTaps - 1)) - 1.0;
         double arg = 1.0 - norm * norm;
         double window = (arg >= 0.0) ? (besselI0(beta * std::sqrt(arg)) / i0Beta) : 0.0;
-        protoFilter[i] = sinc * window;
+        protoFilter[i] = sincVal * window;
     }
 
     if (filterType_ == FirFilterType::MINIMUM_PHASE_SHARP || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW) {
@@ -788,12 +774,9 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     // 1段ポリフェーズ用
     generateFilterCoefficients(factor_);
 
-    // ★ 多段 2x カスケード段の初期化 (Kaiser beta=16.0)
-    // Stage 1: 255 taps (Cutoff = inSampleRate / 2, OutRate = inSampleRate * 2)
+    // 多段 2x カスケード段の初期化 (Kaiser beta=16.0)
     cascadeStages_[0].configure(255, inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_);
-    // Stage 2: 63 taps (Cutoff = inSampleRate, OutRate = inSampleRate * 4)
     cascadeStages_[1].configure(63, inSampleRate_, inSampleRate_ * 4.0, filterType_);
-    // Stage 3: 39 taps (Cutoff = inSampleRate * 2, OutRate = inSampleRate * 8)
     cascadeStages_[2].configure(39, inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_);
 
     equalizer_.setSampleRate(static_cast<double>(inSampleRate_ * factor_));
@@ -883,11 +866,14 @@ size_t DspUpsampler::process(
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
+    // =========================================================================
+    // [Step 1] アップサンプリング (多段カスケード または 1段ポリフェーズ)
+    // =========================================================================
     if (currentFactor <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
     } else if (isCascadeFir_) {
-        // ★ 多段 2x カスケード FIR 処理 (totton アプローチ)
+        // 多段 2x カスケード FIR 処理
         if (currentFactor == 2) {
             cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, tempOutL_, tempOutR_);
         } else if (currentFactor == 4) {
@@ -956,16 +942,26 @@ size_t DspUpsampler::process(
         }
     }
 
+    // =========================================================================
+    // ★ スタジオ級最適化 DSP パイプライン
+    // =========================================================================
     if (!isDirectSource_) {
-        equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-        dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-
+        // [Step 2 & Step 3] 音源復元ステージ (x2以上でのみ動作)
         if (currentFactor >= 2 && dseeMode_ != DseeMode::OFF) {
             transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         }
+
+        // [Step 4] 64-bit 10-Band イコライザー ＆ オートヘッドルーム保護
+        equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+
+        // [Step 5] アナログアンプ低域位相 (DC Phase Linearizer)
+        dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
+    // =========================================================================
+    // [Step 6] ディザリング ＆ PCM パッキング
+    // =========================================================================
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
