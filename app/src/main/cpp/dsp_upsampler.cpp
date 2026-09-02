@@ -28,10 +28,213 @@ inline double getTpdfDitherR(bool independent) {
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装 (定常/過渡ブレンド & TV平滑化)
+// FirStage2x (多段カスケード用 2x ユニット) 実装
+// -----------------------------------------------------------------------------
+double FirStage2x::besselI0(double x) {
+    double sum = 1.0;
+    double term = 1.0;
+    double halfX = x * 0.5;
+    for (int k = 1; k <= 30; ++k) {
+        term *= (halfX / k);
+        double termSq = term * term;
+        sum += termSq;
+        if (termSq < 1e-16 * sum) break;
+    }
+    return sum;
+}
+
+void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
+    int fftSize = 512;
+    while (fftSize < totalTaps * 2) fftSize *= 2;
+
+    std::vector<double> logMag(fftSize, 0.0);
+    const double eps = 1e-12;
+
+    for (int k = 0; k < fftSize; ++k) {
+        double real = 0.0, imag = 0.0;
+        for (int n = 0; n < totalTaps; ++n) {
+            double angle = -2.0 * PI * k * n / fftSize;
+            real += h[n] * std::cos(angle);
+            imag += h[n] * std::sin(angle);
+        }
+        double magSq = real * real + imag * imag;
+        logMag[k] = 0.5 * std::log(std::max(magSq, eps));
+    }
+
+    std::vector<double> cepstrum(fftSize, 0.0);
+    for (int n = 0; n < fftSize; ++n) {
+        double sum = 0.0;
+        for (int k = 0; k < fftSize; ++k) {
+            double angle = 2.0 * PI * k * n / fftSize;
+            sum += logMag[k] * std::cos(angle);
+        }
+        cepstrum[n] = sum / fftSize;
+    }
+
+    std::vector<double> causalCepstrum(fftSize, 0.0);
+    causalCepstrum[0] = cepstrum[0];
+    int half = fftSize / 2;
+    for (int n = 1; n < half; ++n) {
+        causalCepstrum[n] = 2.0 * cepstrum[n];
+    }
+    causalCepstrum[half] = cepstrum[half];
+
+    std::vector<double> minReal(fftSize, 0.0);
+    std::vector<double> minImag(fftSize, 0.0);
+    for (int k = 0; k < fftSize; ++k) {
+        double real = 0.0, imag = 0.0;
+        for (int n = 0; n < totalTaps; ++n) {
+            double angle = -2.0 * PI * k * n / fftSize;
+            real += causalCepstrum[n] * std::cos(angle);
+            imag += causalCepstrum[n] * std::sin(angle);
+        }
+        double expReal = std::exp(real);
+        minReal[k] = expReal * std::cos(imag);
+        minImag[k] = expReal * std::sin(imag);
+    }
+
+    for (int n = 0; n < totalTaps; ++n) {
+        double sum = 0.0;
+        for (int k = 0; k < fftSize; ++k) {
+            double angle = 2.0 * PI * k * n / fftSize;
+            sum += minReal[k] * std::cos(angle) - minImag[k] * std::sin(angle);
+        }
+        h[n] = sum / fftSize;
+    }
+}
+
+void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz, FirFilterType filterType) {
+    numTaps_ = (numTaps % 2 == 0) ? numTaps + 1 : numTaps;
+    tapsPerPhase_ = (numTaps_ + 1) / 2;
+
+    double normalizedCutoff = std::clamp(cutoffHz / outputRateHz, 0.001, 0.249);
+    double beta = 16.0; // ★ Totton Audio 設計の Kaiser beta=16.0 (-140dB 遮断)
+    if (filterType == FirFilterType::LINEAR_PHASE_SLOW || filterType == FirFilterType::MINIMUM_PHASE_SLOW) {
+        normalizedCutoff *= 0.90;
+        beta = 10.0;
+    }
+
+    double i0Beta = besselI0(beta);
+    double center = static_cast<double>(numTaps_ - 1) * 0.5;
+    std::vector<double> protoFilter(numTaps_, 0.0);
+
+    for (size_t i = 0; i < numTaps_; ++i) {
+        double t = static_cast<double>(i) - center;
+        double sincVal = (t == 0.0) ? 1.0 : (std::sin(2.0 * PI * normalizedCutoff * t) / (PI * t));
+        double rel = t / center;
+        double arg = 1.0 - rel * rel;
+        double win = (arg >= 0.0) ? (besselI0(beta * std::sqrt(arg)) / i0Beta) : 0.0;
+        protoFilter[i] = 2.0 * normalizedCutoff * sincVal * win;
+    }
+
+    if (filterType == FirFilterType::MINIMUM_PHASE_SHARP || filterType == FirFilterType::MINIMUM_PHASE_SLOW) {
+        convertToMinimumPhase(protoFilter, static_cast<int>(numTaps_));
+    }
+
+    double sumGain = 0.0;
+    for (size_t i = 0; i < numTaps_; ++i) sumGain += protoFilter[i];
+    double scale = 2.0 / (sumGain != 0.0 ? sumGain : 1.0);
+
+    poly0_.assign(tapsPerPhase_, 0.0f);
+    poly1_.assign(tapsPerPhase_, 0.0f);
+
+    for (size_t i = 0; i < numTaps_; ++i) {
+        float tapVal = static_cast<float>(protoFilter[i] * scale);
+        if (i % 2 == 0) poly0_[i / 2] = tapVal;
+        else poly1_[i / 2] = tapVal;
+    }
+
+    histLen_ = static_cast<int>(tapsPerPhase_ * 4);
+    histL_.assign(histLen_, 0.0f);
+    histR_.assign(histLen_, 0.0f);
+    histWritePos_ = static_cast<int>(tapsPerPhase_ - 1);
+}
+
+void FirStage2x::reset() {
+    if (!histL_.empty()) {
+        std::fill(histL_.begin(), histL_.end(), 0.0f);
+        std::fill(histR_.begin(), histR_.end(), 0.0f);
+        histWritePos_ = static_cast<int>(tapsPerPhase_ - 1);
+    }
+}
+
+void FirStage2x::processStereo(
+    const float* inL, const float* inR, size_t numFrames,
+    std::vector<float, AlignedAllocator<float, 16>>& outL,
+    std::vector<float, AlignedAllocator<float, 16>>& outR
+) {
+    if (!inL || !inR || numFrames == 0) return;
+    outL.resize(numFrames * 2);
+    outR.resize(numFrames * 2);
+
+    const int subTaps = static_cast<int>(tapsPerPhase_);
+    const float* c0 = poly0_.data();
+    const float* c1 = poly1_.data();
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        histL_[histWritePos_] = inL[i];
+        histR_[histWritePos_] = inR[i];
+
+        const float* hL = &histL_[histWritePos_ - (subTaps - 1)];
+        const float* hR = &histR_[histWritePos_ - (subTaps - 1)];
+
+        float s0_L = 0.0f, s0_R = 0.0f;
+        float s1_L = 0.0f, s1_R = 0.0f;
+
+#if USE_ARM_NEON
+        float32x4_t a0_L = vdupq_n_f32(0.0f);
+        float32x4_t a0_R = vdupq_n_f32(0.0f);
+        float32x4_t a1_L = vdupq_n_f32(0.0f);
+        float32x4_t a1_R = vdupq_n_f32(0.0f);
+
+        for (int k = 0; k < subTaps; k += 4) {
+            float32x4_t c0_v = vld1q_f32(c0 + k);
+            float32x4_t c1_v = vld1q_f32(c1 + k);
+            float32x4_t xL_v = vld1q_f32(hL + k);
+            float32x4_t xR_v = vld1q_f32(hR + k);
+
+            a0_L = vmlaq_f32(a0_L, c0_v, xL_v);
+            a0_R = vmlaq_f32(a0_R, c0_v, xR_v);
+            a1_L = vmlaq_f32(a1_L, c1_v, xL_v);
+            a1_R = vmlaq_f32(a1_R, c1_v, xR_v);
+        }
+
+#if defined(__aarch64__)
+        s0_L = vaddvq_f32(a0_L); s0_R = vaddvq_f32(a0_R);
+        s1_L = vaddvq_f32(a1_L); s1_R = vaddvq_f32(a1_R);
+#else
+        s0_L = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a0_L), vget_high_f32(a0_L)), vadd_f32(vget_low_f32(a0_L), vget_high_f32(a0_L))), 0);
+        s0_R = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a0_R), vget_high_f32(a0_R)), vadd_f32(vget_low_f32(a0_R), vget_high_f32(a0_R))), 0);
+        s1_L = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a1_L), vget_high_f32(a1_L)), vadd_f32(vget_low_f32(a1_L), vget_high_f32(a1_L))), 0);
+        s1_R = vget_lane_f32(vpadd_f32(vadd_f32(vget_low_f32(a1_R), vget_high_f32(a1_R)), vadd_f32(vget_low_f32(a1_R), vget_high_f32(a1_R))), 0);
+#endif
+
+#else
+        for (int k = 0; k < subTaps; ++k) {
+            s0_L += c0[k] * hL[k]; s0_R += c0[k] * hR[k];
+            s1_L += c1[k] * hL[k]; s1_R += c1[k] * hR[k];
+        }
+#endif
+        outL[i * 2]     = s0_L;
+        outL[i * 2 + 1] = s1_L;
+        outR[i * 2]     = s0_R;
+        outR[i * 2 + 1] = s1_R;
+
+        histWritePos_++;
+        if (histWritePos_ >= histLen_ - 1) {
+            int overlap = subTaps - 1;
+            std::memmove(&histL_[0], &histL_[histWritePos_ - overlap], overlap * sizeof(float));
+            std::memmove(&histR_[0], &histR_[histWritePos_ - overlap], overlap * sizeof(float));
+            histWritePos_ = overlap;
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// DspLpcHarmonicAi 実装
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
-    configure(DseeMode::AUTO_AI, 48000.0);
+    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.14f, 12000.0f, true);
 }
 
 void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, float gain, float extractFreq, bool useQmf) {
@@ -93,13 +296,10 @@ void DspLpcHarmonicAi::reset() {
 void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
-    // ★ TV (Total Variation) 最大変化量制限 (急激な変調歪み・サイドバンドノイズを完全抑制)
     const double maxSlewPerSample = 0.0008;
 
     for (size_t i = 0; i < numFrames; ++i) {
-        // ---------------------------------------------------------------------
         // L チャンネル
-        // ---------------------------------------------------------------------
         double inL = static_cast<double>(left[i]);
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
@@ -109,7 +309,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envHfL_ = envHfL_ * 0.992 + absHfL * 0.008;
         envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
 
-        // ★ 定常/過渡スコアの連続計算 (0.0: 完全定常 〜 1.0: 急峻な過渡)
         double diffL = std::abs(inL - prevSampleL_);
         prevSampleL_ = inL;
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
@@ -119,19 +318,15 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
         lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
 
-        // 2次チェビシェフ多項式 T2(x) = 2x^2 - 1 (DC成分ゼロ)
         double normHiL = std::clamp(hiL * 2.0, -1.0, 1.0);
         double cheb2_L = (2.0 * normHiL * normHiL - 1.0) * envHfL_;
 
-        // ★ 定常/過渡ブレンド演算
-        // ・定常部: 豊かなチェビシェフ倍音とエア感 (純度最大)
-        // ・過渡部: 倍音付加率を抑え、アタックの音割れ・シャリつき・プリエコーを完全防止
         double harmL = 0.0;
         if (useQmf_ || mode_ == DseeMode::AUTO_AI) {
             double toneL = hiL * lpcAlphaL_ * 2.0;
             double noiseL = cheb2_L * 1.5;
             double steadyHarm = toneL * 0.70 + noiseL * 0.30;
-            harmL = steadyHarm * stationaryScoreL; // 過渡時はフェードアウト
+            harmL = steadyHarm * stationaryScoreL;
         } else {
             if (lpcAlgo_ == 1) {
                 harmL = (hiL * lpcAlphaL_ * 2.2 + cheb2_L * 1.4) * stationaryScoreL;
@@ -146,16 +341,13 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
         bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
 
-        // ★ TV (Total Variation) 平滑化スルーレート制限
         double targetDynGainL = std::min(envHfL_ * 8.0, targetGain_);
         double gainDiffL = targetDynGainL - smoothedGainL_;
         smoothedGainL_ += std::clamp(gainDiffL, -maxSlewPerSample, maxSlewPerSample);
 
         left[i] = static_cast<float>(inL + outHarmL * smoothedGainL_);
 
-        // ---------------------------------------------------------------------
         // R チャンネル
-        // ---------------------------------------------------------------------
         double inR = static_cast<double>(right[i]);
         double hiR = hp_b0_ * inR + hp_s1_R_;
         hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
@@ -209,7 +401,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
 // DspTransientRestorer 実装
 // -----------------------------------------------------------------------------
 DspTransientRestorer::DspTransientRestorer() {
-    configure(TransientMode::NATURAL, 48000.0);
+    configure(TransientMode::ACOUSTIC, 48000.0, true, false);
 }
 
 void DspTransientRestorer::configure(TransientMode mode, double sampleRate, bool useGroupDelay, bool useLattice) {
@@ -265,7 +457,6 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
     for (size_t i = 0; i < numFrames; ++i) {
-        // L チャンネル
         double inL = static_cast<double>(left[i]);
         double absInL = std::abs(inL);
         envFastL_ = envFastL_ * (1.0 - fastAlpha_) + absInL * fastAlpha_;
@@ -290,7 +481,6 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.4) + gdL;
         left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
 
-        // R チャンネル
         double inR = static_cast<double>(right[i]);
         double absInR = std::abs(inR);
         envFastR_ = envFastR_ * (1.0 - fastAlpha_) + absInR * fastAlpha_;
@@ -408,6 +598,11 @@ void DspUpsampler::setDirectSource(bool enabled) {
     reset();
 }
 
+void DspUpsampler::setCascadeFir(bool enabled) {
+    isCascadeFir_ = enabled;
+    reset();
+}
+
 void DspUpsampler::setDitherMode(DitherMode mode) {
     ditherMode_ = mode;
     std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
@@ -421,8 +616,7 @@ void DspUpsampler::setLrIndependentDither(bool enabled) {
 void DspUpsampler::setFirFilterType(FirFilterType type) {
     if (filterType_ != type) {
         filterType_ = type;
-        generateFilterCoefficients(factor_);
-        reset();
+        configure(factor_, inSampleRate_);
     }
 }
 
@@ -534,13 +728,9 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         return;
     }
 
-    if (factor == 2) {
-        tapsPerPhase_ = 64;
-    } else if (factor == 4) {
-        tapsPerPhase_ = 48;
-    } else {
-        tapsPerPhase_ = 32;
-    }
+    if (factor == 2) tapsPerPhase_ = 64;
+    else if (factor == 4) tapsPerPhase_ = 48;
+    else tapsPerPhase_ = 32;
 
     int totalTaps = factor * tapsPerPhase_;
     double cutoff = 0.94 / (2.0 * factor);
@@ -553,7 +743,6 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
 
     double i0Beta = besselI0(beta);
     double center = (totalTaps - 1) * 0.5;
-
     std::vector<double> protoFilter(totalTaps);
 
     for (int i = 0; i < totalTaps; ++i) {
@@ -570,9 +759,7 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
     }
 
     double sumGain = 0.0;
-    for (int i = 0; i < totalTaps; ++i) {
-        sumGain += protoFilter[i];
-    }
+    for (int i = 0; i < totalTaps; ++i) sumGain += protoFilter[i];
     double scale = static_cast<double>(factor) / (sumGain != 0.0 ? sumGain : 1.0);
 
     polyCoeffs_.resize(factor);
@@ -597,7 +784,18 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
 void DspUpsampler::configure(int factor, float inSampleRate) {
     factor_ = (factor == 2 || factor == 4 || factor == 8) ? factor : 1;
     inSampleRate_ = inSampleRate;
+
+    // 1段ポリフェーズ用
     generateFilterCoefficients(factor_);
+
+    // ★ 多段 2x カスケード段の初期化 (Kaiser beta=16.0)
+    // Stage 1: 255 taps (Cutoff = inSampleRate / 2, OutRate = inSampleRate * 2)
+    cascadeStages_[0].configure(255, inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_);
+    // Stage 2: 63 taps (Cutoff = inSampleRate, OutRate = inSampleRate * 4)
+    cascadeStages_[1].configure(63, inSampleRate_, inSampleRate_ * 4.0, filterType_);
+    // Stage 3: 39 taps (Cutoff = inSampleRate * 2, OutRate = inSampleRate * 8)
+    cascadeStages_[2].configure(39, inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_);
+
     equalizer_.setSampleRate(static_cast<double>(inSampleRate_ * factor_));
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(inSampleRate_ * factor_));
     transientRestorer_.configure(transientMode_, static_cast<double>(inSampleRate_ * factor_), customUseGroupDelay_, customUseLattice_);
@@ -610,6 +808,9 @@ void DspUpsampler::reset() {
         std::fill(historyL_.begin(), historyL_.end(), 0.0f);
         std::fill(historyR_.begin(), historyR_.end(), 0.0f);
         historyWritePos_ = tapsPerPhase_ - 1;
+    }
+    for (auto& stage : cascadeStages_) {
+        stage.reset();
     }
     std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
@@ -685,7 +886,20 @@ size_t DspUpsampler::process(
     if (currentFactor <= 1) {
         std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
         std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
+    } else if (isCascadeFir_) {
+        // ★ 多段 2x カスケード FIR 処理 (totton アプローチ)
+        if (currentFactor == 2) {
+            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, tempOutL_, tempOutR_);
+        } else if (currentFactor == 4) {
+            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, tempOutL_, tempOutR_);
+        } else if (currentFactor == 8) {
+            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
+            cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, tempOutL_, tempOutR_);
+        }
     } else {
+        // 従来の 1段ポリフェーズ FIR 処理
         const int subTaps = tapsPerPhase_;
 
         for (size_t i = 0; i < numInFrames; ++i) {
@@ -746,7 +960,6 @@ size_t DspUpsampler::process(
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-        // ★ HIGH-FREQ RESTORATION (DSEE & Transient Restorer) は x2 以上かつ ON の時のみ動作
         if (currentFactor >= 2 && dseeMode_ != DseeMode::OFF) {
             transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);

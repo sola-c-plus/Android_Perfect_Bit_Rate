@@ -1,4 +1,4 @@
-#include <jni.h>
+﻿#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
@@ -8,11 +8,12 @@ static AAudioEngine* g_engine = nullptr;
 static DspUpsampler* g_upsampler = nullptr;
 static std::vector<uint8_t> g_outDspBuffer;
 static int g_currentDitherMode = 1;
-static int g_currentFirFilterType = 0;
+static int g_currentFirFilterType = 2; // Minimum Phase Sharp
 static int g_currentDcPhaseType = 2;
 static int g_currentDseeMode = 1;
-static int g_currentTransientMode = 1;
+static int g_currentTransientMode = 3; // Acoustic
 static bool g_isDirectSource = false;
+static bool g_isCascadeFir = true;
 
 extern "C" {
 
@@ -22,6 +23,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
         g_upsampler->setDirectSource(g_isDirectSource);
+        g_upsampler->setCascadeFir(g_isCascadeFir);
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
         g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
         g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
@@ -49,6 +51,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDirectSource(
     g_isDirectSource = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDirectSource(g_isDirectSource);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetCascadeFir(
+        JNIEnv *env, jobject thiz, jboolean enabled) {
+    g_isCascadeFir = (enabled == JNI_TRUE);
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setCascadeFir(g_isCascadeFir);
 }
 
 JNIEXPORT void JNICALL

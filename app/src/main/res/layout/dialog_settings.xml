@@ -1,121 +1,70 @@
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+﻿<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
     android:background="@drawable/bg_bottom_sheet_dap"
-    android:paddingStart="16dp"
-    android:paddingEnd="16dp"
-    android:paddingTop="10dp"
-    android:paddingBottom="24dp">
+    android:fillViewport="true">
 
-    <!-- ドラッグハンドルバー -->
-    <View
-        android:layout_width="36dp"
-        android:layout_height="4dp"
-        android:layout_gravity="center_horizontal"
-        android:background="#444444"
-        android:layout_marginBottom="10dp" />
-
-    <!-- タイトルバー -->
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="DSP"
-            android:textColor="#E5A93C"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:fontFamily="sans-serif-black"
-            android:letterSpacing="0.05" />
-
-        <Button
-            android:id="@+id/btnDialogClose"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
-            android:text="✕"
-            android:textColor="#AAAAAA"
-            android:textSize="12sp"
-            android:background="@drawable/bg_btn_icon"
-            android:padding="0dp" />
-    </LinearLayout>
-
-    <!-- DIRECT SOURCE スイッチ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:background="#161616"
-        android:paddingStart="10dp"
-        android:paddingEnd="10dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp"
-        android:layout_marginBottom="12dp">
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="DIRECT SOURCE"
-                android:textColor="#E5A93C"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:fontFamily="sans-serif-black" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="全DSPを無効化しダイレクト送信します"
-                android:textColor="#888888"
-                android:textSize="9.5sp" />
-        </LinearLayout>
-
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/dialogSwitchDirectSource"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:thumbTint="@null"
-            app:trackTint="@null"
-            android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline"
-            android:checked="false" />
-    </LinearLayout>
-
-    <!-- 10-BAND EQUALIZER セクション -->
-    <LinearLayout
-        android:id="@+id/layoutSectionEq"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:background="#080808"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         android:paddingTop="10dp"
-        android:paddingBottom="10dp"
-        android:paddingStart="6dp"
-        android:paddingEnd="6dp"
-        android:layout_marginBottom="14dp">
+        android:paddingBottom="36dp">
 
+        <!-- ドラッグハンドルバー -->
+        <View
+            android:layout_width="36dp"
+            android:layout_height="4dp"
+            android:layout_gravity="center_horizontal"
+            android:background="#444444"
+            android:layout_marginBottom="10dp" />
+
+        <!-- タイトルバー -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            android:layout_marginBottom="8dp">
+            android:layout_marginBottom="12dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="DSP SETTINGS"
+                android:textColor="#E5A93C"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-black"
+                android:letterSpacing="0.05" />
+
+            <Button
+                android:id="@+id/btnDialogClose"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:text="✕"
+                android:textColor="#AAAAAA"
+                android:textSize="12sp"
+                android:background="@drawable/bg_btn_icon"
+                android:padding="0dp" />
+        </LinearLayout>
+
+        <!-- DIRECT SOURCE スイッチ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#161616"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:layout_marginBottom="12dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -126,21 +75,22 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="10-BAND EQUALIZER"
-                    android:textColor="#FFFFFF"
-                    android:textSize="11.5sp"
-                    android:textStyle="bold" />
+                    android:text="DIRECT SOURCE"
+                    android:textColor="#E5A93C"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-black" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="64bit IIR"
-                    android:textColor="#777777"
+                    android:text="全DSPを無効化しダイレクト送信します"
+                    android:textColor="#888888"
                     android:textSize="9.5sp" />
             </LinearLayout>
 
             <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchEqEnable"
+                android:id="@+id/dialogSwitchDirectSource"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 app:thumbTint="@null"
@@ -150,424 +100,525 @@
                 android:checked="false" />
         </LinearLayout>
 
+        <!-- 10-BAND EQUALIZER セクション -->
         <LinearLayout
+            android:id="@+id/layoutSectionEq"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <com.example.perfectbitrate.WalkmanEqView
-                android:id="@+id/walkmanEqView"
-                android:layout_width="wrap_content"
-                android:layout_height="170dp" />
+            android:orientation="vertical"
+            android:background="#080808"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:layout_marginBottom="14dp">
 
             <LinearLayout
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="170dp"
-                android:orientation="vertical"
-                android:gravity="top|center_horizontal"
-                android:paddingTop="12dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
                 android:paddingStart="4dp"
-                android:paddingEnd="4dp">
-
-                <Button
-                    android:id="@+id/btnEqEdit"
-                    android:layout_width="58dp"
-                    android:layout_height="28dp"
-                    android:text="調整"
-                    android:textColor="#FFFFFF"
-                    android:textSize="9.5sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_btn_dap_outline"
-                    android:padding="0dp"
-                    android:layout_marginBottom="8dp" />
-
-                <Button
-                    android:id="@+id/btnEqFlat"
-                    android:layout_width="58dp"
-                    android:layout_height="28dp"
-                    android:text="FLAT"
-                    android:textColor="#888888"
-                    android:textSize="9sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_btn_dap_outline"
-                    android:padding="0dp"
-                    android:layout_marginBottom="8dp" />
+                android:paddingEnd="4dp"
+                android:layout_marginBottom="8dp">
 
                 <LinearLayout
-                    android:id="@+id/layoutEqAdjustControls"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:gravity="center_horizontal"
-                    android:visibility="gone">
+                    android:layout_weight="1"
+                    android:orientation="vertical">
 
                     <TextView
-                        android:id="@+id/textEqBandFreq"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="4K Hz"
-                        android:textColor="#CCCCCC"
-                        android:textSize="10.5sp"
-                        android:textStyle="bold"
-                        android:fontFamily="sans-serif-condensed" />
-
-                    <TextView
-                        android:id="@+id/textEqGainValue"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="+0.0 dB"
+                        android:text="10-BAND EQUALIZER"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold"
-                        android:fontFamily="sans-serif-medium"
-                        android:layout_marginBottom="4dp" />
+                        android:textStyle="bold" />
 
-                    <LinearLayout
+                    <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal">
+                        android:text="64bit IIR"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
 
-                        <Button
-                            android:id="@+id/btnEqPlus"
-                            android:layout_width="24dp"
-                            android:layout_height="24dp"
-                            android:text="＋"
-                            android:textColor="#FFFFFF"
-                            android:textSize="10.5sp"
-                            android:background="@drawable/bg_btn_circle"
-                            android:padding="0dp"
-                            android:layout_marginEnd="6dp" />
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchEqEnable"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline"
+                    android:checked="false" />
+            </LinearLayout>
 
-                        <Button
-                            android:id="@+id/btnEqMinus"
-                            android:layout_width="24dp"
-                            android:layout_height="24dp"
-                            android:text="－"
-                            android:textColor="#FFFFFF"
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <com.example.perfectbitrate.WalkmanEqView
+                    android:id="@+id/walkmanEqView"
+                    android:layout_width="wrap_content"
+                    android:layout_height="170dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="170dp"
+                    android:orientation="vertical"
+                    android:gravity="top|center_horizontal"
+                    android:paddingTop="12dp"
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp">
+
+                    <Button
+                        android:id="@+id/btnEqEdit"
+                        android:layout_width="58dp"
+                        android:layout_height="28dp"
+                        android:text="調整"
+                        android:textColor="#FFFFFF"
+                        android:textSize="9.5sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/bg_btn_dap_outline"
+                        android:padding="0dp"
+                        android:layout_marginBottom="8dp" />
+
+                    <Button
+                        android:id="@+id/btnEqFlat"
+                        android:layout_width="58dp"
+                        android:layout_height="28dp"
+                        android:text="FLAT"
+                        android:textColor="#888888"
+                        android:textSize="9sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/bg_btn_dap_outline"
+                        android:padding="0dp"
+                        android:layout_marginBottom="8dp" />
+
+                    <LinearLayout
+                        android:id="@+id/layoutEqAdjustControls"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:gravity="center_horizontal"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/textEqBandFreq"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="4K Hz"
+                            android:textColor="#CCCCCC"
                             android:textSize="10.5sp"
-                            android:background="@drawable/bg_btn_circle"
-                            android:padding="0dp" />
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-condensed" />
+
+                        <TextView
+                            android:id="@+id/textEqGainValue"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="+0.0 dB"
+                            android:textColor="#FFFFFF"
+                            android:textSize="11.5sp"
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-medium"
+                            android:layout_marginBottom="4dp" />
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/btnEqPlus"
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:text="＋"
+                                android:textColor="#FFFFFF"
+                                android:textSize="10.5sp"
+                                android:background="@drawable/bg_btn_circle"
+                                android:padding="0dp"
+                                android:layout_marginEnd="6dp" />
+
+                            <Button
+                                android:id="@+id/btnEqMinus"
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:text="－"
+                                android:textColor="#FFFFFF"
+                                android:textSize="10.5sp"
+                                android:background="@drawable/bg_btn_circle"
+                                android:padding="0dp" />
+                        </LinearLayout>
                     </LinearLayout>
+
                 </LinearLayout>
 
             </LinearLayout>
 
         </LinearLayout>
 
-    </LinearLayout>
-
-    <!-- 1. 出力ビット深度 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
+        <!-- 1. 出力ビット深度 -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="BIT DEPTH FORMAT"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-            <TextView
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BIT DEPTH FORMAT"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DACへ伝送するPCMビット深度"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <Spinner
+                android:id="@+id/dialogSpinnerBitDepth"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="DACへ伝送するPCMビット深度"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                android:layout_height="30dp"
+                android:background="@drawable/bg_spinner_dap"
+                android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <Spinner
-            android:id="@+id/dialogSpinnerBitDepth"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1C1C1C"
+            android:layout_marginBottom="12dp" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 2. ディザリング方式 -->
-    <LinearLayout
-        android:id="@+id/layoutSectionDither"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
+        <!-- 2. ディザリング方式 -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/layoutSectionDither"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="DITHERING ALGORITHM"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-            <TextView
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DITHERING ALGORITHM"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="量子化ノイズ分散・SMBシェービング"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <Spinner
+                android:id="@+id/dialogSpinnerDither"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="量子化ノイズ分散・SMBシェービング"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                android:layout_height="30dp"
+                android:background="@drawable/bg_spinner_dap"
+                android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <Spinner
-            android:id="@+id/dialogSpinnerDither"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1C1C1C"
+            android:layout_marginBottom="12dp" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 3. DC PHASE LINEARIZER -->
-    <LinearLayout
-        android:id="@+id/layoutSectionDcPhase"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
+        <!-- 3. DC PHASE LINEARIZER -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/layoutSectionDcPhase"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="DC PHASE LINEARIZER"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-            <TextView
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DC PHASE LINEARIZER"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="アナログアンプ低域位相 (A/B Curve 2/4/8Hz)"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <Spinner
+                android:id="@+id/dialogSpinnerDcPhase"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="アナログアンプ低域位相 (A/B Curve 2/4/8Hz)"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                android:layout_height="30dp"
+                android:background="@drawable/bg_spinner_dap"
+                android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <Spinner
-            android:id="@+id/dialogSpinnerDcPhase"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1C1C1C"
+            android:layout_marginBottom="12dp" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 4. ★ HIGH-FREQ RESTORATION (構想通りシンプル 6 択) -->
-    <LinearLayout
-        android:id="@+id/layoutSectionDsee"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
+        <!-- 4. HIGH-FREQ RESTORATION -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/layoutSectionDsee"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="HIGH-FREQ RESTORATION"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-            <TextView
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="HIGH-FREQ RESTORATION"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="OPUS251などの圧縮コーデックで不足しがちの、高域(20k~40kHz)を補完"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <Spinner
+                android:id="@+id/dialogSpinnerDsee"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="OPUS251などの圧縮コーデックで不足しがちの、高域(20k~40kHz)を補完"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                android:layout_height="30dp"
+                android:background="@drawable/bg_spinner_dap"
+                android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <Spinner
-            android:id="@+id/dialogSpinnerDsee"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1C1C1C"
+            android:layout_marginBottom="12dp" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 5. アップサンプリング DSP -->
-    <LinearLayout
-        android:id="@+id/layoutSectionUpsample"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
+        <!-- 5. アップサンプリング DSP -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/layoutSectionUpsample"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="ULTRA HQ UPSAMPLING"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
+                android:layout_weight="1"
+                android:orientation="vertical">
 
-            <TextView
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ULTRA HQ UPSAMPLING"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ARM NEON 高タップ数ポリフェーズFIR"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <Spinner
+                android:id="@+id/dialogSpinnerUpsample"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="ARM NEON 高タップ数ポリフェーズFIR"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                android:layout_height="30dp"
+                android:background="@drawable/bg_spinner_dap"
+                android:popupBackground="#1A1A1A" />
         </LinearLayout>
 
-        <Spinner
-            android:id="@+id/dialogSpinnerUpsample"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
-    </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 6. 0dB Volume Lock -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
-
+        <!-- ★ 5-2. MULTISTAGE CASCADE FIR スイッチ (2x以上で有効) -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/layoutSectionCascadeFir"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#111111"
+            android:padding="8dp"
+            android:layout_marginBottom="12dp">
 
-            <TextView
-                android:id="@+id/dialogTextVolLockTitle"
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="MULTISTAGE CASCADE FIR"
+                    android:textColor="#E5A93C"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="3段2x多段接続 (255→63→39 taps) で-140dB超低ノイズ化"
+                    android:textColor="#888888"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/dialogSwitchCascadeFir"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="0dB VOLUME LOCK"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/dialogTextVolLockSub"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="USB DAC接続時のビット落ち回避（最大音量固定）"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                app:thumbTint="@null"
+                app:trackTint="@null"
+                android:thumb="@drawable/switch_thumb_white"
+                app:track="@drawable/switch_track_walkman_outline"
+                android:checked="true" />
         </LinearLayout>
 
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/dialogSwitchVolLock"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:thumbTint="@null"
-            app:trackTint="@null"
-            android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline" />
-    </LinearLayout>
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1C1C1C"
+            android:layout_marginBottom="12dp" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#1C1C1C"
-        android:layout_marginBottom="12dp" />
-
-    <!-- 7. AD CUT -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
-
+        <!-- 6. 0dB Volume Lock -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
 
-            <TextView
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/dialogTextVolLockTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0dB VOLUME LOCK"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/dialogTextVolLockSub"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="USB DAC接続時のビット落ち回避（最大音量固定）"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/dialogSwitchVolLock"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="AD CUT (広告自動カット)"
-                android:textColor="#FFFFFF"
-                android:textSize="11.5sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="YouTube Music 動画広告の自動スキップ"
-                android:textColor="#777777"
-                android:textSize="9.5sp" />
+                app:thumbTint="@null"
+                app:trackTint="@null"
+                android:thumb="@drawable/switch_thumb_white"
+                app:track="@drawable/switch_track_walkman_outline" />
         </LinearLayout>
 
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/dialogSwitchAdBlock"
-            android:layout_width="wrap_content"
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#1C1C1C"
+            android:layout_marginBottom="12dp" />
+
+        <!-- 7. AD CUT -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:thumbTint="@null"
-            app:trackTint="@null"
-            android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline"
-            android:checked="true" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="AD CUT (広告自動カット)"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="YouTube Music 動画広告の自動スキップ"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp" />
+            </LinearLayout>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/dialogSwitchAdBlock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:thumbTint="@null"
+                app:trackTint="@null"
+                android:thumb="@drawable/switch_thumb_white"
+                app:track="@drawable/switch_track_walkman_outline"
+                android:checked="true" />
+        </LinearLayout>
+
     </LinearLayout>
 
-</LinearLayout>
+</androidx.core.widget.NestedScrollView>

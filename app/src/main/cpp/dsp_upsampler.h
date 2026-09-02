@@ -54,6 +54,58 @@ enum class TransientMode : int {
     ACOUSTIC = 3
 };
 
+template <typename T, size_t Alignment = 16>
+struct AlignedAllocator {
+    using value_type = T;
+    AlignedAllocator() noexcept = default;
+    template <typename U> AlignedAllocator(const AlignedAllocator<U, Alignment>&) noexcept {}
+
+    T* allocate(size_t n) {
+        if (n == 0) return nullptr;
+        void* ptr = nullptr;
+        if (posix_memalign(&ptr, Alignment, n * sizeof(T)) != 0) {
+            throw std::bad_alloc();
+        }
+        return static_cast<T*>(ptr);
+    }
+
+    void deallocate(T* p, size_t) noexcept {
+        free(p);
+    }
+
+    template <typename U>
+    struct rebind {
+        using other = AlignedAllocator<U, Alignment>;
+    };
+};
+
+template <typename T, typename U, size_t A>
+bool operator==(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { return true; }
+template <typename T, typename U, size_t A>
+bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { return false; }
+
+class FirStage2x {
+public:
+    FirStage2x() = default;
+    void configure(size_t numTaps, double cutoffHz, double outputRateHz, FirFilterType filterType);
+    void reset();
+    void processStereo(const float* inL, const float* inR, size_t numFrames,
+                       std::vector<float, AlignedAllocator<float, 16>>& outL,
+                       std::vector<float, AlignedAllocator<float, 16>>& outR);
+private:
+    double besselI0(double x);
+    void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
+
+    size_t numTaps_ = 0;
+    size_t tapsPerPhase_ = 0;
+    std::vector<float, AlignedAllocator<float, 16>> poly0_;
+    std::vector<float, AlignedAllocator<float, 16>> poly1_;
+    std::vector<float, AlignedAllocator<float, 16>> histL_;
+    std::vector<float, AlignedAllocator<float, 16>> histR_;
+    int histWritePos_ = 0;
+    int histLen_ = 0;
+};
+
 class DspDcPhaseLinearizer {
 public:
     DspDcPhaseLinearizer();
@@ -114,11 +166,9 @@ private:
     int lpcAlgo_ = 1;
     bool useQmf_ = false;
 
-    // 1次HPF (Direct Form II Transposed)
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
-    // 2次BPF (Direct Form II Transposed)
     double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
     double bp_a1_ = 0.0, bp_a2_ = 0.0;
     double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
@@ -131,40 +181,9 @@ private:
     double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
     double targetGain_ = 0.12;
 
-    // ★ TV (Total Variation) 平滑化用 連続追従ゲイン
     double smoothedGainL_ = 0.0;
     double smoothedGainR_ = 0.0;
 };
-
-template <typename T, size_t Alignment = 16>
-struct AlignedAllocator {
-    using value_type = T;
-    AlignedAllocator() noexcept = default;
-    template <typename U> AlignedAllocator(const AlignedAllocator<U, Alignment>&) noexcept {}
-
-    T* allocate(size_t n) {
-        if (n == 0) return nullptr;
-        void* ptr = nullptr;
-        if (posix_memalign(&ptr, Alignment, n * sizeof(T)) != 0) {
-            throw std::bad_alloc();
-        }
-        return static_cast<T*>(ptr);
-    }
-
-    void deallocate(T* p, size_t) noexcept {
-        free(p);
-    }
-
-    template <typename U>
-    struct rebind {
-        using other = AlignedAllocator<U, Alignment>;
-    };
-};
-
-template <typename T, typename U, size_t A>
-bool operator==(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { return true; }
-template <typename T, typename U, size_t A>
-bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { return false; }
 
 class DspUpsampler {
 public:
@@ -177,6 +196,9 @@ public:
 
     void setDirectSource(bool enabled);
     bool isDirectSource() const { return isDirectSource_; }
+
+    void setCascadeFir(bool enabled);
+    bool isCascadeFir() const { return isCascadeFir_; }
 
     void setDitherMode(DitherMode mode);
     DitherMode getDitherMode() const { return ditherMode_; }
@@ -220,20 +242,21 @@ private:
     int historyWritePos_ = 0;
 
     bool isDirectSource_ = false;
+    bool isCascadeFir_ = true; // ★ 多段カスケード FIR (デフォルト: ON)
     bool lrIndependentDither_ = true;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
-    FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
+    FirFilterType filterType_ = FirFilterType::MINIMUM_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
     DseeMode dseeMode_ = DseeMode::AUTO_AI;
-    TransientMode transientMode_ = TransientMode::NATURAL;
+    TransientMode transientMode_ = TransientMode::ACOUSTIC;
 
     int customLpcAlgo_ = 1;
-    float customGain_ = 0.12f;
-    float customExtractFreq_ = 10000.0f;
-    bool customUseQmf_ = false;
+    float customGain_ = 0.14f;
+    float customExtractFreq_ = 12000.0f;
+    bool customUseQmf_ = true;
 
-    bool customUseGroupDelay_ = false;
+    bool customUseGroupDelay_ = true;
     bool customUseLattice_ = false;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
@@ -244,9 +267,15 @@ private:
     DspTransientRestorer transientRestorer_;
     DspLpcHarmonicAi lpcHarmonicAi_;
 
+    // 従来の 1段ポリフェーズ用
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
     std::vector<float, AlignedAllocator<float, 16>> historyR_;
+
+    // ★ 多段 2x カスケード用 (Stage1: 255taps, Stage2: 63taps, Stage3: 39taps)
+    std::array<FirStage2x, 3> cascadeStages_;
+    std::vector<float, AlignedAllocator<float, 16>> stageBuf1_L_, stageBuf1_R_;
+    std::vector<float, AlignedAllocator<float, 16>> stageBuf2_L_, stageBuf2_R_;
 
     std::vector<float, AlignedAllocator<float, 16>> tempInL_;
     std::vector<float, AlignedAllocator<float, 16>> tempInR_;

@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
 
     private var isDirectSource = false
+    private var isCascadeFir = true
     private var isLrIndependentDither = true
 
     private var currentBitMode = "16bit"
@@ -137,7 +138,7 @@ class MainActivity : AppCompatActivity() {
     private val presetProfiles = mutableMapOf<Int, PresetProfile>()
 
     private fun initDefaultProfiles() {
-        presetProfiles[1] = PresetProfile(0, 1, 1, 0.12f, 10000.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        presetProfiles[1] = PresetProfile(2, 3, 1, 0.14f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = false)
         presetProfiles[2] = PresetProfile(3, 3, 2, 0.09f, 8000.0f, useQmf = false, useGroupDelay = false, useLattice = false)
         presetProfiles[3] = PresetProfile(2, 1, 1, 0.14f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
         presetProfiles[4] = PresetProfile(2, 2, 3, 0.16f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
@@ -233,6 +234,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.setOutputDevice(activeOutputDevice)
 
             NativeAudioEngine.nativeSetDirectSource(isDirectSource)
+            NativeAudioEngine.nativeSetCascadeFir(isCascadeFir)
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
             NativeAudioEngine.nativeSetLrIndependentDither(isLrIndependentDither)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
@@ -315,6 +317,7 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences("bp_settings", Context.MODE_PRIVATE)
         isDirectSource = prefs.getBoolean("direct_source_enabled", false)
+        isCascadeFir = prefs.getBoolean("cascade_fir_enabled", true)
         isLrIndependentDither = prefs.getBoolean("lr_dither_enabled", true)
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
@@ -381,12 +384,14 @@ class MainActivity : AppCompatActivity() {
         val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
         val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
         val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
+        val layoutSectionCascadeFir = view.findViewById<View>(R.id.layoutSectionCascadeFir)
 
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
+        val switchCascadeFir = view.findViewById<SwitchCompat>(R.id.dialogSwitchCascadeFir)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
         val btnClose = view.findViewById<Button>(R.id.btnDialogClose)
@@ -424,6 +429,11 @@ class MainActivity : AppCompatActivity() {
             val isDseeActive = dspEnabled && factor >= 2
             layoutSectionDsee.alpha = if (isDseeActive) 1.0f else 0.3f
             spinnerDsee.isEnabled = isDseeActive
+
+            // ★ 2x以上アップサンプリング時のみカスケードFIRスイッチを有効化
+            val isUpsampleActive = dspEnabled && factor >= 2
+            layoutSectionCascadeFir.alpha = if (isUpsampleActive) 1.0f else 0.3f
+            switchCascadeFir.isEnabled = isUpsampleActive
         }
 
         switchDirectSource.isChecked = isDirectSource
@@ -439,6 +449,13 @@ class MainActivity : AppCompatActivity() {
             updateDspSectionsState(isChecked, effectiveFactor)
             playbackService?.setUpsampling(effectiveFactor)
             updateStatus()
+        }
+
+        switchCascadeFir.isChecked = isCascadeFir
+        switchCascadeFir.setOnCheckedChangeListener { _, isChecked ->
+            isCascadeFir = isChecked
+            prefs.edit { putBoolean("cascade_fir_enabled", isChecked) }
+            NativeAudioEngine.nativeSetCascadeFir(isChecked)
         }
 
         fun setEditMode(enabled: Boolean) {
