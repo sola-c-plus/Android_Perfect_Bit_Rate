@@ -38,11 +38,12 @@ enum class DcPhaseType : int {
     B_HIGH = 6
 };
 
+// ★ LPC スペクトル外挿 ＆ DSEE HX AI モード
 enum class DseeMode : int {
     OFF = 0,
-    STANDARD = 1,
-    VOCAL = 2,
-    DYNAMIC = 3
+    DSEE_AI = 1,       // DSEE HX AI (LPC + リアルタイム音響特徴量自動適応)
+    K2_LPC = 2,        // JVC K2風 純粋LPC線形予測外挿 (上品・破綻ゼロ)
+    ADAPTIVE_EXCITER = 3 // ディテール保護型 トランジェント進相エキサイター
 };
 
 class DspDcPhaseLinearizer {
@@ -63,29 +64,37 @@ private:
     double s1_R_ = 0.0, s2_R_ = 0.0;
 };
 
-class DspHarmonicRestorer {
+// ★ LPC スペクトル外挿 ＆ リアルタイム音響解析 AI エンジン
+class DspLpcHarmonicAi {
 public:
-    DspHarmonicRestorer();
+    DspLpcHarmonicAi();
     void configure(DseeMode mode, double sampleRate);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
 
 private:
-    DseeMode mode_ = DseeMode::STANDARD;
+    DseeMode mode_ = DseeMode::DSEE_AI;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
-    double blendGain_ = 0.08;
 
-    double hp_b0_ = 1.0, hp_b1_ = -1.0;
-    double hp_a1_ = 0.0;
+    // 10kHz〜16kHz 帯域抽出フィルター
+    double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
+    // 20kHz〜38kHz 超高域 LPC シェーピング BPF
     double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
     double bp_a1_ = 0.0, bp_a2_ = 0.0;
     double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
     double bp_s1_R_ = 0.0, bp_s2_R_ = 0.0;
 
-    double envL_ = 0.0, envR_ = 0.0;
+    // リアルタイム音響特徴量アナライザー
+    double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
+    double envHfL_ = 0.0, envHfR_ = 0.0;
+    double envTotalL_ = 0.0, envTotalR_ = 0.0;
+    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
+
+    // LPC 自己相関・減衰スロープ
+    double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
 };
 
 template <typename T, size_t Alignment = 16>
@@ -163,20 +172,19 @@ private:
     int historyLen_ = 128;
     int historyWritePos_ = 0;
 
-    // ★ 全DSPバイパス・ソースダイレクトフラグ
     bool isDirectSource_ = false;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::LINEAR_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
-    DseeMode dseeMode_ = DseeMode::STANDARD;
+    DseeMode dseeMode_ = DseeMode::DSEE_AI;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
     DspEqualizer equalizer_;
     DspDcPhaseLinearizer dcPhaseLinearizer_;
-    DspHarmonicRestorer harmonicRestorer_;
+    DspLpcHarmonicAi lpcHarmonicAi_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;

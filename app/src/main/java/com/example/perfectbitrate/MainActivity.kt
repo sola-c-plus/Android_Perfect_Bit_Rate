@@ -110,12 +110,13 @@ class MainActivity : AppCompatActivity() {
     )
     private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
 
-    private var currentDseeMode = 1
+    // ★ LPC スペクトル外挿 ＆ DSEE HX AI モード
+    private var currentDseeMode = 1 // デフォルト: DSEE_AI
     private val dseeOptions = arrayOf(
         "OFF (Bypass)",
-        "Standard (Natural Air / 自然な空気感)",
-        "Vocal (Female Vocal / 息づかい・艶)",
-        "Dynamic (Hi-Res Sparkle / シンバル開放感)"
+        "DSEE HX AI (LPC Adaptive / 自動適応)",
+        "K2 LPC Natural (Linear Predictive / 上品)",
+        "Adaptive Exciter (Detail-Protected / 輪郭)"
     )
     private val dseeModeValues = arrayOf(0, 1, 2, 3)
 
@@ -267,7 +268,7 @@ class MainActivity : AppCompatActivity() {
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentFirFilterType = prefs.getInt("selected_fir_filter_type", 0)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
-        currentDseeMode = prefs.getInt("selected_dsee_mode", 1)
+        currentDseeMode = prefs.getInt("selected_dsee_mode", 1) // Default: DSEE_AI
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -307,7 +308,6 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
 
-        // ★ 上部角の白飛びを完全解消 (親コンテナ背景を透明化)
         dialog.setOnShowListener {
             val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             bottomSheet?.setBackgroundColor(Color.TRANSPARENT)
