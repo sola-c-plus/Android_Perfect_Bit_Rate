@@ -44,19 +44,16 @@ class WalkmanEqView @JvmOverloads constructor(
     var onGainChangedListener: ((Int, Float, FloatArray) -> Unit)? = null
     var onBandSelectedListener: ((Int, Float) -> Unit)? = null
 
-    // 1dB 刻みの精細グリッド線
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#1C1C1C")
         strokeWidth = 0.75f * density
     }
 
-    // 0dB センターライン
     private val centerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#3C3C3C")
         strokeWidth = 1.0f * density
     }
 
-    // 外枠ボーダー
     private val gridBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#2E2E2E")
         strokeWidth = 1.0f * density
@@ -112,6 +109,23 @@ class WalkmanEqView @JvmOverloads constructor(
     private val bandX = FloatArray(10)
     private val curvePath = Path()
 
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val h = MeasureSpec.getSize(heightMeasureSpec).coerceAtLeast((150 * density).toInt())
+        val topPadding = 6f * density
+        val labelAreaHeight = 18f * density
+        val gridH = h.toFloat() - topPadding - labelAreaHeight
+        val desiredGridW = gridH * 1.42f
+        val totalW = (desiredGridW + 8f * density).toInt()
+
+        val widthMode = MeasureSpec.getMode(widthMeasureSpec)
+        val finalW = if (widthMode == MeasureSpec.EXACTLY) {
+            MeasureSpec.getSize(widthMeasureSpec)
+        } else {
+            totalW
+        }
+        setMeasuredDimension(finalW, h)
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
@@ -120,13 +134,11 @@ class WalkmanEqView @JvmOverloads constructor(
         val topPadding = 6f * density
         val availableHeight = h.toFloat() - topPadding - labelAreaHeight
 
-        // ★ 3:2 (1.45:1) のアスペクト比を維持
         gridHeight = availableHeight
-        val desiredWidth = gridHeight * 1.45f
-        gridWidth = min(w.toFloat() - 8f * density, desiredWidth)
+        val desiredWidth = gridHeight * 1.42f
+        gridWidth = min(w.toFloat() - 6f * density, desiredWidth)
 
-        // ★ 左寄せ配置
-        gridLeft = 4f * density
+        gridLeft = 2f * density
         gridRight = gridLeft + gridWidth
         gridTop = topPadding
         gridBottom = gridTop + gridHeight
@@ -154,7 +166,6 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (gridWidth <= 0 || gridHeight <= 0) return
 
-        // 1. 1dB 刻みの水平グリッド線 (20分割 = 21本)
         val numHoriz = 20
         for (i in 0..numHoriz) {
             val y = gridTop + i * (gridHeight / numHoriz)
@@ -165,7 +176,6 @@ class WalkmanEqView @JvmOverloads constructor(
             }
         }
 
-        // 2. 垂直グリッド線 & 周波数ラベル
         val labelY = height.toFloat() - 4f * density
         for (i in bandLabels.indices) {
             val x = bandX[i]
@@ -174,16 +184,13 @@ class WalkmanEqView @JvmOverloads constructor(
             canvas.drawText(bandLabels[i], x, labelY, p)
         }
 
-        // 外枠
         canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
-        // 3. 編集時カーソル
         if (isEditMode && !isDirectBypass && selectedBandIndex in 0..9) {
             val curX = bandX[selectedBandIndex]
             canvas.drawLine(curX, gridTop, curX, gridBottom, cursorLinePaint)
         }
 
-        // 4. Monotone Cubic Spline 曲線描画
         curvePath.reset()
         val n = 10
         val xArr = FloatArray(n)
@@ -228,7 +235,6 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawPath(curvePath, if (isDirectBypass) bypassCurvePaint else curvePaint)
 
-        // 5. 選択中ポイント描画
         if (isEditMode && !isDirectBypass) {
             for (i in 0 until n) {
                 val x = xArr[i]
