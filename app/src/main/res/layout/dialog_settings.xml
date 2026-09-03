@@ -23,35 +23,49 @@
             android:background="#444444"
             android:layout_marginBottom="8dp" />
 
-        <!-- ★ 上部埋め込み型 メディアプレイヤーコントローラー -->
+        <!-- ★ SONY WALKMAN 風 サムネイル付きミニプレイヤーコントローラー -->
         <LinearLayout
             android:id="@+id/layoutDialogPlayerControl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="#141414"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="10dp"
+            android:orientation="horizontal"
+            android:background="#161616"
+            android:padding="10dp"
+            android:gravity="center_vertical"
             android:layout_marginBottom="12dp">
 
-            <!-- 曲名 ＆ アーティスト表示 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="4dp">
+            <!-- 左側: アルバムアート / サムネイル (角丸 64dp x 64dp) -->
+            <androidx.cardview.widget.CardView
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                app:cardCornerRadius="6dp"
+                app:cardElevation="0dp"
+                app:cardBackgroundColor="#222222">
 
+                <ImageView
+                    android:id="@+id/dialogImageArtwork"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:scaleType="centerCrop"
+                    android:src="@drawable/bg_badge_normal" />
+            </androidx.cardview.widget.CardView>
+
+            <!-- 右側: 曲情報 ＆ シークバー ＆ コントロールボタン -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:layout_marginStart="12dp">
+
+                <!-- 曲名 ＆ アーティスト表示 (フォント拡大) -->
                 <TextView
                     android:id="@+id/dialogTextTrackTitle"
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
                     android:text="YouTube Music"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="14sp"
                     android:textStyle="bold"
                     android:ellipsize="end"
                     android:maxLines="1"
@@ -59,95 +73,101 @@
 
                 <TextView
                     android:id="@+id/dialogTextTrackArtist"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
                     android:text=""
-                    android:textColor="#AAAAAA"
-                    android:textSize="10.5sp"
+                    android:textColor="#B0B0B0"
+                    android:textSize="12sp"
                     android:ellipsize="end"
-                    android:maxLines="1" />
+                    android:maxLines="1"
+                    android:layout_marginTop="1dp" />
+
+                <!-- シークバー ＆ 経過/総時間 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="2dp">
+
+                    <TextView
+                        android:id="@+id/dialogTextCurrentTime"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0:00"
+                        android:textColor="#888888"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace" />
+
+                    <SeekBar
+                        android:id="@+id/dialogSeekBar"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:max="1000"
+                        android:progress="0"
+                        android:progressTint="#FFFFFF"
+                        android:thumbTint="#FFFFFF"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp" />
+
+                    <TextView
+                        android:id="@+id/dialogTextTotalTime"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0:00"
+                        android:textColor="#888888"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace" />
+                </LinearLayout>
+
+                <!-- 白丸枠 WALKMAN コントロールボタン (前へ / 再生・一時停止 / 次へ) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_marginTop="4dp">
+
+                    <Button
+                        android:id="@+id/dialogBtnPrevTrack"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:text="⏮"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:background="@drawable/bg_btn_walkman_circle_small"
+                        android:padding="0dp"
+                        android:gravity="center"
+                        android:layout_marginEnd="18dp" />
+
+                    <Button
+                        android:id="@+id/dialogBtnPlayPause"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:text="▶"
+                        android:textColor="#FFFFFF"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/bg_btn_walkman_circle_large"
+                        android:padding="0dp"
+                        android:gravity="center"
+                        android:layout_marginEnd="18dp" />
+
+                    <Button
+                        android:id="@+id/dialogBtnNextTrack"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:text="⏭"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:background="@drawable/bg_btn_walkman_circle_small"
+                        android:padding="0dp"
+                        android:gravity="center" />
+                </LinearLayout>
+
             </LinearLayout>
 
-            <!-- シークバー ＆ 経過/総時間 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:id="@+id/dialogTextCurrentTime"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="0:00"
-                    android:textColor="#888888"
-                    android:textSize="10sp"
-                    android:fontFamily="monospace" />
-
-                <SeekBar
-                    android:id="@+id/dialogSeekBar"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:max="1000"
-                    android:progress="0"
-                    android:progressTint="#E5A93C"
-                    android:thumbTint="#FFFFFF"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp" />
-
-                <TextView
-                    android:id="@+id/dialogTextTotalTime"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="0:00"
-                    android:textColor="#888888"
-                    android:textSize="10sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <!-- 再生コントロールボタン (前へ / 再生・一時停止 / 次へ) -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center"
-                android:layout_marginTop="4dp">
-
-                <Button
-                    android:id="@+id/dialogBtnPrevTrack"
-                    android:layout_width="40dp"
-                    android:layout_height="30dp"
-                    android:text="◀◀"
-                    android:textColor="#CCCCCC"
-                    android:textSize="10.5sp"
-                    android:background="@drawable/bg_btn_icon"
-                    android:padding="0dp"
-                    android:layout_marginEnd="16dp" />
-
-                <Button
-                    android:id="@+id/dialogBtnPlayPause"
-                    android:layout_width="54dp"
-                    android:layout_height="32dp"
-                    android:text="▶"
-                    android:textColor="#000000"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:backgroundTint="#E5A93C"
-                    android:padding="0dp"
-                    android:layout_marginEnd="16dp" />
-
-                <Button
-                    android:id="@+id/dialogBtnNextTrack"
-                    android:layout_width="40dp"
-                    android:layout_height="30dp"
-                    android:text="▶▶"
-                    android:textColor="#CCCCCC"
-                    android:textSize="10.5sp"
-                    android:background="@drawable/bg_btn_icon"
-                    android:padding="0dp" />
-            </LinearLayout>
         </LinearLayout>
 
         <!-- タイトルバー -->

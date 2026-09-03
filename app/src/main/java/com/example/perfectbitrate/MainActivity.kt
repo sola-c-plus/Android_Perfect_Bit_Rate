@@ -17,6 +17,8 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -32,11 +34,11 @@ import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
-import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -56,6 +58,8 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
+import java.net.URL
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -92,8 +96,11 @@ class MainActivity : AppCompatActivity() {
     private var currentArtist = ""
     private var currentDuration = 0L
     private var currentPosition = 0L
+    private var currentArtworkBitmap: Bitmap? = null
+    private val imageExecutor = Executors.newSingleThreadExecutor()
 
     // ダイアログ内プレイヤーUI参照
+    private var activeDialogArtworkImage: ImageView? = null
     private var activeDialogSeekBar: SeekBar? = null
     private var activeDialogCurrentTime: TextView? = null
     private var activeDialogTotalTime: TextView? = null
@@ -402,6 +409,10 @@ class MainActivity : AppCompatActivity() {
         activeDialogTrackArtist?.text = currentArtist
         activeDialogPlayPauseBtn?.text = if (isPlayingState) "❚❚" else "▶"
 
+        if (currentArtworkBitmap != null) {
+            activeDialogArtworkImage?.setImageBitmap(currentArtworkBitmap)
+        }
+
         if (!isUserSeeking && currentDuration > 0) {
             val progress = ((currentPosition.toDouble() / currentDuration.toDouble()) * 1000).toInt().coerceIn(0, 1000)
             activeDialogSeekBar?.progress = progress
@@ -419,7 +430,7 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
 
-        // ★ レベルメーター等インフォパネルの直下までシートを完全にフィット（上部隙間埋め）
+        // ★ レベルメーター下まで隙間なく全展開
         dialog.setOnShowListener {
             val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet) as? FrameLayout
             if (bottomSheet != null) {
@@ -440,7 +451,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // プレイヤーコントロールビューの取得
+        val imageArtwork = view.findViewById<ImageView>(R.id.dialogImageArtwork)
         val textTrackTitle = view.findViewById<TextView>(R.id.dialogTextTrackTitle)
         val textTrackArtist = view.findViewById<TextView>(R.id.dialogTextTrackArtist)
         val textCurrentTime = view.findViewById<TextView>(R.id.dialogTextCurrentTime)
@@ -450,6 +461,7 @@ class MainActivity : AppCompatActivity() {
         val btnPrev = view.findViewById<Button>(R.id.dialogBtnPrevTrack)
         val btnNext = view.findViewById<Button>(R.id.dialogBtnNextTrack)
 
+        activeDialogArtworkImage = imageArtwork
         activeDialogTrackTitle = textTrackTitle
         activeDialogTrackArtist = textTrackArtist
         activeDialogCurrentTime = textCurrentTime
@@ -747,6 +759,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         dialog.setOnDismissListener {
+            activeDialogArtworkImage = null
             activeDialogTrackTitle = null
             activeDialogTrackArtist = null
             activeDialogCurrentTime = null
@@ -1233,6 +1246,21 @@ class MainActivity : AppCompatActivity() {
                 currentTitle = title
                 currentArtist = artist
                 playbackService?.updateMetadata(title, artist, artwork)
+
+                if (artwork.isNotEmpty()) {
+                    imageExecutor.execute {
+                        try {
+                            val stream = URL(artwork).openStream()
+                            val bmp = BitmapFactory.decodeStream(stream)
+                            runOnUiThread {
+                                currentArtworkBitmap = bmp
+                                activeDialogArtworkImage?.setImageBitmap(bmp)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("BitPerfect", "Image decode error", e)
+                        }
+                    }
+                }
                 updateDialogPlayerUi()
             }
             "progress" -> {
