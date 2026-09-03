@@ -1,4 +1,4 @@
-﻿#include <jni.h>
+#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
@@ -133,6 +133,18 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
             g_upsampler->getEqualizer().setAllGains(gainElements);
             env->ReleaseFloatArrayElements(gains, gainElements, JNI_ABORT);
         }
+    }
+}
+
+// ★ C++ Native 32バンド スペクトルデータ取得 JNI
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetSpectrum(
+        JNIEnv *env, jobject thiz, jfloatArray out_array) {
+    if (!out_array || !g_upsampler) return;
+    jfloat* dst = env->GetFloatArrayElements(out_array, nullptr);
+    if (dst) {
+        g_upsampler->getSpectrum(dst);
+        env->ReleaseFloatArrayElements(out_array, dst, 0);
     }
 }
 

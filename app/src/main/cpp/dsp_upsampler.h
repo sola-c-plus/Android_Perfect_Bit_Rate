@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <vector>
 #include <cstdint>
@@ -230,10 +230,16 @@ public:
 
     void reset();
 
+    // ★ C++ Native 32バンド スペクトルデータ取得
+    void getSpectrum(float* out32Bands);
+
 private:
     void generateFilterCoefficients(int factor);
     void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
+
+    // ★ 2048点 高解像度 FFT ＆ 1/3オクターブ積分
+    void analyzeSpectrum(const float* l, const float* r, size_t numFrames);
 
     int factor_ = 1;
     float inSampleRate_ = 48000.0f;
@@ -242,7 +248,7 @@ private:
     int historyWritePos_ = 0;
 
     bool isDirectSource_ = false;
-    bool isCascadeFir_ = true; // ★ 多段カスケード FIR (デフォルト: ON)
+    bool isCascadeFir_ = true;
     bool lrIndependentDither_ = true;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
@@ -267,12 +273,10 @@ private:
     DspTransientRestorer transientRestorer_;
     DspLpcHarmonicAi lpcHarmonicAi_;
 
-    // 従来の 1段ポリフェーズ用
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
     std::vector<float, AlignedAllocator<float, 16>> historyR_;
 
-    // ★ 多段 2x カスケード用 (Stage1: 255taps, Stage2: 63taps, Stage3: 39taps)
     std::array<FirStage2x, 3> cascadeStages_;
     std::vector<float, AlignedAllocator<float, 16>> stageBuf1_L_, stageBuf1_R_;
     std::vector<float, AlignedAllocator<float, 16>> stageBuf2_L_, stageBuf2_R_;
@@ -281,4 +285,9 @@ private:
     std::vector<float, AlignedAllocator<float, 16>> tempInR_;
     std::vector<float, AlignedAllocator<float, 16>> tempOutL_;
     std::vector<float, AlignedAllocator<float, 16>> tempOutR_;
+
+    // ★ 32バンド スペクトル解析用バッファ
+    float spectrumDb_[32] = {-60.0f};
+    std::vector<float> specRingBuf_;
+    size_t specRingPos_ = 0;
 };

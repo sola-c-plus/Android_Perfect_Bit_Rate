@@ -39,12 +39,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.log10
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 class BitPerfectPlaybackService : Service() {
 
@@ -72,14 +68,12 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    // ★ ピーク ＆ 32バンド スペクトル通知リスナー
+    // ★ ピーク ＆ C++ Native 32バンド スペクトル通知リスナー
     var onPeakListener: ((Float, Float, Int, FloatArray) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
 
-    // ★ 32バンド FFT スペクトルアナライザー
-    private val spectrumAnalyzer = SpectrumAnalyzer32()
-    private val tempSpectrumOut = FloatArray(32) { -50f }
+    private val tempSpectrumOut = FloatArray(32) { -60f }
 
     var isVolumeLocked = false
         set(value) {
@@ -317,7 +311,7 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        tempSpectrumOut.fill(-50f)
+        tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
     }
 
@@ -416,7 +410,7 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        tempSpectrumOut.fill(-50f)
+        tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
         trackExecutor.execute {
             audioLock.lock()
@@ -602,7 +596,6 @@ class BitPerfectPlaybackService : Service() {
                 baseSampleRate = baseRate
                 upsampleFactor = factor
                 effectiveSampleRate = baseRate * factor
-                spectrumAnalyzer.init(effectiveSampleRate)
 
                 val requestedEncodings = if (!isUsbDevice(targetDevice)) {
                     listOf(AudioFormat.ENCODING_PCM_16BIT)
@@ -777,9 +770,6 @@ class BitPerfectPlaybackService : Service() {
         var instantPeakR = -60f
         var bitMask = 0
 
-        val floatSamples = FloatArray(min(512, pcmBytes.size / (if (bitMode == "32bit") 8 else (if (bitMode == "24bit") 6 else 4))))
-        var sampleIdx = 0
-
         when (bitMode) {
             "32bit" -> {
                 var maxL = 0L
@@ -794,9 +784,6 @@ class BitPerfectPlaybackService : Service() {
                     bitMask = bitMask or (valL.toInt() and 0x7FFFFFFF) or (valR.toInt() and 0x7FFFFFFF)
                     if (rawL < 0 || rawR < 0 || valL >= 1073741824L || valR >= 1073741824L) {
                         bitMask = bitMask or (1 shl 31)
-                    }
-                    if (sampleIdx < floatSamples.size) {
-                        floatSamples[sampleIdx++] = ((rawL.toFloat() + rawR.toFloat()) * 0.5f) / 2147483647.0f
                     }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 2147483647.0f) else -60f
@@ -824,9 +811,6 @@ class BitPerfectPlaybackService : Service() {
                     if (rawL < 0 || rawR < 0 || valL >= 4194304L || valR >= 4194304L) {
                         bitMask = bitMask or 0x800000
                     }
-                    if (sampleIdx < floatSamples.size) {
-                        floatSamples[sampleIdx++] = ((rawL.toFloat() + rawR.toFloat()) * 0.5f) / 8388607.0f
-                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
@@ -845,17 +829,14 @@ class BitPerfectPlaybackService : Service() {
                     if (rawL < 0 || rawR < 0 || valL >= 16384 || valR >= 16384) {
                         bitMask = bitMask or 0x8000
                     }
-                    if (sampleIdx < floatSamples.size) {
-                        floatSamples[sampleIdx++] = ((rawL.toFloat() + rawR.toFloat()) * 0.5f) / 32767.0f
-                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 32767.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 32767.0f) else -60f
             }
         }
 
-        // 32バンド スペクトル計算
-        spectrumAnalyzer.compute(floatSamples, sampleIdx, tempSpectrumOut)
+        // ★ C++ Native DSP 側から 32バンド スペクトルデータを直接取得
+        NativeAudioEngine.nativeGetSpectrum(tempSpectrumOut)
 
         onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, tempSpectrumOut)
     }
@@ -915,98 +896,5 @@ class BitPerfectPlaybackService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopServiceCleanly()
-    }
-
-    // ★ 32バンド 高精度対数 FFT スペクトルアナライザー
-    private class SpectrumAnalyzer32 {
-        private val fftSize = 512
-        private val window = FloatArray(fftSize) { i ->
-            (0.54 - 0.46 * cos(2.0 * Math.PI * i / (fftSize - 1))).toFloat()
-        }
-        private val real = FloatArray(fftSize)
-        private val imag = FloatArray(fftSize)
-
-        private val freqs = floatArrayOf(
-            25f, 31.5f, 40f, 50f, 63f, 80f, 100f, 125f, 160f, 200f,
-            250f, 315f, 400f, 500f, 630f, 800f, 1000f, 1250f, 1600f, 2000f,
-            2500f, 3150f, 4000f, 5000f, 6300f, 8000f, 10000f, 12500f, 16000f, 20000f,
-            28000f, 40000f
-        )
-        private val bandBins = IntArray(freqs.size)
-
-        fun init(sampleRate: Int) {
-            val sr = max(8000, sampleRate)
-            for (i in freqs.indices) {
-                val bin = ((freqs[i] * fftSize) / sr).toInt().coerceIn(1, fftSize / 2 - 1)
-                bandBins[i] = bin
-            }
-        }
-
-        fun compute(samples: FloatArray, count: Int, outBands: FloatArray) {
-            val n = min(count, fftSize)
-            for (i in 0 until n) {
-                real[i] = samples[i] * window[i]
-                imag[i] = 0f
-            }
-            for (i in n until fftSize) {
-                real[i] = 0f
-                imag[i] = 0f
-            }
-
-            fft(real, imag, fftSize)
-
-            val outLen = min(outBands.size, freqs.size)
-            for (b in 0 until outLen) {
-                val centerBin = bandBins[b]
-                val r = real[centerBin]
-                val im = imag[centerBin]
-                val mag = sqrt((r * r + im * im).toDouble()).toFloat() / (fftSize / 4f)
-                val db = if (mag > 1e-4f) (20f * log10(mag)).toFloat() else -50f
-                outBands[b] = db.coerceIn(-50f, 0f)
-            }
-        }
-
-        private fun fft(r: FloatArray, im: FloatArray, n: Int) {
-            var j = 0
-            for (i in 0 until n - 1) {
-                if (i < j) {
-                    val tr = r[i]; r[i] = r[j]; r[j] = tr
-                    val ti = im[i]; im[i] = im[j]; im[j] = ti
-                }
-                var k = n shr 1
-                while (k <= j) {
-                    j -= k
-                    k = k shr 1
-                }
-                j += k
-            }
-            var len = 2
-            while (len <= n) {
-                val half = len shr 1
-                val angle = -2.0 * Math.PI / len
-                val wStepR = cos(angle).toFloat()
-                val wStepI = sin(angle).toFloat()
-                var i = 0
-                while (i < n) {
-                    var wR = 1.0f
-                    var wI = 0.0f
-                    for (k in 0 until half) {
-                        val uR = r[i + k]
-                        val uI = im[i + k]
-                        val vR = r[i + k + half] * wR - im[i + k + half] * wI
-                        val vI = r[i + k + half] * wI + im[i + k + half] * wR
-                        r[i + k] = uR + vR
-                        im[i + k] = uI + vI
-                        r[i + k + half] = uR - vR
-                        im[i + k + half] = uI - vI
-                        val nextWR = wR * wStepR - wI * wStepI
-                        wI = wR * wStepI + wI * wStepR
-                        wR = nextWR
-                    }
-                    i += len
-                }
-                len = len shl 1
-            }
-        }
     }
 }

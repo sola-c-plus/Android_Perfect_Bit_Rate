@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import java.nio.ByteBuffer
 
@@ -25,6 +25,8 @@ object NativeAudioEngine {
     external fun nativeSetTransientMode(mode: Int)
     external fun nativeSetTransientCustomParams(useGroupDelay: Boolean, useLattice: Boolean)
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
+    external fun nativeGetSpectrum(outArray: FloatArray)
+
     external fun nativeProcessUpsample(
         inBytes: ByteArray,
         inLength: Int,
