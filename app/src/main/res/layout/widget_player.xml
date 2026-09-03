@@ -14,12 +14,12 @@
     <!-- サムネイル / アルバムアート -->
     <ImageView
         android:id="@+id/widgetImageArtwork"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
         android:scaleType="centerCrop"
         android:src="@drawable/bg_badge_normal" />
 
-    <!-- 曲名 ＆ アーティスト -->
+    <!-- 中央: 曲名 ＆ アーティスト ＆ シークバー ＆ 時間 -->
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
@@ -28,6 +28,7 @@
         android:layout_marginStart="10dp"
         android:layout_marginEnd="8dp">
 
+        <!-- 1段目: 曲名 -->
         <TextView
             android:id="@+id/widgetTextTitle"
             android:layout_width="match_parent"
@@ -40,6 +41,7 @@
             android:maxLines="1"
             android:fontFamily="sans-serif-medium" />
 
+        <!-- 2段目: アーティスト名 -->
         <TextView
             android:id="@+id/widgetTextArtist"
             android:layout_width="match_parent"
@@ -48,11 +50,49 @@
             android:textColor="#AAAAAA"
             android:textSize="11sp"
             android:ellipsize="end"
-            android:maxLines="1"
-            android:layout_marginTop="1dp" />
+            android:maxLines="1" />
+
+        <!-- ★ 3段目: シークライン (プログレスバー) ＆ 経過時間/総時間 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="3dp">
+
+            <TextView
+                android:id="@+id/widgetTextCurrentTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#888888"
+                android:textSize="9.5sp"
+                android:fontFamily="monospace" />
+
+            <ProgressBar
+                android:id="@+id/widgetProgressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="0dp"
+                android:layout_height="3.5dp"
+                android:layout_weight="1"
+                android:max="1000"
+                android:progress="0"
+                android:progressDrawable="@drawable/progress_bar_gold"
+                android:layout_marginStart="6dp"
+                android:layout_marginEnd="6dp" />
+
+            <TextView
+                android:id="@+id/widgetTextTotalTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#888888"
+                android:textSize="9.5sp"
+                android:fontFamily="monospace" />
+        </LinearLayout>
     </LinearLayout>
 
-    <!-- コントロールボタン群 (白丸枠) -->
+    <!-- 右端: 白丸枠ボタン群 -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

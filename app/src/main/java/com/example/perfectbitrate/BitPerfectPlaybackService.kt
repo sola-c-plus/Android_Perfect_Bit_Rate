@@ -189,7 +189,7 @@ class BitPerfectPlaybackService : Service() {
 
         startPlaybackLoop()
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying, currentPosition, currentDuration)
     }
 
     fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
@@ -404,6 +404,9 @@ class BitPerfectPlaybackService : Service() {
 
         mediaSession.setMetadata(metaBuilder.build())
         updatePlaybackState(isPlaying, currentMs)
+
+        // ★ ウィジェットへシークバー進捗（現在位置・総時間）をリアルタイム更新
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying, currentMs, durationMs)
     }
 
     fun forceCloseDacStream() {
@@ -429,7 +432,7 @@ class BitPerfectPlaybackService : Service() {
             }
         }
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, false)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, false, currentPosition, currentDuration)
     }
 
     fun updatePlaybackState(isPlaying: Boolean, position: Long = currentPosition) {
@@ -453,7 +456,7 @@ class BitPerfectPlaybackService : Service() {
             forceCloseDacStream()
         }
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying, position, currentDuration)
     }
 
     fun updateCodec(codec: String) {
@@ -478,7 +481,7 @@ class BitPerfectPlaybackService : Service() {
 
         mediaSession.setMetadata(metaBuilder.build())
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, title, artist, currentArtwork, isCurrentlyPlaying)
+        PlayerWidgetProvider.updateAllWidgets(this, title, artist, currentArtwork, isCurrentlyPlaying, currentPosition, currentDuration)
 
         if (artworkUrl.isNotEmpty()) {
             imageExecutor.execute {
@@ -489,7 +492,7 @@ class BitPerfectPlaybackService : Service() {
                     metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
                     mediaSession.setMetadata(metaBuilder.build())
                     updateNotification()
-                    PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying)
+                    PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying, currentPosition, currentDuration)
                 } catch (e: Exception) {}
             }
         }

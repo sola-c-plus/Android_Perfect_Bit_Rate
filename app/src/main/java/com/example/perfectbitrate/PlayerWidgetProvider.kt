@@ -13,12 +13,13 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.widget.RemoteViews
+import java.util.Locale
 
 class PlayerWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         for (appWidgetId in appWidgetIds) {
-            updateAppWidget(context, appWidgetManager, appWidgetId, lastTitle, lastArtist, lastArtwork, lastIsPlaying)
+            updateAppWidget(context, appWidgetManager, appWidgetId, lastTitle, lastArtist, lastArtwork, lastIsPlaying, lastPosition, lastDuration)
         }
     }
 
@@ -27,25 +28,31 @@ class PlayerWidgetProvider : AppWidgetProvider() {
         private var lastArtist: String = "YouTube Music"
         private var lastArtwork: Bitmap? = null
         private var lastIsPlaying: Boolean = false
+        private var lastPosition: Long = 0L
+        private var lastDuration: Long = 0L
 
         fun updateAllWidgets(
             context: Context,
             title: String = lastTitle,
             artist: String = lastArtist,
             artwork: Bitmap? = lastArtwork,
-            isPlaying: Boolean = lastIsPlaying
+            isPlaying: Boolean = lastIsPlaying,
+            positionMs: Long = lastPosition,
+            durationMs: Long = lastDuration
         ) {
             lastTitle = title
             lastArtist = artist
             lastArtwork = artwork
             lastIsPlaying = isPlaying
+            lastPosition = positionMs
+            lastDuration = durationMs
 
             val appWidgetManager = AppWidgetManager.getInstance(context) ?: return
             val thisWidget = ComponentName(context, PlayerWidgetProvider::class.java)
             val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget) ?: return
 
             for (appWidgetId in appWidgetIds) {
-                updateAppWidget(context, appWidgetManager, appWidgetId, title, artist, artwork, isPlaying)
+                updateAppWidget(context, appWidgetManager, appWidgetId, title, artist, artwork, isPlaying, positionMs, durationMs)
             }
         }
 
@@ -56,13 +63,25 @@ class PlayerWidgetProvider : AppWidgetProvider() {
             title: String,
             artist: String,
             artwork: Bitmap?,
-            isPlaying: Boolean
+            isPlaying: Boolean,
+            positionMs: Long,
+            durationMs: Long
         ) {
             val views = RemoteViews(context.packageName, R.layout.widget_player)
 
             views.setTextViewText(R.id.widgetTextTitle, title)
             views.setTextViewText(R.id.widgetTextArtist, artist)
             views.setTextViewText(R.id.widgetBtnPlayPause, if (isPlaying) "❚❚" else "▶")
+
+            // ★ シークバー進捗率 ＆ 経過/総時間のセット
+            val progress = if (durationMs > 0L) {
+                ((positionMs.toDouble() / durationMs.toDouble()) * 1000).toInt().coerceIn(0, 1000)
+            } else {
+                0
+            }
+            views.setProgressBar(R.id.widgetProgressBar, 1000, progress, false)
+            views.setTextViewText(R.id.widgetTextCurrentTime, formatTime(positionMs))
+            views.setTextViewText(R.id.widgetTextTotalTime, formatTime(durationMs))
 
             if (artwork != null) {
                 val density = context.resources.displayMetrics.density
@@ -98,6 +117,14 @@ class PlayerWidgetProvider : AppWidgetProvider() {
             return PendingIntent.getService(
                 context, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
+        }
+
+        private fun formatTime(ms: Long): String {
+            if (ms <= 0L) return "0:00"
+            val totalSeconds = ms / 1000
+            val minutes = totalSeconds / 60
+            val seconds = totalSeconds % 60
+            return String.format(Locale.US, "%d:%02d", minutes, seconds)
         }
 
         private fun getRoundedCornerBitmap(bitmap: Bitmap, cornerRadius: Float): Bitmap {
