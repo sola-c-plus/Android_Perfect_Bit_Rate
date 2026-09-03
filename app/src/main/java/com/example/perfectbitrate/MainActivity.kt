@@ -129,7 +129,6 @@ class MainActivity : AppCompatActivity() {
     private var isLrIndependentDither = true
     private var isSpectrumOn = true
 
-    // テーマ設定 ("dark", "light", "auto")
     private var currentThemeMode = "dark"
     private val themeOptions = arrayOf("Dark (ダーク)", "Light (ライト)", "Auto (端末の設定に連動)")
     private val themeValues = arrayOf("dark", "light", "auto")
@@ -428,11 +427,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ YouTube Music Web へ White モード CSS インジェクション指示を送信
+    private fun sendWebThemeSetting(theme: String) {
+        try {
+            activeWebExtensionPort?.postMessage(JSONObject().apply {
+                put("command", "setWebTheme")
+                put("theme", theme)
+            })
+        } catch (e: Exception) {}
+    }
+
     private fun applyThemeUi(themeMode: String) {
         currentThemeMode = themeMode
         val isDark = isDarkThemeActive()
 
         walkmanLevelMeter?.isLightMode = !isDark
+
+        // ★ ブラウザ側の YouTube Music 画面もライト／ダークを完全同期
+        sendWebThemeSetting(if (isDark) "dark" else "light")
 
         if (isDark) {
             mainRootLayout.setBackgroundColor(Color.parseColor("#000000"))
@@ -529,7 +541,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // 1. DSP 音質設定専用ダイアログ (重複定義を解消)
+    // 1. DSP 音質設定専用ダイアログ (0dB SW 移植版)
     // =========================================================================
     private fun showDspSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
@@ -541,12 +553,12 @@ class MainActivity : AppCompatActivity() {
 
         val isDark = isDarkThemeActive()
 
-        // 冒頭で全ビューを一括取得 (重複宣言を完全排除)
         val btnClose = view.findViewById<ImageButton>(R.id.btnDspDialogClose)
         val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
         val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
         val switchSpectrumEnable = view.findViewById<SwitchCompat>(R.id.switchSpectrumEnable)
         val switchCascadeFir = view.findViewById<SwitchCompat>(R.id.dialogSwitchCascadeFir)
+        val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
 
         val seekBar = view.findViewById<SeekBar>(R.id.dialogSeekBar)
         val btnPlayPause = view.findViewById<ImageButton>(R.id.dialogBtnPlayPause)
@@ -601,16 +613,18 @@ class MainActivity : AppCompatActivity() {
             view.findViewById<TextView>(R.id.textUpsampleSub)?.setTextColor(Color.parseColor("#636366"))
             view.findViewById<TextView>(R.id.textCascadeFirTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
             view.findViewById<TextView>(R.id.textCascadeFirSub)?.setTextColor(Color.parseColor("#636366"))
+            view.findViewById<TextView>(R.id.textVolLockTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+            view.findViewById<TextView>(R.id.textVolLockSub)?.setTextColor(Color.parseColor("#636366"))
 
             view.findViewById<View>(R.id.dividerDsp1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp3)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp4)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+            view.findViewById<View>(R.id.dividerDsp5)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
-            // スイッチ裏色 (ライトグレー) ＆ 上品なThumb (ON:ゴールド, OFF:スレートグレー)
             val swTrackLight = ContextCompat.getDrawable(this, R.drawable.switch_track_walkman_outline_light)
             val swThumbLight = ContextCompat.getDrawable(this, R.drawable.switch_thumb_light)
-            listOf(switchDirectSource, switchEqEnable, switchSpectrumEnable, switchCascadeFir).forEach { sw ->
+            listOf(switchDirectSource, switchEqEnable, switchSpectrumEnable, switchCascadeFir, switchVolLock).forEach { sw ->
                 sw?.trackDrawable = swTrackLight
                 sw?.thumbDrawable = swThumbLight
             }
@@ -784,6 +798,28 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetCascadeFir(isChecked)
         }
 
+        // ★ 移植された 0dB Volume Lock の制御
+        val isUsb = isUsbDevice(activeOutputDevice)
+        if (isUsb) {
+            switchVolLock.isEnabled = true
+            switchVolLock.alpha = 1.0f
+        } else {
+            switchVolLock.isEnabled = false
+            switchVolLock.alpha = 0.35f
+        }
+        switchVolLock.isChecked = isVolLockOn
+        switchVolLock.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked && !isUsbDevice(activeOutputDevice)) {
+                switchVolLock.isChecked = false
+                return@setOnCheckedChangeListener
+            }
+            isVolLockOn = isChecked
+            prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
+            playbackService?.isVolumeLocked = isChecked
+            if (isChecked) playbackService?.lockSystemVolumeToMax()
+            updateStatus()
+        }
+
         fun setEditMode(enabled: Boolean) {
             if (isDirectSource) return
             walkmanEqView.isEditMode = enabled
@@ -938,7 +974,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // 2. UI・外観・システム設定専用ダイアログ (重複定義を解消)
+    // 2. UI・外観・システム設定専用ダイアログ
     // =========================================================================
     private fun showUiSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
@@ -950,9 +986,7 @@ class MainActivity : AppCompatActivity() {
 
         val isDark = isDarkThemeActive()
 
-        // 冒頭で全ビューを一括取得 (重複宣言を完全排除)
         val btnClose = view.findViewById<ImageButton>(R.id.btnUiDialogClose)
-        val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
         val spinnerTheme = view.findViewById<Spinner>(R.id.dialogSpinnerTheme)
         val btnBatteryIgnore = view.findViewById<Button>(R.id.btnBatteryIgnore)
@@ -974,21 +1008,15 @@ class MainActivity : AppCompatActivity() {
             view.findViewById<View>(R.id.layoutSectionBattery)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
             view.findViewById<TextView>(R.id.textBatteryTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
             view.findViewById<TextView>(R.id.textBatterySub)?.setTextColor(Color.parseColor("#636366"))
-            view.findViewById<TextView>(R.id.textVolLockTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
-            view.findViewById<TextView>(R.id.textVolLockSub)?.setTextColor(Color.parseColor("#636366"))
             view.findViewById<TextView>(R.id.textAdBlockTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
             view.findViewById<TextView>(R.id.textAdBlockSub)?.setTextColor(Color.parseColor("#636366"))
 
             view.findViewById<View>(R.id.dividerUi1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
-            view.findViewById<View>(R.id.dividerUi2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
-            // スイッチ裏色 ＆ 浮きすぎないThumb
             val swTrackLight = ContextCompat.getDrawable(this, R.drawable.switch_track_walkman_outline_light)
             val swThumbLight = ContextCompat.getDrawable(this, R.drawable.switch_thumb_light)
-            listOf(switchVolLock, switchAdBlock).forEach { sw ->
-                sw?.trackDrawable = swTrackLight
-                sw?.thumbDrawable = swThumbLight
-            }
+            switchAdBlock?.trackDrawable = swTrackLight
+            switchAdBlock?.thumbDrawable = swThumbLight
 
             btnClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnClose.setColorFilter(Color.parseColor("#1C1C1E"))
@@ -1057,27 +1085,6 @@ class MainActivity : AppCompatActivity() {
 
         btnBatteryIgnore.setOnClickListener {
             requestIgnoreBatteryOptimizations()
-        }
-
-        val isUsb = isUsbDevice(activeOutputDevice)
-        if (isUsb) {
-            switchVolLock.isEnabled = true
-            switchVolLock.alpha = 1.0f
-        } else {
-            switchVolLock.isEnabled = false
-            switchVolLock.alpha = 0.35f
-        }
-        switchVolLock.isChecked = isVolLockOn
-        switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && !isUsbDevice(activeOutputDevice)) {
-                switchVolLock.isChecked = false
-                return@setOnCheckedChangeListener
-            }
-            isVolLockOn = isChecked
-            prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
-            playbackService?.isVolumeLocked = isChecked
-            if (isChecked) playbackService?.lockSystemVolumeToMax()
-            updateStatus()
         }
 
         switchAdBlock.isChecked = isAdBlockOn
@@ -1777,6 +1784,8 @@ class MainActivity : AppCompatActivity() {
                 override fun onConnect(port: WebExtension.Port) {
                     activeWebExtensionPort = port
                     sendAdBlockSetting(isAdBlockOn)
+                    // ★ 接続時に現在のテーマ (Dark / Light) をWebExtensionへ送信
+                    sendWebThemeSetting(if (isDarkThemeActive()) "dark" else "light")
 
                     port.setDelegate(object : WebExtension.PortDelegate {
                         override fun onPortMessage(message: Any, port: WebExtension.Port) {

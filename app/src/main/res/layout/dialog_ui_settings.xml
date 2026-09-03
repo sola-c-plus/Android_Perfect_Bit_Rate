@@ -132,7 +132,6 @@
                     android:textSize="9.5sp"
                     android:layout_marginBottom="8dp" />
 
-                <!-- ★ 絵文字を排除したクリーンテキスト -->
                 <Button
                     android:id="@+id/btnBatteryIgnore"
                     android:layout_width="match_parent"
@@ -146,56 +145,6 @@
 
             <View
                 android:id="@+id/dividerUi1"
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#1C1C1C"
-                android:layout_marginBottom="12dp" />
-
-            <!-- VOL LOCK -->
-            <LinearLayout
-                android:id="@+id/layoutSectionVolLock"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="12dp">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:id="@+id/textVolLockTitle"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="0dB VOLUME LOCK"
-                        android:textColor="#FFFFFF"
-                        android:textSize="11.5sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/textVolLockSub"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="最大音量固定 / 音量UP:次へ / DOWN:前へ"
-                        android:textColor="#777777"
-                        android:textSize="9.5sp" />
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/dialogSwitchVolLock"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    app:thumbTint="@null"
-                    app:trackTint="@null"
-                    android:thumb="@drawable/switch_thumb_white"
-                    app:track="@drawable/switch_track_walkman_outline" />
-            </LinearLayout>
-
-            <View
-                android:id="@+id/dividerUi2"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:background="#1C1C1C"

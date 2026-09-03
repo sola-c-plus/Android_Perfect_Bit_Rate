@@ -36,7 +36,6 @@
             android:fontFamily="sans-serif-black"
             android:letterSpacing="0.05" />
 
-        <!-- 閉じるボタン: SVG ✕ (ic_close) -->
         <ImageButton
             android:id="@+id/btnDspDialogClose"
             android:layout_width="28dp"
@@ -299,7 +298,6 @@
                                 android:layout_height="wrap_content"
                                 android:orientation="horizontal">
 
-                                <!-- ★ EQ ＋: ic_plus -->
                                 <ImageButton
                                     android:id="@+id/btnEqPlus"
                                     android:layout_width="26dp"
@@ -310,7 +308,6 @@
                                     android:padding="5dp"
                                     android:layout_marginEnd="6dp" />
 
-                                <!-- ★ EQ －: ic_minus -->
                                 <ImageButton
                                     android:id="@+id/btnEqMinus"
                                     android:layout_width="26dp"
@@ -469,7 +466,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- FREQ -->
+            <!-- FREQ ENGINE -->
             <LinearLayout
                 android:id="@+id/layoutSectionDsee"
                 android:layout_width="match_parent"
@@ -517,7 +514,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- UPSAMPLING -->
+            <!-- ULTRA HQ UPSAMPLING -->
             <LinearLayout
                 android:id="@+id/layoutSectionUpsample"
                 android:layout_width="match_parent"
@@ -600,6 +597,55 @@
                     android:thumb="@drawable/switch_thumb_white"
                     app:track="@drawable/switch_track_walkman_outline"
                     android:checked="true" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/dividerDsp5"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1C1C1C"
+                android:layout_marginBottom="12dp" />
+
+            <!-- ★ 移植された 0dB VOLUME LOCK -->
+            <LinearLayout
+                android:id="@+id/layoutSectionVolLock"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textVolLockTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0dB VOLUME LOCK"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textVolLockSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="最大音量固定 / 音量UP:次へ / DOWN:前へ"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/dialogSwitchVolLock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline" />
             </LinearLayout>
 
         </LinearLayout>
@@ -716,7 +762,6 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- ★ ミニプレイヤー操作ボタン: SVG Vector (ic_skip_previous, ic_play, ic_skip_next) -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
