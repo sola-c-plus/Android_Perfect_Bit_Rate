@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -67,13 +68,33 @@ class PlayerWidgetProvider : AppWidgetProvider() {
             positionMs: Long,
             durationMs: Long
         ) {
-            val views = RemoteViews(context.packageName, R.layout.widget_player)
+            val prefs = context.getSharedPreferences("bp_widget_prefs", Context.MODE_PRIVATE)
+            val themeSetting = prefs.getString("widget_theme_$appWidgetId", "auto") ?: "auto"
+
+            val isDark = when (themeSetting) {
+                "light" -> false
+                "dark" -> true
+                else -> {
+                    val nightMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+                    nightMode == Configuration.UI_MODE_NIGHT_YES
+                }
+            }
+
+            // ★ テーマに応じたレイアウトの選択
+            val layoutId = if (isDark) R.layout.widget_player else R.layout.widget_player_light
+            val views = RemoteViews(context.packageName, layoutId)
 
             views.setTextViewText(R.id.widgetTextTitle, title)
             views.setTextViewText(R.id.widgetTextArtist, artist)
-            views.setTextViewText(R.id.widgetBtnPlayPause, if (isPlaying) "❚❚" else "▶")
 
-            // ★ シークバー進捗率 ＆ 経過/総時間のセット
+            // ★ VectorDrawable アイコンのセット (絵文字廃止)
+            views.setImageViewResource(
+                R.id.widgetBtnPlayPause,
+                if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+            )
+            views.setImageViewResource(R.id.widgetBtnPrev, R.drawable.ic_skip_previous)
+            views.setImageViewResource(R.id.widgetBtnNext, R.drawable.ic_skip_next)
+
             val progress = if (durationMs > 0L) {
                 ((positionMs.toDouble() / durationMs.toDouble()) * 1000).toInt().coerceIn(0, 1000)
             } else {
@@ -90,7 +111,6 @@ class PlayerWidgetProvider : AppWidgetProvider() {
                 views.setImageViewResource(R.id.widgetImageArtwork, R.drawable.bg_badge_normal)
             }
 
-            // 全体タップで MainActivity 起動
             val mainIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -99,7 +119,6 @@ class PlayerWidgetProvider : AppWidgetProvider() {
             )
             views.setOnClickPendingIntent(R.id.widgetRoot, mainPendingIntent)
 
-            // 操作ボタンの PendingIntent
             views.setOnClickPendingIntent(R.id.widgetBtnPrev, createServicePendingIntent(context, "ACTION_PREV", 101))
             views.setOnClickPendingIntent(
                 R.id.widgetBtnPlayPause,

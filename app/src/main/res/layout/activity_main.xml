@@ -7,7 +7,6 @@
     android:orientation="vertical"
     android:background="#000000">
 
-    <!-- SONY WALKMAN 風 高級オーディオインフォメーションパネル -->
     <LinearLayout
         android:id="@+id/topInfoPanel"
         android:layout_width="match_parent"
@@ -20,7 +19,6 @@
         android:paddingBottom="6dp"
         android:elevation="8dp">
 
-        <!-- 1段目: DIRECTバッジ + 出力DAC名 + [↻] + [🎛 DSP] + [🎨 UI] -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -57,44 +55,39 @@
                 android:maxLines="1"
                 android:fontFamily="sans-serif-medium" />
 
-            <!-- リロードボタン -->
-            <Button
+            <!-- ★ リロード (Vector: ic_reload) -->
+            <ImageButton
                 android:id="@+id/btnReload"
                 android:layout_width="26dp"
                 android:layout_height="26dp"
-                android:text="↻"
-                android:textColor="#CCCCCC"
-                android:textSize="12sp"
-                android:textStyle="bold"
+                android:src="@drawable/ic_reload"
+                android:scaleType="centerInside"
                 android:background="@drawable/bg_btn_icon"
-                android:padding="0dp"
+                android:padding="4dp"
                 android:layout_marginEnd="5dp" />
 
-            <!-- ★ DSP設定ボタン (🎛) -->
-            <Button
+            <!-- ★ DSP設定ボタン: Sin波 (Vector: ic_dsp_sine) -->
+            <ImageButton
                 android:id="@+id/btnDspSettings"
                 android:layout_width="26dp"
                 android:layout_height="26dp"
-                android:text="🎛"
-                android:textColor="#E5A93C"
-                android:textSize="12sp"
+                android:src="@drawable/ic_dsp_sine"
+                android:scaleType="centerInside"
                 android:background="@drawable/bg_btn_icon"
-                android:padding="0dp"
+                android:padding="3dp"
                 android:layout_marginEnd="5dp" />
 
-            <!-- ★ UI・外観設定ボタン (🎨) -->
-            <Button
+            <!-- ★ UI設定ボタン: 歯車 (Vector: ic_settings_gear) -->
+            <ImageButton
                 android:id="@+id/btnUiSettings"
                 android:layout_width="26dp"
                 android:layout_height="26dp"
-                android:text="🎨"
-                android:textColor="#E5A93C"
-                android:textSize="12sp"
+                android:src="@drawable/ic_settings_gear"
+                android:scaleType="centerInside"
                 android:background="@drawable/bg_btn_icon"
-                android:padding="0dp" />
+                android:padding="4dp" />
         </LinearLayout>
 
-        <!-- 区切り線 -->
         <View
             android:id="@+id/panelDividerLine"
             android:layout_width="match_parent"
@@ -103,7 +96,6 @@
             android:layout_marginTop="5dp"
             android:layout_marginBottom="4dp" />
 
-        <!-- 2段目: レート/ビット深度 + コーデック + 転送量 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -144,7 +136,6 @@
                 android:fontFamily="monospace" />
         </LinearLayout>
 
-        <!-- 3段目: L/R ピーク数値 ＆ ビット深度 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -173,7 +164,6 @@
                 android:fontFamily="monospace" />
         </LinearLayout>
 
-        <!-- 4段目: レベルメーター -->
         <com.example.perfectbitrate.WalkmanLevelMeterView
             android:id="@+id/walkmanLevelMeter"
             android:layout_width="match_parent"
@@ -183,7 +173,6 @@
 
     </LinearLayout>
 
-    <!-- 下部：YouTube Music (GeckoView) -->
     <org.mozilla.geckoview.GeckoView
         android:id="@+id/geckoview"
         android:layout_width="match_parent"

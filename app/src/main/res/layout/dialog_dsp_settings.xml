@@ -15,7 +15,6 @@
         android:layout_marginTop="8dp"
         android:layout_marginBottom="6dp" />
 
-    <!-- タイトルバー -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -37,15 +36,15 @@
             android:fontFamily="sans-serif-black"
             android:letterSpacing="0.05" />
 
-        <Button
+        <!-- 閉じるボタン: SVG ✕ (ic_close) -->
+        <ImageButton
             android:id="@+id/btnDspDialogClose"
             android:layout_width="28dp"
             android:layout_height="28dp"
-            android:text="✕"
-            android:textColor="#AAAAAA"
-            android:textSize="12sp"
+            android:src="@drawable/ic_close"
+            android:scaleType="centerInside"
             android:background="@drawable/bg_btn_icon"
-            android:padding="0dp" />
+            android:padding="5dp" />
     </LinearLayout>
 
     <androidx.core.widget.NestedScrollView
@@ -62,7 +61,7 @@
             android:paddingEnd="16dp"
             android:paddingBottom="16dp">
 
-            <!-- DIRECT SOURCE スイッチ -->
+            <!-- DIRECT SOURCE -->
             <LinearLayout
                 android:id="@+id/layoutSectionDirectSource"
                 android:layout_width="match_parent"
@@ -300,33 +299,33 @@
                                 android:layout_height="wrap_content"
                                 android:orientation="horizontal">
 
-                                <Button
+                                <!-- ★ EQ ＋: ic_plus -->
+                                <ImageButton
                                     android:id="@+id/btnEqPlus"
-                                    android:layout_width="24dp"
-                                    android:layout_height="24dp"
-                                    android:text="＋"
-                                    android:textColor="#FFFFFF"
-                                    android:textSize="10.5sp"
+                                    android:layout_width="26dp"
+                                    android:layout_height="26dp"
+                                    android:src="@drawable/ic_plus"
+                                    android:scaleType="centerInside"
                                     android:background="@drawable/bg_btn_circle"
-                                    android:padding="0dp"
+                                    android:padding="5dp"
                                     android:layout_marginEnd="6dp" />
 
-                                <Button
+                                <!-- ★ EQ －: ic_minus -->
+                                <ImageButton
                                     android:id="@+id/btnEqMinus"
-                                    android:layout_width="24dp"
-                                    android:layout_height="24dp"
-                                    android:text="－"
-                                    android:textColor="#FFFFFF"
-                                    android:textSize="10.5sp"
+                                    android:layout_width="26dp"
+                                    android:layout_height="26dp"
+                                    android:src="@drawable/ic_minus"
+                                    android:scaleType="centerInside"
                                     android:background="@drawable/bg_btn_circle"
-                                    android:padding="0dp" />
+                                    android:padding="5dp" />
                             </LinearLayout>
                         </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- BIT DEPTH FORMAT -->
+            <!-- BIT DEPTH -->
             <LinearLayout
                 android:id="@+id/layoutSectionBitDepth"
                 android:layout_width="match_parent"
@@ -422,7 +421,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- DC PHASE LINEARIZER -->
+            <!-- DC PHASE -->
             <LinearLayout
                 android:id="@+id/layoutSectionDcPhase"
                 android:layout_width="match_parent"
@@ -470,7 +469,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- FREQ ENGINE -->
+            <!-- FREQ -->
             <LinearLayout
                 android:id="@+id/layoutSectionDsee"
                 android:layout_width="match_parent"
@@ -518,7 +517,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- ULTRA HQ UPSAMPLING -->
+            <!-- UPSAMPLING -->
             <LinearLayout
                 android:id="@+id/layoutSectionUpsample"
                 android:layout_width="match_parent"
@@ -717,47 +716,41 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- ★ ミニプレイヤー操作ボタン: SVG Vector (ic_skip_previous, ic_play, ic_skip_next) -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
 
-                <Button
+                <ImageButton
                     android:id="@+id/dialogBtnPrevTrack"
                     android:layout_width="34dp"
                     android:layout_height="34dp"
-                    android:text="⏮"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
+                    android:src="@drawable/ic_skip_previous"
+                    android:scaleType="centerInside"
                     android:background="@drawable/bg_btn_walkman_circle_small"
-                    android:padding="0dp"
-                    android:gravity="center"
+                    android:padding="6dp"
                     android:layout_marginEnd="6dp" />
 
-                <Button
+                <ImageButton
                     android:id="@+id/dialogBtnPlayPause"
                     android:layout_width="42dp"
                     android:layout_height="42dp"
-                    android:text="▶"
-                    android:textColor="#FFFFFF"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
+                    android:src="@drawable/ic_play"
+                    android:scaleType="centerInside"
                     android:background="@drawable/bg_btn_walkman_circle_large"
-                    android:padding="0dp"
-                    android:gravity="center"
+                    android:padding="8dp"
                     android:layout_marginEnd="6dp" />
 
-                <Button
+                <ImageButton
                     android:id="@+id/dialogBtnNextTrack"
                     android:layout_width="34dp"
                     android:layout_height="34dp"
-                    android:text="⏭"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
+                    android:src="@drawable/ic_skip_next"
+                    android:scaleType="centerInside"
                     android:background="@drawable/bg_btn_walkman_circle_small"
-                    android:padding="0dp"
-                    android:gravity="center" />
+                    android:padding="6dp" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

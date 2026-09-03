@@ -43,6 +43,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.Spinner
@@ -80,9 +81,9 @@ class MainActivity : AppCompatActivity() {
     private var topInfoPanel: View? = null
     private var panelDividerLine: View? = null
 
-    private lateinit var btnReload: Button
-    private lateinit var btnDspSettings: Button
-    private lateinit var btnUiSettings: Button
+    private lateinit var btnReload: ImageButton
+    private lateinit var btnDspSettings: ImageButton
+    private lateinit var btnUiSettings: ImageButton
 
     private lateinit var geckoView: GeckoView
     private lateinit var geckoSession: GeckoSession
@@ -114,7 +115,7 @@ class MainActivity : AppCompatActivity() {
     private var activeDialogSeekBar: SeekBar? = null
     private var activeDialogCurrentTime: TextView? = null
     private var activeDialogTotalTime: TextView? = null
-    private var activeDialogPlayPauseBtn: Button? = null
+    private var activeDialogPlayPauseBtn: ImageButton? = null
     private var activeDialogTrackTitle: TextView? = null
     private var activeDialogTrackArtist: TextView? = null
     private var activeDialogEqView: WalkmanEqView? = null
@@ -128,6 +129,7 @@ class MainActivity : AppCompatActivity() {
     private var isLrIndependentDither = true
     private var isSpectrumOn = true
 
+    // テーマ設定 ("dark", "light", "auto")
     private var currentThemeMode = "dark"
     private val themeOptions = arrayOf("Dark (ダーク)", "Light (ライト)", "Auto (端末の設定に連動)")
     private val themeValues = arrayOf("dark", "light", "auto")
@@ -403,7 +405,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnDspSettings.setOnLongClickListener {
-            Toast.makeText(this, "⚙ DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
             showDevPresetsDialog()
             true
         }
@@ -433,7 +435,6 @@ class MainActivity : AppCompatActivity() {
         walkmanLevelMeter?.isLightMode = !isDark
 
         if (isDark) {
-            // ダークモード: 1ミリも色を触らず原型のまま完全保持
             mainRootLayout.setBackgroundColor(Color.parseColor("#000000"))
             topInfoPanel?.setBackgroundColor(Color.parseColor("#0D0D0D"))
             panelDividerLine?.setBackgroundColor(Color.parseColor("#1C1C1C"))
@@ -446,8 +447,11 @@ class MainActivity : AppCompatActivity() {
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
+
+            btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
+            btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
+            btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
         } else {
-            // ライトモード: 完全な純白 & 上質シルバーグレー
             mainRootLayout.setBackgroundColor(Color.parseColor("#FFFFFF"))
             topInfoPanel?.setBackgroundColor(Color.parseColor("#F5F5F7"))
             panelDividerLine?.setBackgroundColor(Color.parseColor("#E0E0E5"))
@@ -460,6 +464,10 @@ class MainActivity : AppCompatActivity() {
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
+
+            btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
+            btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
         }
     }
 
@@ -499,7 +507,10 @@ class MainActivity : AppCompatActivity() {
     private fun updateDialogPlayerUi() {
         activeDialogTrackTitle?.text = currentTitle
         activeDialogTrackArtist?.text = currentArtist
-        activeDialogPlayPauseBtn?.text = if (isPlayingState) "❚❚" else "▶"
+        
+        activeDialogPlayPauseBtn?.setImageResource(
+            if (isPlayingState) R.drawable.ic_pause else R.drawable.ic_play
+        )
 
         if (currentArtworkBitmap != null) {
             activeDialogArtworkImage?.setImageBitmap(currentArtworkBitmap)
@@ -518,7 +529,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // ★ 1. DSP 音質設定専用ダイアログ
+    // 1. DSP 音質設定専用ダイアログ (重複定義を解消)
     // =========================================================================
     private fun showDspSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
@@ -530,23 +541,47 @@ class MainActivity : AppCompatActivity() {
 
         val isDark = isDarkThemeActive()
 
+        // 冒頭で全ビューを一括取得 (重複宣言を完全排除)
+        val btnClose = view.findViewById<ImageButton>(R.id.btnDspDialogClose)
         val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
         val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
         val switchSpectrumEnable = view.findViewById<SwitchCompat>(R.id.switchSpectrumEnable)
         val switchCascadeFir = view.findViewById<SwitchCompat>(R.id.dialogSwitchCascadeFir)
-        val btnClose = view.findViewById<Button>(R.id.btnDspDialogClose)
 
         val seekBar = view.findViewById<SeekBar>(R.id.dialogSeekBar)
-        val btnPlayPause = view.findViewById<Button>(R.id.dialogBtnPlayPause)
-        val btnPrev = view.findViewById<Button>(R.id.dialogBtnPrevTrack)
-        val btnNext = view.findViewById<Button>(R.id.dialogBtnNextTrack)
+        val btnPlayPause = view.findViewById<ImageButton>(R.id.dialogBtnPlayPause)
+        val btnPrev = view.findViewById<ImageButton>(R.id.dialogBtnPrevTrack)
+        val btnNext = view.findViewById<ImageButton>(R.id.dialogBtnNextTrack)
 
-        val btnEqPlus = view.findViewById<Button>(R.id.btnEqPlus)
-        val btnEqMinus = view.findViewById<Button>(R.id.btnEqMinus)
+        val btnEqPlus = view.findViewById<ImageButton>(R.id.btnEqPlus)
+        val btnEqMinus = view.findViewById<ImageButton>(R.id.btnEqMinus)
         val btnEqFlat = view.findViewById<Button>(R.id.btnEqFlat)
         val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
 
-        // ★ ライトテーマ時の徹底的なホワイト・シルバー・黒アクセント着色
+        val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
+        val textEqBandFreq = view.findViewById<TextView>(R.id.textEqBandFreq)
+        val textEqGainValue = view.findViewById<TextView>(R.id.textEqGainValue)
+        val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
+
+        val layoutSectionEq = view.findViewById<View>(R.id.layoutSectionEq)
+        val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
+        val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
+        val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
+        val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
+        val layoutSectionCascadeFir = view.findViewById<View>(R.id.layoutSectionCascadeFir)
+
+        val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
+        val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
+        val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
+        val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
+        val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
+
+        val imageArtwork = view.findViewById<ImageView>(R.id.dialogImageArtwork)
+        val textTrackTitle = view.findViewById<TextView>(R.id.dialogTextTrackTitle)
+        val textTrackArtist = view.findViewById<TextView>(R.id.dialogTextTrackArtist)
+        val textCurrentTime = view.findViewById<TextView>(R.id.dialogTextCurrentTime)
+        val textTotalTime = view.findViewById<TextView>(R.id.dialogTextTotalTime)
+
         if (!isDark) {
             view.setBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
             view.findViewById<View>(R.id.layoutSectionDirectSource)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
@@ -572,40 +607,49 @@ class MainActivity : AppCompatActivity() {
             view.findViewById<View>(R.id.dividerDsp3)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp4)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
-            // 1. スイッチの裏色をライトグレー、丸を黒に
+            // スイッチ裏色 (ライトグレー) ＆ 上品なThumb (ON:ゴールド, OFF:スレートグレー)
             val swTrackLight = ContextCompat.getDrawable(this, R.drawable.switch_track_walkman_outline_light)
-            val swThumbDark = ContextCompat.getDrawable(this, R.drawable.switch_thumb_dark)
+            val swThumbLight = ContextCompat.getDrawable(this, R.drawable.switch_thumb_light)
             listOf(switchDirectSource, switchEqEnable, switchSpectrumEnable, switchCascadeFir).forEach { sw ->
                 sw?.trackDrawable = swTrackLight
-                sw?.thumbDrawable = swThumbDark
+                sw?.thumbDrawable = swThumbLight
             }
 
-            // 2. 閉じるボタン（✕）の背景を白、文字を黒に
             btnClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnClose.setTextColor(Color.parseColor("#1C1C1E"))
+            btnClose.setColorFilter(Color.parseColor("#1C1C1E"))
 
-            // 3. EQの調整・FLAT・＋・－ボタンを黒/グレー枠に
             btnEqEdit.setBackgroundResource(R.drawable.bg_btn_dap_outline_light)
             btnEqFlat.setBackgroundResource(R.drawable.bg_btn_dap_outline_light)
             btnEqEdit.setTextColor(Color.parseColor("#1C1C1E"))
             btnEqFlat.setTextColor(Color.parseColor("#636366"))
             btnEqPlus.setBackgroundResource(R.drawable.bg_btn_circle_light)
             btnEqMinus.setBackgroundResource(R.drawable.bg_btn_circle_light)
-            btnEqPlus.setTextColor(Color.parseColor("#1C1C1E"))
-            btnEqMinus.setTextColor(Color.parseColor("#1C1C1E"))
+            btnEqPlus.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnEqMinus.setColorFilter(Color.parseColor("#1C1C1E"))
 
-            // 4. ミニプレイヤーのシークバー背景グレー、丸を黒に
+            textEqBandFreq.setTextColor(Color.parseColor("#1C1C1E"))
+            textEqGainValue.setTextColor(Color.parseColor("#1C1C1E"))
+            spinnerBitDepth.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerDither.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerDcPhase.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerDsee.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerUpsample.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerBitDepth.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+            spinnerDither.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+            spinnerDcPhase.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+            spinnerDsee.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+            spinnerUpsample.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+
             seekBar.progressBackgroundTintList = ColorStateList.valueOf(Color.parseColor("#D1D1D6"))
             seekBar.progressTintList = ColorStateList.valueOf(Color.parseColor("#D49B28"))
             seekBar.thumbTintList = ColorStateList.valueOf(Color.parseColor("#1C1C1E"))
 
-            // 5. 曲送り・戻し・再生ボタンを黒に
             btnPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
-            btnPrev.setTextColor(Color.parseColor("#1C1C1E"))
-            btnNext.setTextColor(Color.parseColor("#1C1C1E"))
-            btnPlayPause.setTextColor(Color.parseColor("#1C1C1E"))
+            btnPrev.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnNext.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
 
             view.findViewById<View>(R.id.dspDialogPlayerControl)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
             view.findViewById<View>(R.id.dspPlayerDivider)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
@@ -634,14 +678,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-
-        val imageArtwork = view.findViewById<ImageView>(R.id.dialogImageArtwork)
-        val textTrackTitle = view.findViewById<TextView>(R.id.dialogTextTrackTitle)
-        val textTrackArtist = view.findViewById<TextView>(R.id.dialogTextTrackArtist)
-        val textCurrentTime = view.findViewById<TextView>(R.id.dialogTextCurrentTime)
-        val textTotalTime = view.findViewById<TextView>(R.id.dialogTextTotalTime)
-
-        val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
 
         activeDialogArtworkImage = imageArtwork
         activeDialogTrackTitle = textTrackTitle
@@ -694,38 +730,6 @@ class MainActivity : AppCompatActivity() {
         }
         btnNext.setOnClickListener {
             try { activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "next") }) } catch (e: Exception) {}
-        }
-
-        val layoutSectionEq = view.findViewById<View>(R.id.layoutSectionEq)
-        val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
-        val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
-        val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
-        val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
-        val layoutSectionCascadeFir = view.findViewById<View>(R.id.layoutSectionCascadeFir)
-
-        val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
-        val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
-        val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
-        val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
-        val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
-
-        val textEqBandFreq = view.findViewById<TextView>(R.id.textEqBandFreq)
-        val textEqGainValue = view.findViewById<TextView>(R.id.textEqGainValue)
-        val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
-
-        if (!isDark) {
-            textEqBandFreq.setTextColor(Color.parseColor("#1C1C1E"))
-            textEqGainValue.setTextColor(Color.parseColor("#1C1C1E"))
-            spinnerBitDepth.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-            spinnerDither.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-            spinnerDcPhase.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-            spinnerDsee.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-            spinnerUpsample.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-            spinnerBitDepth.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-            spinnerDither.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-            spinnerDcPhase.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-            spinnerDsee.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-            spinnerUpsample.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
         }
 
         fun updateDspSectionsState(isDirect: Boolean, factor: Int) {
@@ -934,7 +938,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =========================================================================
-    // ★ 2. UI・外観・システム設定専用ダイアログ
+    // 2. UI・外観・システム設定専用ダイアログ (重複定義を解消)
     // =========================================================================
     private fun showUiSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
@@ -946,16 +950,24 @@ class MainActivity : AppCompatActivity() {
 
         val isDark = isDarkThemeActive()
 
+        // 冒頭で全ビューを一括取得 (重複宣言を完全排除)
+        val btnClose = view.findViewById<ImageButton>(R.id.btnUiDialogClose)
         val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
-        val btnClose = view.findViewById<Button>(R.id.btnUiDialogClose)
+        val spinnerTheme = view.findViewById<Spinner>(R.id.dialogSpinnerTheme)
+        val btnBatteryIgnore = view.findViewById<Button>(R.id.btnBatteryIgnore)
 
         val seekBar = view.findViewById<SeekBar>(R.id.dialogSeekBarUi)
-        val btnPlayPause = view.findViewById<Button>(R.id.dialogBtnPlayPauseUi)
-        val btnPrev = view.findViewById<Button>(R.id.dialogBtnPrevTrackUi)
-        val btnNext = view.findViewById<Button>(R.id.dialogBtnNextTrackUi)
+        val btnPlayPause = view.findViewById<ImageButton>(R.id.dialogBtnPlayPauseUi)
+        val btnPrev = view.findViewById<ImageButton>(R.id.dialogBtnPrevTrackUi)
+        val btnNext = view.findViewById<ImageButton>(R.id.dialogBtnNextTrackUi)
 
-        // ★ ライトテーマ時の徹底的なホワイト・シルバー・黒アクセント着色
+        val imageArtwork = view.findViewById<ImageView>(R.id.dialogImageArtworkUi)
+        val textTrackTitle = view.findViewById<TextView>(R.id.dialogTextTrackTitleUi)
+        val textTrackArtist = view.findViewById<TextView>(R.id.dialogTextTrackArtistUi)
+        val textCurrentTime = view.findViewById<TextView>(R.id.dialogTextCurrentTimeUi)
+        val textTotalTime = view.findViewById<TextView>(R.id.dialogTextTotalTimeUi)
+
         if (!isDark) {
             view.setBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
             view.findViewById<View>(R.id.layoutSectionTheme)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
@@ -970,30 +982,30 @@ class MainActivity : AppCompatActivity() {
             view.findViewById<View>(R.id.dividerUi1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerUi2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
-            // 1. スイッチ裏色をライトグレー、丸を黒に
+            // スイッチ裏色 ＆ 浮きすぎないThumb
             val swTrackLight = ContextCompat.getDrawable(this, R.drawable.switch_track_walkman_outline_light)
-            val swThumbDark = ContextCompat.getDrawable(this, R.drawable.switch_thumb_dark)
+            val swThumbLight = ContextCompat.getDrawable(this, R.drawable.switch_thumb_light)
             listOf(switchVolLock, switchAdBlock).forEach { sw ->
                 sw?.trackDrawable = swTrackLight
-                sw?.thumbDrawable = swThumbDark
+                sw?.thumbDrawable = swThumbLight
             }
 
-            // 2. 閉じるボタン（✕）の背景を白、文字を黒に
             btnClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnClose.setTextColor(Color.parseColor("#1C1C1E"))
+            btnClose.setColorFilter(Color.parseColor("#1C1C1E"))
 
-            // 3. ミニプレイヤーのシークバー背景グレー、丸を黒に
+            spinnerTheme.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerTheme.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+
             seekBar.progressBackgroundTintList = ColorStateList.valueOf(Color.parseColor("#D1D1D6"))
             seekBar.progressTintList = ColorStateList.valueOf(Color.parseColor("#D49B28"))
             seekBar.thumbTintList = ColorStateList.valueOf(Color.parseColor("#1C1C1E"))
 
-            // 4. 曲送り・戻し・再生ボタンを黒に
             btnPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
-            btnPrev.setTextColor(Color.parseColor("#1C1C1E"))
-            btnNext.setTextColor(Color.parseColor("#1C1C1E"))
-            btnPlayPause.setTextColor(Color.parseColor("#1C1C1E"))
+            btnPrev.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnNext.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
 
             view.findViewById<View>(R.id.uiDialogPlayerControl)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
             view.findViewById<View>(R.id.uiPlayerDivider)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
@@ -1023,17 +1035,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val spinnerTheme = view.findViewById<Spinner>(R.id.dialogSpinnerTheme)
         val spinnerLayout = if (isDark) R.layout.item_spinner_dap else R.layout.item_spinner_dap_light
         val themeAdapter = ArrayAdapter(this, spinnerLayout, themeOptions)
         themeAdapter.setDropDownViewResource(spinnerLayout)
         spinnerTheme.adapter = themeAdapter
         spinnerTheme.setSelection(themeValues.indexOf(currentThemeMode).coerceAtLeast(0))
-
-        if (!isDark) {
-            spinnerTheme.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-            spinnerTheme.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-        }
 
         spinnerTheme.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
@@ -1049,7 +1055,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        val btnBatteryIgnore = view.findViewById<Button>(R.id.btnBatteryIgnore)
         btnBatteryIgnore.setOnClickListener {
             requestIgnoreBatteryOptimizations()
         }
@@ -1083,12 +1088,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnClose.setOnClickListener { dialog.dismiss() }
-
-        val imageArtwork = view.findViewById<ImageView>(R.id.dialogImageArtworkUi)
-        val textTrackTitle = view.findViewById<TextView>(R.id.dialogTextTrackTitleUi)
-        val textTrackArtist = view.findViewById<TextView>(R.id.dialogTextTrackArtistUi)
-        val textCurrentTime = view.findViewById<TextView>(R.id.dialogTextCurrentTimeUi)
-        val textTotalTime = view.findViewById<TextView>(R.id.dialogTextTotalTimeUi)
 
         activeDialogArtworkImage = imageArtwork
         activeDialogTrackTitle = textTrackTitle
@@ -1302,7 +1301,7 @@ class MainActivity : AppCompatActivity() {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("PresetConfig", sb.toString())
             clipboard.setPrimaryClip(clip)
-            Toast.makeText(this, "📋 最適化設定コードをクリップボードにコピーしました！", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "最適化設定コードをクリップボードにコピーしました！", Toast.LENGTH_LONG).show()
         }
 
         btnDevResetDefault.setOnClickListener {

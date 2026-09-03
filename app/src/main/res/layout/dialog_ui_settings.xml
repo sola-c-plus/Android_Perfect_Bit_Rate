@@ -15,7 +15,6 @@
         android:layout_marginTop="8dp"
         android:layout_marginBottom="6dp" />
 
-    <!-- タイトルバー -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -37,15 +36,14 @@
             android:fontFamily="sans-serif-black"
             android:letterSpacing="0.05" />
 
-        <Button
+        <ImageButton
             android:id="@+id/btnUiDialogClose"
             android:layout_width="28dp"
             android:layout_height="28dp"
-            android:text="✕"
-            android:textColor="#AAAAAA"
-            android:textSize="12sp"
+            android:src="@drawable/ic_close"
+            android:scaleType="centerInside"
             android:background="@drawable/bg_btn_icon"
-            android:padding="0dp" />
+            android:padding="5dp" />
     </LinearLayout>
 
     <androidx.core.widget.NestedScrollView
@@ -62,7 +60,7 @@
             android:paddingEnd="16dp"
             android:paddingBottom="16dp">
 
-            <!-- ★ テーマカラー設定 (Dark / Light / Auto) -->
+            <!-- THEME -->
             <LinearLayout
                 android:id="@+id/layoutSectionTheme"
                 android:layout_width="match_parent"
@@ -106,7 +104,7 @@
                     android:popupBackground="#1A1A1A" />
             </LinearLayout>
 
-            <!-- ★ バックグラウンド再生保護 -->
+            <!-- BATTERY -->
             <LinearLayout
                 android:id="@+id/layoutSectionBattery"
                 android:layout_width="match_parent"
@@ -138,7 +136,7 @@
                     android:id="@+id/btnBatteryIgnore"
                     android:layout_width="match_parent"
                     android:layout_height="34dp"
-                    android:text="🔋 バッテリー使用量を「無制限」に設定"
+                    android:text="バッテリー使用量を「無制限」に設定"
                     android:textColor="#000000"
                     android:textSize="11sp"
                     android:textStyle="bold"
@@ -152,7 +150,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- 0dB Volume Lock -->
+            <!-- VOL LOCK -->
             <LinearLayout
                 android:id="@+id/layoutSectionVolLock"
                 android:layout_width="match_parent"
@@ -365,41 +363,34 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
 
-                <Button
+                <ImageButton
                     android:id="@+id/dialogBtnPrevTrackUi"
                     android:layout_width="34dp"
                     android:layout_height="34dp"
-                    android:text="⏮"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
+                    android:src="@drawable/ic_skip_previous"
+                    android:scaleType="centerInside"
                     android:background="@drawable/bg_btn_walkman_circle_small"
-                    android:padding="0dp"
-                    android:gravity="center"
+                    android:padding="6dp"
                     android:layout_marginEnd="6dp" />
 
-                <Button
+                <ImageButton
                     android:id="@+id/dialogBtnPlayPauseUi"
                     android:layout_width="42dp"
                     android:layout_height="42dp"
-                    android:text="▶"
-                    android:textColor="#FFFFFF"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
+                    android:src="@drawable/ic_play"
+                    android:scaleType="centerInside"
                     android:background="@drawable/bg_btn_walkman_circle_large"
-                    android:padding="0dp"
-                    android:gravity="center"
+                    android:padding="8dp"
                     android:layout_marginEnd="6dp" />
 
-                <Button
+                <ImageButton
                     android:id="@+id/dialogBtnNextTrackUi"
                     android:layout_width="34dp"
                     android:layout_height="34dp"
-                    android:text="⏭"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
+                    android:src="@drawable/ic_skip_next"
+                    android:scaleType="centerInside"
                     android:background="@drawable/bg_btn_walkman_circle_small"
-                    android:padding="0dp"
-                    android:gravity="center" />
+                    android:padding="6dp" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>
