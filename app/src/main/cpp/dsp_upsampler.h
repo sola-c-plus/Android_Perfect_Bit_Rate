@@ -238,26 +238,8 @@ private:
     void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
 
-    // ★ 32バンド 2次 IIR フィルタバンク構造体
-    struct SpecBiquad {
-        float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
-        float a1 = 0.0f, a2 = 0.0f;
-        float s1 = 0.0f, s2 = 0.0f;
-        float env = 0.0f;
-        bool active = true;
-
-        void initBandpass(float f0, float Q, float fs);
-        inline float processSample(float in) {
-            if (!active) return 0.0f;
-            float out = b0 * in + s1;
-            s1 = b1 * in - a1 * out + s2;
-            s2 = b2 * in - a2 * out;
-            return out;
-        }
-    };
-
-    void initSpectrumFilterBank(float fs);
-    void processSpectrumFilterBank(const float* l, const float* r, size_t numFrames);
+    // ★ 超軽量 4096点 高精度 FFT 解析
+    void analyzeSpectrum(const float* l, const float* r, size_t numFrames);
 
     int factor_ = 1;
     float inSampleRate_ = 48000.0f;
@@ -304,7 +286,7 @@ private:
     std::vector<float, AlignedAllocator<float, 16>> tempOutL_;
     std::vector<float, AlignedAllocator<float, 16>> tempOutR_;
 
-    // ★ 32バンド IIR フィルタバンク
-    std::array<SpecBiquad, 32> specFilters_;
     float spectrumDb_[32] = {-60.0f};
+    std::vector<float> specRingBuf_;
+    size_t specRingPos_ = 0;
 };

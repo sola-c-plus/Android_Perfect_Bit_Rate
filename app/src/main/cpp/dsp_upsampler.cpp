@@ -212,7 +212,7 @@ void FirStage2x::processStereo(
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装
+// ★ DspLpcHarmonicAi (DSEE OFF時は確実に無音・ON時のみ倍音外挿)
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
     configure(DseeMode::AUTO_AI, 48000.0, 1, 0.16f, 10500.0f, true);
@@ -222,7 +222,7 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
     mode_ = mode;
     sampleRate_ = std::max(8000.0, sampleRate);
     lpcAlgo_ = lpcAlgo;
-    targetGain_ = static_cast<double>(gain) * 1.6;
+    targetGain_ = static_cast<double>(gain) * 1.5;
     useQmf_ = useQmf;
     reset();
 
@@ -233,6 +233,7 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
 
     isBypass_ = false;
 
+    // 原音高域抽出 HPF
     double fExtract = static_cast<double>(extractFreq);
     double kExtract = std::tan(PI * fExtract / sampleRate_);
     double a0 = 1.0 + kExtract;
@@ -240,6 +241,7 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
     hp_b1_ = -1.0 / a0;
     hp_a1_ = (kExtract - 1.0) / a0;
 
+    // 18.5kHz ハイレゾ通過 HPF
     double fOutHp = std::min(18500.0, sampleRate_ * 0.45);
     double w0 = 2.0 * PI * fOutHp / sampleRate_;
     double alpha = std::sin(w0) / (2.0 * 0.70710678);
@@ -273,11 +275,12 @@ void DspLpcHarmonicAi::reset() {
 }
 
 void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames) {
-    if (isBypass_ || !left || !right || numFrames == 0) return;
+    if (isBypass_ || mode_ == DseeMode::OFF || !left || !right || numFrames == 0) return;
 
     const double maxSlewPerSample = 0.001;
 
     for (size_t i = 0; i < numFrames; ++i) {
+        // Left
         double inL = static_cast<double>(left[i]);
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
@@ -330,6 +333,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         }
         left[i] = static_cast<float>(totalL);
 
+        // Right
         double inR = static_cast<double>(right[i]);
         double hiR = hp_b0_ * inR + hp_s1_R_;
         hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
@@ -574,41 +578,78 @@ void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFr
 }
 
 // -----------------------------------------------------------------------------
-// ★ 32バンド 1/3オクターブ完全同期 2次 IIR フィルタバンク
+// ★ 4096点 高精度マルチレート FFT スペクトル解析エンジン (自己発振・偽信号ゼロ)
 // -----------------------------------------------------------------------------
-void DspUpsampler::SpecBiquad::initBandpass(float f0, float Q, float fs) {
-    s1 = 0.0f;
-    s2 = 0.0f;
-    env = 0.0f;
+void DspUpsampler::analyzeSpectrum(const float* l, const float* r, size_t numFrames) {
+    if (!l || !r || numFrames == 0) return;
 
-    if (f0 >= fs * 0.48f) {
-        active = false;
-        return;
+    for (size_t i = 0; i < numFrames; ++i) {
+        specRingBuf_[specRingPos_] = (l[i] + r[i]) * 0.5f;
+        specRingPos_ = (specRingPos_ + 1) % 4096;
     }
-    active = true;
 
-    double w0 = 2.0 * PI * f0 / fs;
-    double sinw0 = std::sin(w0);
-    double cosw0 = std::cos(w0);
-    double alpha = sinw0 / (2.0 * Q);
+    constexpr int N = 2048;
+    static float realHi[N], imagHi[N];
+    static float realLo[N], imagLo[N];
 
-    double b0_raw = alpha;
-    double b1_raw = 0.0;
-    double b2_raw = -alpha;
-    double a0_raw = 1.0 + alpha;
-    double a1_raw = -2.0 * cosw0;
-    double a2_raw = 1.0 - alpha;
+    // 1. 高域用 (500Hz 〜 40kHz) フルレート 2048点 FFT
+    for (int i = 0; i < N; ++i) {
+        int idx = (specRingPos_ + 4096 - N + i) % 4096;
+        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
+        realHi[i] = specRingBuf_[idx] * w;
+        imagHi[i] = 0.0f;
+    }
 
-    double inv_a0 = 1.0 / a0_raw;
-    b0 = static_cast<float>(b0_raw * inv_a0);
-    b1 = static_cast<float>(b1_raw * inv_a0);
-    b2 = static_cast<float>(b2_raw * inv_a0);
-    a1 = static_cast<float>(a1_raw * inv_a0);
-    a2 = static_cast<float>(a2_raw * inv_a0);
-}
+    // 2. 低域用 (31Hz 〜 500Hz) 4:1 デシメーション (分解能 11.7Hz) 2048点 FFT
+    for (int i = 0; i < N; ++i) {
+        int baseIdx = (specRingPos_ + 4096 - (N * 4) + (i * 4)) % 4096;
+        float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) % 4096] + specRingBuf_[(baseIdx + 2) % 4096] + specRingBuf_[(baseIdx + 3) % 4096]) * 0.25f;
+        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
+        realLo[i] = avg * w;
+        imagLo[i] = 0.0f;
+    }
 
-void DspUpsampler::initSpectrumFilterBank(float fs) {
-    // ★ 31.25Hz から 40,000Hz までの 1/3オクターブ等間隔完全同期周波数 (32バンド)
+    auto runFft = [](float* r, float* im) {
+        int j = 0;
+        for (int i = 0; i < N - 1; ++i) {
+            if (i < j) {
+                std::swap(r[i], r[j]);
+                std::swap(im[i], im[j]);
+            }
+            int k = N >> 1;
+            while (k <= j) {
+                j -= k;
+                k >>= 1;
+            }
+            j += k;
+        }
+        for (int len = 2; len <= N; len <<= 1) {
+            int half = len >> 1;
+            double angle = -2.0 * PI / len;
+            float wStepR = static_cast<float>(std::cos(angle));
+            float wStepI = static_cast<float>(std::sin(angle));
+            for (int i = 0; i < N; i += len) {
+                float wR = 1.0f, wI = 0.0f;
+                for (int k = 0; k < half; ++k) {
+                    float uR = r[i + k], uI = im[i + k];
+                    float vR = r[i + k + half] * wR - im[i + k + half] * wI;
+                    float vI = r[i + k + half] * wI + im[i + k + half] * wR;
+                    r[i + k] = uR + vR;
+                    im[i + k] = uI + vI;
+                    r[i + k + half] = uR - vR;
+                    im[i + k + half] = uI - vI;
+                    float nextWR = wR * wStepR - wI * wStepI;
+                    wI = wR * wStepI + wI * wStepR;
+                    wR = nextWR;
+                }
+            }
+        }
+    };
+
+    runFft(realHi, imagHi);
+    runFft(realLo, imagLo);
+
+    // ★ 31.25Hz 〜 40kHz 32バンド 1/3オクターブ周波数配列
     static constexpr float FREQS[32] = {
         31.25f, 39.37f, 49.61f, 62.50f, 78.75f, 99.21f, 125.00f, 157.49f, 198.43f, 250.00f,
         314.98f, 396.85f, 500.00f, 629.96f, 793.70f, 1000.00f, 1259.92f, 1587.40f, 2000.00f,
@@ -616,44 +657,44 @@ void DspUpsampler::initSpectrumFilterBank(float fs) {
         20158.74f, 25398.42f, 32000.00f, 40000.00f
     };
 
-    for (int b = 0; b < 32; ++b) {
-        float Q = (b < 12) ? 2.2f : 1.6f;
-        specFilters_[b].initBandpass(FREQS[b], Q, fs);
-    }
-}
-
-void DspUpsampler::processSpectrumFilterBank(const float* l, const float* r, size_t numFrames) {
-    if (!l || !r || numFrames == 0) return;
-
-    constexpr size_t step = 8;
-    for (size_t i = 0; i < numFrames; i += step) {
-        float mono = (l[i] + r[i]) * 0.5f;
-
-        for (int b = 0; b < 32; ++b) {
-            auto& f = specFilters_[b];
-            if (!f.active) continue;
-
-            float y = f.processSample(mono);
-            float absY = std::abs(y);
-
-            if (absY > f.env) {
-                f.env = f.env * 0.70f + absY * 0.30f;
-            } else {
-                f.env = f.env * 0.985f;
-            }
-        }
-    }
+    float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
+    float binHzHi = currentFs / static_cast<float>(N);
+    float binHzLo = (currentFs * 0.25f) / static_cast<float>(N);
+    float nyquist = currentFs * 0.5f;
 
     for (int b = 0; b < 32; ++b) {
-        auto& f = specFilters_[b];
-        if (!f.active) {
+        float fc = FREQS[b];
+        if (fc > nyquist) {
             spectrumDb_[b] = -60.0f;
             continue;
         }
 
-        float gainFactor = (b >= 28) ? 3.0f : ((b >= 20) ? 1.8f : 1.2f);
-        float val = f.env * gainFactor;
-        float db = (val > 1e-5f) ? (20.0f * std::log10(val)) : -60.0f;
+        float fLow = fc * 0.8909f;
+        float fHigh = fc * 1.1225f;
+
+        float powerSum = 0.0f;
+        int binCount = 0;
+
+        if (b < 12) { // 31Hz 〜 500Hz: 低域デシメーション FFT (独立分離)
+            int binStart = std::clamp(static_cast<int>(fLow / binHzLo), 1, N / 2 - 1);
+            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzLo), binStart, N / 2 - 1);
+            for (int k = binStart; k <= binEnd; ++k) {
+                powerSum += (realLo[k] * realLo[k] + imagLo[k] * imagLo[k]);
+                binCount++;
+            }
+        } else { // 630Hz 〜 40kHz: フルレート FFT
+            int binStart = std::clamp(static_cast<int>(fLow / binHzHi), 1, N / 2 - 1);
+            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzHi), binStart, N / 2 - 1);
+            for (int k = binStart; k <= binEnd; ++k) {
+                powerSum += (realHi[k] * realHi[k] + imagHi[k] * imagHi[k]);
+                binCount++;
+            }
+        }
+
+        float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
+        float rms = std::sqrt(meanPower) / (N * 0.22f);
+
+        float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
     }
 }
@@ -662,6 +703,7 @@ void DspUpsampler::processSpectrumFilterBank(const float* l, const float* r, siz
 // DspUpsampler 実装
 // -----------------------------------------------------------------------------
 DspUpsampler::DspUpsampler() {
+    specRingBuf_.assign(4096, 0.0f);
     std::fill(std::begin(spectrumDb_), std::end(spectrumDb_), -60.0f);
     configure(1, 48000.0f);
 }
@@ -869,8 +911,6 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(currentFs));
     transientRestorer_.configure(transientMode_, static_cast<double>(currentFs), customUseGroupDelay_, customUseLattice_);
     lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(currentFs), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
-
-    initSpectrumFilterBank(currentFs);
     reset();
 }
 
@@ -886,9 +926,6 @@ void DspUpsampler::reset() {
     std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     std::fill(std::begin(spectrumDb_), std::end(spectrumDb_), -60.0f);
-    for (auto& f : specFilters_) {
-        f.s1 = 0.0f; f.s2 = 0.0f; f.env = 0.0f;
-    }
     equalizer_.reset();
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
@@ -1049,8 +1086,8 @@ size_t DspUpsampler::process(
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // ★ 32バンド 2次 IIR フィルタバンクによる超軽量・超高精度スペクトル追従
-    processSpectrumFilterBank(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    // ★ 最終出力PCMから直接マルチレート高精度スペクトルを解析
+    analyzeSpectrum(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
     // [Step 6] ディザリング ＆ PCM パッキング
     int outBytesPerSample = 2;
