@@ -1,8 +1,8 @@
-if (window.self !== window.top) {
+﻿if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
 
-// ★ 画面消灯・バックグラウンド移行を完全に偽装 (常時アクティブ表示)
+// 画面消灯・バックグラウンド移行の完全偽装 (常時アクティブ表示)
 try {
     Object.defineProperty(document, 'hidden', { value: false, writable: false });
     Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
@@ -21,6 +21,20 @@ let audioCtx = null;
 let processor = null;
 let silentGain = null;
 let activeMediaElement = null;
+
+// メモリ再確保によるGCスパイク（音飛び）を撲滅する固定バッファプール
+let cachedBuffer = null;
+let cachedView = null;
+let cachedBytes = null;
+
+function getTransferBuffers(sizeInBytes) {
+    if (!cachedBuffer || cachedBuffer.byteLength !== sizeInBytes) {
+        cachedBuffer = new ArrayBuffer(sizeInBytes);
+        cachedView = new DataView(cachedBuffer);
+        cachedBytes = new Uint8Array(cachedBuffer);
+    }
+    return { buffer: cachedBuffer, view: cachedView, bytes: cachedBytes };
+}
 
 const itagMap = {
     '251': { name: 'Opus 160kbps (48k)', rate: 48000 },
@@ -87,7 +101,6 @@ function forceFullVolume() {
 }
 setInterval(forceFullVolume, 2000);
 
-// ★ 画面消灯時の自動一時停止（バックグラウンド停止）を阻止し、再生を常時維持
 function keepPlayingInBackground() {
     const video = activeMediaElement || document.querySelector('video');
     if (userWantsPlaying && video && video.paused && !video.ended) {
@@ -147,7 +160,7 @@ setInterval(scanStreamCodec, 1500);
 function bytesToBase64(bytes) {
     let binary = '';
     const len = bytes.byteLength;
-    const chunkSize = 4096;
+    const chunkSize = 8192;
     for (let i = 0; i < len; i += chunkSize) {
         const sub = bytes.subarray(i, Math.min(i + chunkSize, len));
         binary += String.fromCharCode.apply(null, sub);
@@ -158,6 +171,7 @@ function bytesToBase64(bytes) {
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        // ネイティブサンプリングレートで作成
         audioCtx = new AudioContextClass({ latencyHint: 'playback' });
     }
     if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
@@ -193,41 +207,25 @@ function attachAudioPipeline(mediaEl) {
 
                 const inL = e.inputBuffer.getChannelData(0);
                 const inR = e.inputBuffer.getChannelData(1);
-                const inLen = inL.length;
-                const srcRate = ctx.sampleRate || 48000;
+                const len = inL.length;
+                const actualRate = ctx.sampleRate || 48000;
 
-                let left = inL;
-                let right = inR;
-                let len = inLen;
+                // ★音質破壊の元凶だったJavaScript線形補間を完全撤廃★
+                // 生のFloat32 PCMを無劣化・無加工のままC++ Nativeエンジンへ渡す
+                const totalBytes = len * 8;
+                const { view, bytes } = getTransferBuffers(totalBytes);
 
-                if (srcRate !== currentSampleRate) {
-                    const ratio = srcRate / currentSampleRate;
-                    len = Math.floor(inLen / ratio);
-                    left = new Float32Array(len);
-                    right = new Float32Array(len);
-                    for (let i = 0; i < len; i++) {
-                        const pos = i * ratio;
-                        const idx = Math.floor(pos);
-                        const frac = pos - idx;
-                        const nextIdx = Math.min(idx + 1, inLen - 1);
-                        left[i] = inL[idx] * (1 - frac) + inL[nextIdx] * frac;
-                        right[i] = inR[idx] * (1 - frac) + inR[nextIdx] * frac;
-                    }
-                }
-
-                const buffer = new ArrayBuffer(len * 8);
-                const view = new DataView(buffer);
                 for (let i = 0; i < len; i++) {
-                    view.setFloat32(i * 8, left[i], true);
-                    view.setFloat32(i * 8 + 4, right[i], true);
+                    view.setFloat32(i * 8, inL[i], true);
+                    view.setFloat32(i * 8 + 4, inR[i], true);
                 }
-                const bytes = new Uint8Array(buffer);
+
                 const base64Pcm = bytesToBase64(bytes);
 
                 postNativeMessage({
                     type: "pcm",
                     pcm: base64Pcm,
-                    sampleRate: currentSampleRate,
+                    sampleRate: actualRate,
                     bitMode: "float32"
                 });
             };
@@ -264,7 +262,6 @@ HTMLMediaElement.prototype.play = function() {
 
 const origPause = HTMLMediaElement.prototype.pause;
 HTMLMediaElement.prototype.pause = function() {
-    // ユーザー操作や Native コマンド以外での自動 pause は抑制可能
     return origPause.apply(this, arguments);
 };
 

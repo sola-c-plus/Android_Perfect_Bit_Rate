@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.log10
 import kotlin.math.max
 
@@ -50,7 +51,8 @@ class BitPerfectPlaybackService : Service() {
     var baseSampleRate = 48000
     var effectiveSampleRate = 48000
     
-    var currentBitMode = "16bit"
+    // 32-bit Integer伝送をデフォルト優先（DACとのジッターフリー整合性向上）
+    var currentBitMode = "32bit"
     var upsampleFactor = 1
     var activeOutputDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
@@ -62,7 +64,7 @@ class BitPerfectPlaybackService : Service() {
     private val MAX_QUEUE_CAPACITY = 32
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
-    private val PREROLL_THRESHOLD = 4
+    private val PREROLL_THRESHOLD = 3
     private val isBuffering = AtomicBoolean(true)
 
     @Volatile private var isRunning = false
@@ -240,7 +242,6 @@ class BitPerfectPlaybackService : Service() {
                         val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                         val defaultVol = (maxVol * 0.85f).toInt().coerceAtLeast(1)
                         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, defaultVol, 0)
-                        Log.i("BitPerfect", "★ Restored volume for DAC: $defaultVol / $maxVol")
                     }
                     audioTrack?.setVolume(1.0f)
                 }
@@ -404,9 +405,36 @@ class BitPerfectPlaybackService : Service() {
 
         mediaSession.setMetadata(metaBuilder.build())
         updatePlaybackState(isPlaying, currentMs)
-
-        // ★ ウィジェットへシークバー進捗（現在位置・総時間）をリアルタイム更新
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying, currentMs, durationMs)
+    }
+
+    // ★ ポップノイズ防止用ソフトフェード関数
+    private fun applySoftFade(pcm: ByteArray, fadeIn: Boolean, bytesPerSample: Int) {
+        val totalFrames = pcm.size / (bytesPerSample * 2)
+        if (totalFrames <= 0) return
+        val buffer = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN)
+
+        for (i in 0 until totalFrames) {
+            val progress = i.toDouble() / totalFrames.toDouble()
+            val gain = if (fadeIn) {
+                0.5 * (1.0 - cos(Math.PI * progress))
+            } else {
+                0.5 * (1.0 + cos(Math.PI * progress))
+            }
+
+            val offset = i * bytesPerSample * 2
+            if (bytesPerSample == 4) {
+                val l = (buffer.getInt(offset) * gain).toInt()
+                val r = (buffer.getInt(offset + 4) * gain).toInt()
+                buffer.putInt(offset, l)
+                buffer.putInt(offset + 4, r)
+            } else if (bytesPerSample == 2) {
+                val l = (buffer.getShort(offset) * gain).toInt().toShort()
+                val r = (buffer.getShort(offset + 2) * gain).toInt().toShort()
+                buffer.putShort(offset, l)
+                buffer.putShort(offset + 2, r)
+            }
+        }
     }
 
     fun forceCloseDacStream() {
@@ -519,20 +547,14 @@ class BitPerfectPlaybackService : Service() {
         )
 
         val playPauseIcon = if (isCurrentlyPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
-
-        val bitStr = when (currentBitMode) {
-            "32bit" -> "32bit"
-            "24bit" -> "24bit"
-            else -> "16bit"
-        }
-
+        val bitStr = currentBitMode
         val deviceLabel = when {
             isUsbDevice(activeOutputDevice) -> "DIRECT"
             isBluetoothDevice(activeOutputDevice) -> "BLUETOOTH"
             else -> "SPEAKER"
         }
 
-        val upsampleTag = if (upsampleFactor > 1) " [DSP ${upsampleFactor}x]" else ""
+        val upsampleTag = if (upsampleFactor > 1) " [FREQ ${upsampleFactor}x]" else ""
 
         val notification = NotificationCompat.Builder(this, "bitperfect_service_channel")
             .setContentTitle(currentTitle)
@@ -582,6 +604,7 @@ class BitPerfectPlaybackService : Service() {
                 isBuffering.set(true)
                 NativeAudioEngine.nativeResetUpsampler()
 
+                // ★DACクロック切り替え時のポップノイズ・ハング防止
                 oldTrack?.let {
                     try {
                         it.pause()
@@ -596,7 +619,8 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 if (oldTrack != null) {
-                    try { Thread.sleep(60) } catch (e: InterruptedException) {}
+                    // DAC物理PLLクロックのロック待ち
+                    try { Thread.sleep(80) } catch (e: InterruptedException) {}
                 }
 
                 activeOutputDevice = targetDevice
@@ -604,6 +628,7 @@ class BitPerfectPlaybackService : Service() {
                 upsampleFactor = factor
                 effectiveSampleRate = baseRate * factor
 
+                // 32-bit Integer PCM 最優先リスト
                 val requestedEncodings = if (!isUsbDevice(targetDevice)) {
                     listOf(AudioFormat.ENCODING_PCM_16BIT)
                 } else {
@@ -615,6 +640,7 @@ class BitPerfectPlaybackService : Service() {
                         )
                         "24bit" -> listOf(
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AudioFormat.ENCODING_PCM_24BIT_PACKED else AudioFormat.ENCODING_PCM_16BIT,
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) AudioFormat.ENCODING_PCM_32BIT else AudioFormat.ENCODING_PCM_16BIT,
                             AudioFormat.ENCODING_PCM_16BIT
                         )
                         else -> listOf(AudioFormat.ENCODING_PCM_16BIT)
@@ -723,14 +749,14 @@ class BitPerfectPlaybackService : Service() {
                 try {
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
-                            Thread.sleep(15)
+                            Thread.sleep(10)
                             continue
                         } else {
                             isBuffering.set(false)
                         }
                     }
 
-                    val pcm = pcmQueue.poll(150, TimeUnit.MILLISECONDS)
+                    val pcm = pcmQueue.poll(100, TimeUnit.MILLISECONDS)
                     if (pcm == null) {
                         if (pcmQueue.isEmpty()) {
                             isBuffering.set(true)
@@ -767,9 +793,7 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    private fun safeAbs(value: Int): Long {
-        return abs(value.toLong())
-    }
+    private fun safeAbs(value: Int): Long = abs(value.toLong())
 
     private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String) {
         val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -843,7 +867,6 @@ class BitPerfectPlaybackService : Service() {
         }
 
         NativeAudioEngine.nativeGetSpectrum(tempSpectrumOut)
-
         onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, tempSpectrumOut)
     }
 

@@ -1,10 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 #include <cstdint>
 #include <cstddef>
 #include <memory>
 #include <array>
+#include <atomic>
 #include "dsp_equalizer.h"
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -38,13 +39,13 @@ enum class DcPhaseType : int {
     B_HIGH = 6
 };
 
-enum class DseeMode : int {
+enum class FreqMode : int {
     OFF = 0,
     AUTO_AI = 1,
-    MALE_VOCAL = 2,
-    FEMALE_VOCAL = 3,
-    PERCUSSION = 4,
-    STRINGS = 5
+    STUDIO_VOCAL = 2,
+    ACOUSTIC_INSTRUMENT = 3,
+    DYNAMIC_PERCUSSION = 4,
+    AIR_EXPANDER = 5
 };
 
 enum class TransientMode : int {
@@ -84,6 +85,7 @@ bool operator==(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { 
 template <typename T, typename U, size_t A>
 bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { return false; }
 
+// ARM NEON SIMD & ダブルバッファリング高速化 FirStage2x
 class FirStage2x {
 public:
     FirStage2x() = default;
@@ -100,12 +102,12 @@ private:
     size_t tapsPerPhase_ = 0;
     std::vector<float, AlignedAllocator<float, 16>> poly0_;
     std::vector<float, AlignedAllocator<float, 16>> poly1_;
-    std::vector<float, AlignedAllocator<float, 16>> histL_;
-    std::vector<float, AlignedAllocator<float, 16>> histR_;
-    int histWritePos_ = 0;
-    int histLen_ = 0;
+    std::vector<float, AlignedAllocator<float, 16>> mirrorHistL_;
+    std::vector<float, AlignedAllocator<float, 16>> mirrorHistR_;
+    int writePos_ = 0;
 };
 
+// DC Phase Linearizer
 class DspDcPhaseLinearizer {
 public:
     DspDcPhaseLinearizer();
@@ -124,6 +126,7 @@ private:
     double s1_R_ = 0.0, s2_R_ = 0.0;
 };
 
+// トランジェント復元エンジン
 class DspTransientRestorer {
 public:
     DspTransientRestorer();
@@ -152,38 +155,36 @@ private:
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
 };
 
-class DspLpcHarmonicAi {
+// 自作独自アップスケーリング: FREQ Engine
+class DspFreqEngine {
 public:
-    DspLpcHarmonicAi();
-    void configure(DseeMode mode, double sampleRate, int lpcAlgo = 1, float gain = 0.18f, float extractFreq = 10000.0f, bool useQmf = false);
+    DspFreqEngine();
+    void configure(FreqMode mode, double sampleRate, float gain = 0.22f, float extractFreq = 10500.0f);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
 
 private:
-    DseeMode mode_ = DseeMode::AUTO_AI;
+    FreqMode mode_ = FreqMode::AUTO_AI;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
-    int lpcAlgo_ = 1;
-    bool useQmf_ = false;
+    float targetGain_ = 0.22f;
 
-    double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
-    double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
+    double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
+    double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;
+    double in_s1_L_ = 0.0, in_s2_L_ = 0.0;
+    double in_s1_R_ = 0.0, in_s2_R_ = 0.0;
 
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
-    double dcL_ = 0.0, dcR_ = 0.0;
-
+    double r0_L_ = 1e-4, r1_L_ = 0.0;
+    double r0_R_ = 1e-4, r1_R_ = 0.0;
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
-    double envHfL_ = 0.0, envHfR_ = 0.0;
-    double envTotalL_ = 0.0, envTotalR_ = 0.0;
-    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
-    double targetGain_ = 0.25;
 
-    double smoothedGainL_ = 0.0;
-    double smoothedGainR_ = 0.0;
+    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
+    double smoothedGainL_ = 0.0, smoothedGainR_ = 0.0;
 };
 
 class DspUpsampler {
@@ -213,10 +214,11 @@ public:
     void setDcPhaseType(DcPhaseType type);
     DcPhaseType getDcPhaseType() const { return dcPhaseType_; }
 
-    void setDseeMode(DseeMode mode);
-    void setDseeCustomParams(int lpcAlgo, float gain, float extractFreq, bool useQmf);
-    DseeMode getDseeMode() const { return dseeMode_; }
+    void setFreqMode(FreqMode mode);
+    void setFreqCustomParams(float gain, float extractFreq);
+    FreqMode getFreqMode() const { return freqMode_; }
 
+    // MainActivity 互換 API
     void setTransientMode(TransientMode mode);
     void setTransientCustomParams(bool useGroupDelay, bool useLattice);
     TransientMode getTransientMode() const { return transientMode_; }
@@ -230,16 +232,13 @@ public:
     );
 
     void reset();
-
     void getSpectrum(float* out32Bands);
 
 private:
     void generateFilterCoefficients(int factor);
     void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
-
-    // ★ 超軽量 4096点 高精度 FFT 解析
-    void analyzeSpectrum(const float* l, const float* r, size_t numFrames);
+    void executeFftAnalysis();
 
     int factor_ = 1;
     float inSampleRate_ = 48000.0f;
@@ -254,16 +253,14 @@ private:
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::MINIMUM_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;
-    DseeMode dseeMode_ = DseeMode::AUTO_AI;
+    FreqMode freqMode_ = FreqMode::AUTO_AI;
+
     TransientMode transientMode_ = TransientMode::ACOUSTIC;
-
-    int customLpcAlgo_ = 1;
-    float customGain_ = 0.18f;
-    float customExtractFreq_ = 10000.0f;
-    bool customUseQmf_ = true;
-
     bool customUseGroupDelay_ = true;
     bool customUseLattice_ = false;
+
+    float customFreqGain_ = 0.22f;
+    float customFreqExtractFreq_ = 10500.0f;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
@@ -271,7 +268,7 @@ private:
     DspEqualizer equalizer_;
     DspDcPhaseLinearizer dcPhaseLinearizer_;
     DspTransientRestorer transientRestorer_;
-    DspLpcHarmonicAi lpcHarmonicAi_;
+    DspFreqEngine freqEngine_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
@@ -288,5 +285,5 @@ private:
 
     float spectrumDb_[32] = {-60.0f};
     std::vector<float> specRingBuf_;
-    size_t specRingPos_ = 0;
+    std::atomic<size_t> specRingPos_{0};
 };

@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import java.nio.ByteBuffer
 
@@ -20,10 +20,17 @@ object NativeAudioEngine {
     external fun nativeSetLrIndependentDither(enabled: Boolean)
     external fun nativeSetFirFilterType(type: Int)
     external fun nativeSetDcPhaseType(type: Int)
+
+    // ★ 自作独自 FREQ Engine API
+    external fun nativeSetFreqMode(mode: Int)
+    external fun nativeSetFreqCustomParams(gain: Float, extractFreq: Float)
+
+    // ★ MainActivity 互換 API (DSEE & Transient)
     external fun nativeSetDseeMode(mode: Int)
     external fun nativeSetDseeCustomParams(lpcAlgo: Int, gain: Float, extractFreq: Float, useQmf: Boolean)
     external fun nativeSetTransientMode(mode: Int)
     external fun nativeSetTransientCustomParams(useGroupDelay: Boolean, useLattice: Boolean)
+
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeGetSpectrum(outArray: FloatArray)
 

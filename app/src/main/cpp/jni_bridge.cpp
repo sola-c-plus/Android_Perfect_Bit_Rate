@@ -1,4 +1,4 @@
-#include <jni.h>
+﻿#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
@@ -10,7 +10,7 @@ static std::vector<uint8_t> g_outDspBuffer;
 static int g_currentDitherMode = 1;
 static int g_currentFirFilterType = 2; // Minimum Phase Sharp
 static int g_currentDcPhaseType = 2;
-static int g_currentDseeMode = 1;
+static int g_currentFreqMode = 1;      // AUTO_AI
 static int g_currentTransientMode = 3; // Acoustic
 static bool g_isDirectSource = false;
 static bool g_isCascadeFir = true;
@@ -27,7 +27,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
         g_upsampler->setDitherMode(static_cast<DitherMode>(g_currentDitherMode));
         g_upsampler->setFirFilterType(static_cast<FirFilterType>(g_currentFirFilterType));
         g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
-        g_upsampler->setDseeMode(static_cast<DseeMode>(g_currentDseeMode));
+        g_upsampler->setFreqMode(static_cast<FreqMode>(g_currentFreqMode));
         g_upsampler->setTransientMode(static_cast<TransientMode>(g_currentTransientMode));
     }
 }
@@ -92,21 +92,36 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
     g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(type));
 }
 
+// FREQ Engine API
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(
+        JNIEnv *env, jobject thiz, jint mode) {
+    g_currentFreqMode = mode;
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setFreqMode(static_cast<FreqMode>(mode));
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(
+        JNIEnv *env, jobject thiz, jfloat gain, jfloat extractFreq) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setFreqCustomParams(gain, extractFreq);
+}
+
+// DSEE 互換 API
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeMode(
         JNIEnv *env, jobject thiz, jint mode) {
-    g_currentDseeMode = mode;
-    if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->setDseeMode(static_cast<DseeMode>(mode));
+    Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(env, thiz, mode);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeCustomParams(
         JNIEnv *env, jobject thiz, jint lpcAlgo, jfloat gain, jfloat extractFreq, jboolean useQmf) {
-    if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->setDseeCustomParams(lpcAlgo, gain, extractFreq, useQmf == JNI_TRUE);
+    Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(env, thiz, gain, extractFreq);
 }
 
+// ★ MainActivity から参照される Transient API の完全復元
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
         JNIEnv *env, jobject thiz, jint mode) {
@@ -136,7 +151,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
     }
 }
 
-// ★ C++ Native 32バンド スペクトルデータ取得 JNI
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetSpectrum(
         JNIEnv *env, jobject thiz, jfloatArray out_array) {

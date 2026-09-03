@@ -1,4 +1,4 @@
-#include "dsp_upsampler.h"
+﻿#include "dsp_upsampler.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -28,12 +28,10 @@ inline double getTpdfDitherR(bool independent) {
 }
 
 // -----------------------------------------------------------------------------
-// FirStage2x 実装
+// FirStage2x 高速化実装 (ダブルバッファリング & NEON SIMD)
 // -----------------------------------------------------------------------------
 double FirStage2x::besselI0(double x) {
-    double sum = 1.0;
-    double term = 1.0;
-    double halfX = x * 0.5;
+    double sum = 1.0, term = 1.0, halfX = x * 0.5;
     for (int k = 1; k <= 30; ++k) {
         term *= (halfX / k);
         double termSq = term * term;
@@ -74,13 +72,10 @@ void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     std::vector<double> causalCepstrum(fftSize, 0.0);
     causalCepstrum[0] = cepstrum[0];
     int half = fftSize / 2;
-    for (int n = 1; n < half; ++n) {
-        causalCepstrum[n] = 2.0 * cepstrum[n];
-    }
+    for (int n = 1; n < half; ++n) causalCepstrum[n] = 2.0 * cepstrum[n];
     causalCepstrum[half] = cepstrum[half];
 
-    std::vector<double> minReal(fftSize, 0.0);
-    std::vector<double> minImag(fftSize, 0.0);
+    std::vector<double> minReal(fftSize, 0.0), minImag(fftSize, 0.0);
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
         for (int n = 0; n < totalTaps; ++n) {
@@ -137,28 +132,37 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
 
     poly0_.clear();
     poly1_.clear();
-    poly0_.reserve((numTaps_ + 1) / 2);
-    poly1_.reserve(numTaps_ / 2);
+
+    size_t rawEven = (numTaps_ + 1) / 2;
+    size_t rawOdd  = numTaps_ / 2;
+    tapsPerPhase_ = std::max(rawEven, rawOdd);
+    if (tapsPerPhase_ % 4 != 0) {
+        tapsPerPhase_ += (4 - (tapsPerPhase_ % 4));
+    }
+
+    poly0_.assign(tapsPerPhase_, 0.0f);
+    poly1_.assign(tapsPerPhase_, 0.0f);
 
     for (size_t i = 0; i < numTaps_; ++i) {
         float tapVal = static_cast<float>(design[i] * scale);
-        if (i % 2 == 0) poly0_.push_back(tapVal);
-        else poly1_.push_back(tapVal);
+        if (i % 2 == 0) {
+            size_t subIdx = i / 2;
+            if (subIdx < tapsPerPhase_) poly0_[tapsPerPhase_ - 1 - subIdx] = tapVal;
+        } else {
+            size_t subIdx = i / 2;
+            if (subIdx < tapsPerPhase_) poly1_[tapsPerPhase_ - 1 - subIdx] = tapVal;
+        }
     }
 
-    tapsPerPhase_ = std::max(poly0_.size(), poly1_.size());
-    histLen_ = static_cast<int>(tapsPerPhase_);
-    histL_.assign(histLen_, 0.0f);
-    histR_.assign(histLen_, 0.0f);
-    histWritePos_ = (histLen_ == 0) ? 0 : (histLen_ - 1);
+    mirrorHistL_.assign(tapsPerPhase_ * 2, 0.0f);
+    mirrorHistR_.assign(tapsPerPhase_ * 2, 0.0f);
+    writePos_ = 0;
 }
 
 void FirStage2x::reset() {
-    if (!histL_.empty()) {
-        std::fill(histL_.begin(), histL_.end(), 0.0f);
-        std::fill(histR_.begin(), histR_.end(), 0.0f);
-        histWritePos_ = (histLen_ == 0) ? 0 : (histLen_ - 1);
-    }
+    std::fill(mirrorHistL_.begin(), mirrorHistL_.end(), 0.0f);
+    std::fill(mirrorHistR_.begin(), mirrorHistR_.end(), 0.0f);
+    writePos_ = 0;
 }
 
 void FirStage2x::processStereo(
@@ -166,233 +170,82 @@ void FirStage2x::processStereo(
     std::vector<float, AlignedAllocator<float, 16>>& outL,
     std::vector<float, AlignedAllocator<float, 16>>& outR
 ) {
-    if (!inL || !inR || numFrames == 0) return;
+    if (!inL || !inR || numFrames == 0 || tapsPerPhase_ == 0) return;
     outL.resize(numFrames * 2);
     outR.resize(numFrames * 2);
 
-    const int hLen = histLen_;
-    if (hLen <= 0) return;
-
-    const size_t evenSize = poly0_.size();
-    const size_t oddSize = poly1_.size();
     const float* c0 = poly0_.data();
     const float* c1 = poly1_.data();
+    const size_t tpp = tapsPerPhase_;
 
     float* dstL = outL.data();
     float* dstR = outR.data();
 
     for (size_t n = 0; n < numFrames; ++n) {
-        histWritePos_ = (histWritePos_ + 1) % hLen;
-        histL_[histWritePos_] = inL[n];
-        histR_[histWritePos_] = inR[n];
+        mirrorHistL_[writePos_]        = inL[n];
+        mirrorHistL_[writePos_ + tpp]  = inL[n];
+        mirrorHistR_[writePos_]        = inR[n];
+        mirrorHistR_[writePos_ + tpp]  = inR[n];
 
-        float s0_L = 0.0f, s0_R = 0.0f;
-        int idx = histWritePos_;
-        for (size_t i = 0; i < evenSize; ++i) {
-            float c = c0[i];
-            s0_L += c * histL_[idx];
-            s0_R += c * histR_[idx];
-            idx = (idx == 0) ? (hLen - 1) : (idx - 1);
+        const float* hPtrL = &mirrorHistL_[writePos_ + 1];
+        const float* hPtrR = &mirrorHistR_[writePos_ + 1];
+
+#if USE_ARM_NEON
+        float32x4_t acc0_L = vdupq_n_f32(0.0f);
+        float32x4_t acc1_L = vdupq_n_f32(0.0f);
+        float32x4_t acc0_R = vdupq_n_f32(0.0f);
+        float32x4_t acc1_R = vdupq_n_f32(0.0f);
+
+        for (size_t i = 0; i < tpp; i += 4) {
+            float32x4_t xL = vld1q_f32(hPtrL + i);
+            float32x4_t xR = vld1q_f32(hPtrR + i);
+            float32x4_t k0 = vld1q_f32(c0 + i);
+            float32x4_t k1 = vld1q_f32(c1 + i);
+
+            acc0_L = vmlaq_f32(acc0_L, xL, k0);
+            acc1_L = vmlaq_f32(acc1_L, xL, k1);
+            acc0_R = vmlaq_f32(acc0_R, xR, k0);
+            acc1_R = vmlaq_f32(acc1_R, xR, k1);
         }
 
-        float s1_L = 0.0f, s1_R = 0.0f;
-        idx = histWritePos_;
-        for (size_t i = 0; i < oddSize; ++i) {
-            float c = c1[i];
-            s1_L += c * histL_[idx];
-            s1_R += c * histR_[idx];
-            idx = (idx == 0) ? (hLen - 1) : (idx - 1);
+#if defined(__aarch64__)
+        dstL[n * 2]     = vaddvq_f32(acc0_L);
+        dstL[n * 2 + 1] = vaddvq_f32(acc1_L);
+        dstR[n * 2]     = vaddvq_f32(acc0_R);
+        dstR[n * 2 + 1] = vaddvq_f32(acc1_R);
+#else
+        float32x2_t r0L = vadd_f32(vget_low_f32(acc0_L), vget_high_f32(acc0_L));
+        float32x2_t r1L = vadd_f32(vget_low_f32(acc1_L), vget_high_f32(acc1_L));
+        float32x2_t r0R = vadd_f32(vget_low_f32(acc0_R), vget_high_f32(acc0_R));
+        float32x2_t r1R = vadd_f32(vget_low_f32(acc1_R), vget_high_f32(acc1_R));
+        dstL[n * 2]     = vget_lane_f32(vpadd_f32(r0L, r0L), 0);
+        dstL[n * 2 + 1] = vget_lane_f32(vpadd_f32(r1L, r1L), 0);
+        dstR[n * 2]     = vget_lane_f32(vpadd_f32(r0R, r0R), 0);
+        dstR[n * 2 + 1] = vget_lane_f32(vpadd_f32(r1R, r1R), 0);
+#endif
+#else
+        float s0_L = 0.0f, s1_L = 0.0f;
+        float s0_R = 0.0f, s1_R = 0.0f;
+        for (size_t i = 0; i < tpp; ++i) {
+            s0_L += c0[i] * hPtrL[i];
+            s1_L += c1[i] * hPtrL[i];
+            s0_R += c0[i] * hPtrR[i];
+            s1_R += c1[i] * hPtrR[i];
         }
-
         dstL[n * 2]     = s0_L;
         dstL[n * 2 + 1] = s1_L;
         dstR[n * 2]     = s0_R;
         dstR[n * 2 + 1] = s1_R;
+#endif
+        writePos_++;
+        if (writePos_ >= static_cast<int>(tpp)) {
+            writePos_ = 0;
+        }
     }
 }
 
 // -----------------------------------------------------------------------------
-// ★ DspLpcHarmonicAi (16k〜40k シームレス倍音接続 ＆ ゲイン最適化)
-// -----------------------------------------------------------------------------
-DspLpcHarmonicAi::DspLpcHarmonicAi() {
-    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.22f, 9500.0f, true);
-}
-
-void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, float gain, float extractFreq, bool useQmf) {
-    mode_ = mode;
-    sampleRate_ = std::max(8000.0, sampleRate);
-    lpcAlgo_ = lpcAlgo;
-    // 倍音付加レベルを自然かつ明瞭なハイレゾバランスへ調整
-    targetGain_ = static_cast<double>(gain) * 2.8;
-    useQmf_ = useQmf;
-    reset();
-
-    if (mode_ == DseeMode::OFF) {
-        isBypass_ = true;
-        return;
-    }
-
-    isBypass_ = false;
-
-    // 原音高域抽出 HPF (9.5k〜12kHz)
-    double fExtract = static_cast<double>(extractFreq);
-    double kExtract = std::tan(PI * fExtract / sampleRate_);
-    double a0 = 1.0 + kExtract;
-    hp_b0_ = 1.0 / a0;
-    hp_b1_ = -1.0 / a0;
-    hp_a1_ = (kExtract - 1.0) / a0;
-
-    // ★ 15.5kHz 2次 Butterworth ハイレゾ通過 HPF (16kの切れ目から40kまで滑らかに接続)
-    double fOutHp = std::min(15500.0, sampleRate_ * 0.45);
-    double w0 = 2.0 * PI * fOutHp / sampleRate_;
-    double alpha = std::sin(w0) / (2.0 * 0.70710678);
-    double cosw0 = std::cos(w0);
-
-    double b0_raw = (1.0 + cosw0) / 2.0;
-    double b1_raw = -(1.0 + cosw0);
-    double b2_raw = (1.0 + cosw0) / 2.0;
-    double a0_raw = 1.0 + alpha;
-    double a1_raw = -2.0 * cosw0;
-    double a2_raw = 1.0 - alpha;
-
-    double inv_a0 = 1.0 / a0_raw;
-    out_hp_b0_ = b0_raw * inv_a0;
-    out_hp_b1_ = b1_raw * inv_a0;
-    out_hp_b2_ = b2_raw * inv_a0;
-    out_hp_a1_ = a1_raw * inv_a0;
-    out_hp_a2_ = a2_raw * inv_a0;
-}
-
-void DspLpcHarmonicAi::reset() {
-    hp_s1_L_ = 0.0; hp_s1_R_ = 0.0;
-    out_s1_L_ = 0.0; out_s2_L_ = 0.0;
-    out_s1_R_ = 0.0; out_s2_R_ = 0.0;
-    dcL_ = 0.0; dcR_ = 0.0;
-    prevSampleL_ = 0.0; prevSampleR_ = 0.0;
-    envHfL_ = 0.0; envHfR_ = 0.0;
-    envTotalL_ = 0.0; envTotalR_ = 0.0;
-    transientFluxL_ = 0.0; transientFluxR_ = 0.0;
-    smoothedGainL_ = 0.0; smoothedGainR_ = 0.0;
-}
-
-void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames) {
-    if (isBypass_ || mode_ == DseeMode::OFF || !left || !right || numFrames == 0) return;
-
-    const double maxSlewPerSample = 0.0015;
-
-    for (size_t i = 0; i < numFrames; ++i) {
-        // --- Left チャンネル ---
-        double inL = static_cast<double>(left[i]);
-        double hiL = hp_b0_ * inL + hp_s1_L_;
-        hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
-
-        double absHfL = std::abs(hiL);
-        double absTotalL = std::abs(inL);
-        envHfL_ = envHfL_ * 0.990 + absHfL * 0.010;
-        envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
-
-        double diffL = std::abs(inL - prevSampleL_);
-        prevSampleL_ = inL;
-        transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
-        double attackRatioL = std::clamp((diffL - transientFluxL_ * 1.1) / (transientFluxL_ + 1e-4), 0.0, 1.0);
-
-        // ★ 偶数次倍音 (2f, 4f: 16k〜28kHz) ＆ 奇数次倍音 (3f: 28k〜40kHz)
-        double absSmoothL = std::sqrt(hiL * hiL + 1e-7);
-        dcL_ = dcL_ * 0.992 + absSmoothL * 0.008;
-        double evenHarmL = (absSmoothL - dcL_) * 4.2;
-
-        double driveL = hiL * 4.5;
-        double oddHarmL = (std::tanh(driveL) - (hiL * 0.75)) * 2.6;
-
-        double rawHarmL = 0.0;
-        if (mode_ == DseeMode::AUTO_AI) {
-            double evenW = 0.65 - attackRatioL * 0.20;
-            double oddW  = 0.35 + attackRatioL * 0.20;
-            rawHarmL = evenHarmL * evenW + oddHarmL * oddW;
-        } else {
-            if (lpcAlgo_ == 1) {
-                rawHarmL = evenHarmL * 0.60 + oddHarmL * 0.40;
-            } else if (lpcAlgo_ == 2) {
-                rawHarmL = evenHarmL * 0.75 + oddHarmL * 0.25;
-            } else {
-                rawHarmL = evenHarmL * 0.40 + oddHarmL * 0.60;
-            }
-        }
-
-        // 15.5kHz HPF 通過 (16kから40kまでシームレス接続)
-        double outHarmL = out_hp_b0_ * rawHarmL + out_s1_L_;
-        out_s1_L_ = out_hp_b1_ * rawHarmL - out_hp_a1_ * outHarmL + out_s2_L_;
-        out_s2_L_ = out_hp_b2_ * rawHarmL - out_hp_a2_ * outHarmL;
-
-        double targetDynGainL = std::min(envHfL_ * 16.0, targetGain_);
-        double gainDiffL = targetDynGainL - smoothedGainL_;
-        smoothedGainL_ += std::clamp(gainDiffL, -maxSlewPerSample, maxSlewPerSample);
-
-        double totalL = inL + outHarmL * smoothedGainL_;
-        if (totalL > 0.96) {
-            totalL = 0.96 + 0.04 * std::tanh((totalL - 0.96) / 0.04);
-        } else if (totalL < -0.96) {
-            totalL = -0.96 + 0.04 * std::tanh((totalL + 0.96) / 0.04);
-        }
-        left[i] = static_cast<float>(totalL);
-
-        // --- Right チャンネル ---
-        double inR = static_cast<double>(right[i]);
-        double hiR = hp_b0_ * inR + hp_s1_R_;
-        hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
-
-        double absHfR = std::abs(hiR);
-        double absTotalR = std::abs(inR);
-        envHfR_ = envHfR_ * 0.990 + absHfR * 0.010;
-        envTotalR_ = envTotalR_ * 0.995 + absTotalR * 0.005;
-
-        double diffR = std::abs(inR - prevSampleR_);
-        prevSampleR_ = inR;
-        transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
-        double attackRatioR = std::clamp((diffR - transientFluxR_ * 1.1) / (transientFluxR_ + 1e-4), 0.0, 1.0);
-
-        double absSmoothR = std::sqrt(hiR * hiR + 1e-7);
-        dcR_ = dcR_ * 0.992 + absSmoothR * 0.008;
-        double evenHarmR = (absSmoothR - dcR_) * 4.2;
-
-        double driveR = hiR * 4.5;
-        double oddHarmR = (std::tanh(driveR) - (hiR * 0.75)) * 2.6;
-
-        double rawHarmR = 0.0;
-        if (mode_ == DseeMode::AUTO_AI) {
-            double evenW = 0.65 - attackRatioR * 0.20;
-            double oddW  = 0.35 + attackRatioR * 0.20;
-            rawHarmR = evenHarmR * evenW + oddHarmR * oddW;
-        } else {
-            if (lpcAlgo_ == 1) {
-                rawHarmR = evenHarmR * 0.60 + oddHarmR * 0.40;
-            } else if (lpcAlgo_ == 2) {
-                rawHarmR = evenHarmR * 0.75 + oddHarmR * 0.25;
-            } else {
-                rawHarmR = evenHarmR * 0.40 + oddHarmR * 0.60;
-            }
-        }
-
-        double outHarmR = out_hp_b0_ * rawHarmR + out_s1_R_;
-        out_s1_R_ = out_hp_b1_ * rawHarmR - out_hp_a1_ * outHarmR + out_s2_R_;
-        out_s2_R_ = out_hp_b2_ * rawHarmR - out_hp_a2_ * outHarmR;
-
-        double targetDynGainR = std::min(envHfR_ * 16.0, targetGain_);
-        double gainDiffR = targetDynGainR - smoothedGainR_;
-        smoothedGainR_ += std::clamp(gainDiffR, -maxSlewPerSample, maxSlewPerSample);
-
-        double totalR = inR + outHarmR * smoothedGainR_;
-        if (totalR > 0.96) {
-            totalR = 0.96 + 0.04 * std::tanh((totalR - 0.96) / 0.04);
-        } else if (totalR < -0.96) {
-            totalR = -0.96 + 0.04 * std::tanh((totalR + 0.96) / 0.04);
-        }
-        right[i] = static_cast<float>(totalR);
-    }
-}
-
-// -----------------------------------------------------------------------------
-// DspTransientRestorer 実装
+// DspTransientRestorer 実装 (MainActivity 連動復元)
 // -----------------------------------------------------------------------------
 DspTransientRestorer::DspTransientRestorer() {
     configure(TransientMode::ACOUSTIC, 48000.0, true, false);
@@ -502,7 +355,166 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
 }
 
 // -----------------------------------------------------------------------------
-// DspDcPhaseLinearizer 実装
+// FREQ Engine 実装
+// -----------------------------------------------------------------------------
+DspFreqEngine::DspFreqEngine() {
+    configure(FreqMode::AUTO_AI, 48000.0, 0.22f, 10500.0f);
+}
+
+void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, float extractFreq) {
+    mode_ = mode;
+    sampleRate_ = std::max(8000.0, sampleRate);
+    targetGain_ = std::clamp(gain, 0.0f, 1.0f);
+    reset();
+
+    if (mode_ == FreqMode::OFF) {
+        isBypass_ = true;
+        return;
+    }
+    isBypass_ = false;
+
+    double fExtract = std::min(static_cast<double>(extractFreq), sampleRate_ * 0.45);
+    double w0_in = 2.0 * PI * fExtract / sampleRate_;
+    double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
+    double cosw0_in = std::cos(w0_in);
+
+    double in_b0 = (1.0 + cosw0_in) / 2.0;
+    double in_b1 = -(1.0 + cosw0_in);
+    double in_b2 = (1.0 + cosw0_in) / 2.0;
+    double in_a0 = 1.0 + alpha_in;
+    double in_a1 = -2.0 * cosw0_in;
+    double in_a2 = 1.0 - alpha_in;
+
+    in_hp_b0_ = in_b0 / in_a0;
+    in_hp_b1_ = in_b1 / in_a0;
+    in_hp_b2_ = in_b2 / in_a0;
+    in_hp_a1_ = in_a1 / in_a0;
+    in_hp_a2_ = in_a2 / in_a0;
+
+    double fOutHp = std::min(16000.0, sampleRate_ * 0.45);
+    double w0_out = 2.0 * PI * fOutHp / sampleRate_;
+    double alpha_out = std::sin(w0_out) / (2.0 * 0.70710678);
+    double cosw0_out = std::cos(w0_out);
+
+    double out_b0 = (1.0 + cosw0_out) / 2.0;
+    double out_b1 = -(1.0 + cosw0_out);
+    double out_b2 = (1.0 + cosw0_out) / 2.0;
+    double out_a0 = 1.0 + alpha_out;
+    double out_a1 = -2.0 * cosw0_out;
+    double out_a2 = 1.0 - alpha_out;
+
+    out_hp_b0_ = out_b0 / out_a0;
+    out_hp_b1_ = out_b1 / out_a0;
+    out_hp_b2_ = out_b2 / out_a0;
+    out_hp_a1_ = out_a1 / out_a0;
+    out_hp_a2_ = out_a2 / out_a0;
+}
+
+void DspFreqEngine::reset() {
+    in_s1_L_ = 0.0; in_s2_L_ = 0.0;
+    in_s1_R_ = 0.0; in_s2_R_ = 0.0;
+    out_s1_L_ = 0.0; out_s2_L_ = 0.0;
+    out_s1_R_ = 0.0; out_s2_R_ = 0.0;
+    r0_L_ = 1e-4; r1_L_ = 0.0;
+    r0_R_ = 1e-4; r1_R_ = 0.0;
+    prevSampleL_ = 0.0; prevSampleR_ = 0.0;
+    transientFluxL_ = 0.0; transientFluxR_ = 0.0;
+    smoothedGainL_ = 0.0; smoothedGainR_ = 0.0;
+}
+
+void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
+    if (isBypass_ || !left || !right || numFrames == 0) return;
+
+    double w2 = 0.55, w3 = 0.35, w4 = 0.10;
+    switch (mode_) {
+        case FreqMode::STUDIO_VOCAL:
+            w2 = 0.70; w3 = 0.25; w4 = 0.05; break;
+        case FreqMode::ACOUSTIC_INSTRUMENT:
+            w2 = 0.60; w3 = 0.30; w4 = 0.10; break;
+        case FreqMode::DYNAMIC_PERCUSSION:
+            w2 = 0.40; w3 = 0.40; w4 = 0.20; break;
+        case FreqMode::AIR_EXPANDER:
+            w2 = 0.30; w3 = 0.45; w4 = 0.25; break;
+        default: break;
+    }
+
+    const double slew = 0.001;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        double inL = static_cast<double>(left[i]);
+        
+        double hiL = in_hp_b0_ * inL + in_s1_L_;
+        in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
+        in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
+
+        r0_L_ = r0_L_ * 0.995 + (hiL * hiL) * 0.005;
+        r1_L_ = r1_L_ * 0.995 + (hiL * prevSampleL_) * 0.005;
+        double tiltL = std::clamp(r1_L_ / (r0_L_ + 1e-6), -0.9, 0.9);
+
+        double diffL = std::abs(inL - prevSampleL_);
+        prevSampleL_ = inL;
+        transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
+        double attackFactorL = std::clamp((diffL - transientFluxL_) / (transientFluxL_ + 1e-4), 0.0, 1.5);
+
+        double uL = std::tanh(hiL * 3.5);
+        double uL2 = uL * uL;
+        double t2L = 2.0 * uL2 - 1.0;
+        double t3L = (4.0 * uL2 - 3.0) * uL;
+        double t4L = 8.0 * uL2 * (uL2 - 1.0) + 1.0;
+
+        double harmL = (t2L * w2) + (t3L * w3 * (1.0 - tiltL * 0.3)) + (t4L * w4 * (1.0 - tiltL * 0.5));
+
+        double outHarmL = out_hp_b0_ * harmL + out_s1_L_;
+        out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
+        out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
+
+        double targetGainL = std::min(std::sqrt(r0_L_) * (3.0 + attackFactorL), static_cast<double>(targetGain_));
+        smoothedGainL_ += std::clamp(targetGainL - smoothedGainL_, -slew, slew);
+
+        double totalL = inL + outHarmL * smoothedGainL_;
+        if (totalL > 0.98) totalL = 0.98 + 0.02 * std::tanh((totalL - 0.98) / 0.02);
+        else if (totalL < -0.98) totalL = -0.98 + 0.02 * std::tanh((totalL + 0.98) / 0.02);
+        left[i] = static_cast<float>(totalL);
+
+        double inR = static_cast<double>(right[i]);
+        
+        double hiR = in_hp_b0_ * inR + in_s1_R_;
+        in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
+        in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
+
+        r0_R_ = r0_R_ * 0.995 + (hiR * hiR) * 0.005;
+        r1_R_ = r1_R_ * 0.995 + (hiR * prevSampleR_) * 0.005;
+        double tiltR = std::clamp(r1_R_ / (r0_R_ + 1e-6), -0.9, 0.9);
+
+        double diffR = std::abs(inR - prevSampleR_);
+        prevSampleR_ = inR;
+        transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
+        double attackFactorR = std::clamp((diffR - transientFluxR_) / (transientFluxR_ + 1e-4), 0.0, 1.5);
+
+        double uR = std::tanh(hiR * 3.5);
+        double uR2 = uR * uR;
+        double t2R = 2.0 * uR2 - 1.0;
+        double t3R = (4.0 * uR2 - 3.0) * uR;
+        double t4R = 8.0 * uR2 * (uR2 - 1.0) + 1.0;
+
+        double harmR = (t2R * w2) + (t3R * w3 * (1.0 - tiltR * 0.3)) + (t4R * w4 * (1.0 - tiltR * 0.5));
+
+        double outHarmR = out_hp_b0_ * harmR + out_s1_R_;
+        out_s1_R_ = out_hp_b1_ * harmR - out_hp_a1_ * outHarmR + out_s2_R_;
+        out_s2_R_ = out_hp_b2_ * harmR - out_hp_a2_ * outHarmR;
+
+        double targetGainR = std::min(std::sqrt(r0_R_) * (3.0 + attackFactorR), static_cast<double>(targetGain_));
+        smoothedGainR_ += std::clamp(targetGainR - smoothedGainR_, -slew, slew);
+
+        double totalR = inR + outHarmR * smoothedGainR_;
+        if (totalR > 0.98) totalR = 0.98 + 0.02 * std::tanh((totalR - 0.98) / 0.02);
+        else if (totalR < -0.98) totalR = -0.98 + 0.02 * std::tanh((totalR + 0.98) / 0.02);
+        right[i] = static_cast<float>(totalR);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// DspDcPhaseLinearizer
 // -----------------------------------------------------------------------------
 DspDcPhaseLinearizer::DspDcPhaseLinearizer() {
     configure(DcPhaseType::A_STD, 48000.0);
@@ -521,9 +533,7 @@ void DspDcPhaseLinearizer::configure(DcPhaseType type, double sampleRate) {
     }
 
     isBypass_ = false;
-    double f0 = 45.0;
-    double Q = 0.707;
-    double gainDb = 1.2;
+    double f0 = 45.0, Q = 0.707, gainDb = 1.2;
 
     switch (type) {
         case DcPhaseType::A_LOW:  f0 = 32.0; Q = 0.65; gainDb = 1.2; break;
@@ -581,132 +591,7 @@ void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFr
 }
 
 // -----------------------------------------------------------------------------
-// ★ 4096点 高精度マルチレート FFT スペクトル解析エンジン
-// -----------------------------------------------------------------------------
-void DspUpsampler::analyzeSpectrum(const float* l, const float* r, size_t numFrames) {
-    if (!l || !r || numFrames == 0) return;
-
-    for (size_t i = 0; i < numFrames; ++i) {
-        specRingBuf_[specRingPos_] = (l[i] + r[i]) * 0.5f;
-        specRingPos_ = (specRingPos_ + 1) % 4096;
-    }
-
-    constexpr int N = 2048;
-    static float realHi[N], imagHi[N];
-    static float realLo[N], imagLo[N];
-
-    // 1. 高域用 (500Hz 〜 40kHz) フルレート 2048点 FFT
-    for (int i = 0; i < N; ++i) {
-        int idx = (specRingPos_ + 4096 - N + i) % 4096;
-        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
-        realHi[i] = specRingBuf_[idx] * w;
-        imagHi[i] = 0.0f;
-    }
-
-    // 2. 低域用 (31Hz 〜 500Hz) 4:1 デシメーション 2048点 FFT
-    for (int i = 0; i < N; ++i) {
-        int baseIdx = (specRingPos_ + 4096 - (N * 4) + (i * 4)) % 4096;
-        float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) % 4096] + specRingBuf_[(baseIdx + 2) % 4096] + specRingBuf_[(baseIdx + 3) % 4096]) * 0.25f;
-        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
-        realLo[i] = avg * w;
-        imagLo[i] = 0.0f;
-    }
-
-    auto runFft = [](float* r, float* im) {
-        int j = 0;
-        for (int i = 0; i < N - 1; ++i) {
-            if (i < j) {
-                std::swap(r[i], r[j]);
-                std::swap(im[i], im[j]);
-            }
-            int k = N >> 1;
-            while (k <= j) {
-                j -= k;
-                k >>= 1;
-            }
-            j += k;
-        }
-        for (int len = 2; len <= N; len <<= 1) {
-            int half = len >> 1;
-            double angle = -2.0 * PI / len;
-            float wStepR = static_cast<float>(std::cos(angle));
-            float wStepI = static_cast<float>(std::sin(angle));
-            for (int i = 0; i < N; i += len) {
-                float wR = 1.0f, wI = 0.0f;
-                for (int k = 0; k < half; ++k) {
-                    float uR = r[i + k], uI = im[i + k];
-                    float vR = r[i + k + half] * wR - im[i + k + half] * wI;
-                    float vI = r[i + k + half] * wI + im[i + k + half] * wR;
-                    r[i + k] = uR + vR;
-                    im[i + k] = uI + vI;
-                    r[i + k + half] = uR - vR;
-                    im[i + k + half] = uI - vI;
-                    float nextWR = wR * wStepR - wI * wStepI;
-                    wI = wR * wStepI + wI * wStepR;
-                    wR = nextWR;
-                }
-            }
-        }
-    };
-
-    runFft(realHi, imagHi);
-    runFft(realLo, imagLo);
-
-    static constexpr float FREQS[32] = {
-        31.25f, 39.37f, 49.61f, 62.50f, 78.75f, 99.21f, 125.00f, 157.49f, 198.43f, 250.00f,
-        314.98f, 396.85f, 500.00f, 629.96f, 793.70f, 1000.00f, 1259.92f, 1587.40f, 2000.00f,
-        2519.84f, 3174.80f, 4000.00f, 5039.68f, 6349.60f, 8000.00f, 10079.37f, 12699.21f, 16000.00f,
-        20158.74f, 25398.42f, 32000.00f, 40000.00f
-    };
-
-    float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
-    float binHzHi = currentFs / static_cast<float>(N);
-    float binHzLo = (currentFs * 0.25f) / static_cast<float>(N);
-    float nyquist = currentFs * 0.5f;
-
-    for (int b = 0; b < 32; ++b) {
-        float fc = FREQS[b];
-        if (fc > nyquist) {
-            spectrumDb_[b] = -60.0f;
-            continue;
-        }
-
-        float fLow = fc * 0.8909f;
-        float fHigh = fc * 1.1225f;
-
-        float powerSum = 0.0f;
-        int binCount = 0;
-
-        if (b < 12) { // 31Hz 〜 500Hz: 低域デシメーション FFT
-            int binStart = std::clamp(static_cast<int>(fLow / binHzLo), 1, N / 2 - 1);
-            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzLo), binStart, N / 2 - 1);
-            for (int k = binStart; k <= binEnd; ++k) {
-                powerSum += (realLo[k] * realLo[k] + imagLo[k] * imagLo[k]);
-                binCount++;
-            }
-        } else { // 630Hz 〜 40kHz: フルレート FFT
-            int binStart = std::clamp(static_cast<int>(fLow / binHzHi), 1, N / 2 - 1);
-            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzHi), binStart, N / 2 - 1);
-            for (int k = binStart; k <= binEnd; ++k) {
-                powerSum += (realHi[k] * realHi[k] + imagHi[k] * imagHi[k]);
-                binCount++;
-            }
-        }
-
-        float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
-        float rms = std::sqrt(meanPower) / (N * 0.20f);
-
-        // ★ ハイレゾ超高域（20k〜40k）の視覚的キャリブレーション
-        float freqWeight = (b >= 28) ? 3.2f : ((b >= 24) ? 1.8f : 1.0f);
-        rms *= freqWeight;
-
-        float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
-        spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
-    }
-}
-
-// -----------------------------------------------------------------------------
-// DspUpsampler 実装
+// DspUpsampler メイン実装
 // -----------------------------------------------------------------------------
 DspUpsampler::DspUpsampler() {
     specRingBuf_.assign(4096, 0.0f);
@@ -746,17 +631,15 @@ void DspUpsampler::setDcPhaseType(DcPhaseType type) {
     dcPhaseLinearizer_.configure(type, static_cast<double>(inSampleRate_ * factor_));
 }
 
-void DspUpsampler::setDseeMode(DseeMode mode) {
-    dseeMode_ = mode;
-    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
+void DspUpsampler::setFreqMode(FreqMode mode) {
+    freqMode_ = mode;
+    freqEngine_.configure(mode, static_cast<double>(inSampleRate_ * factor_), customFreqGain_, customFreqExtractFreq_);
 }
 
-void DspUpsampler::setDseeCustomParams(int lpcAlgo, float gain, float extractFreq, bool useQmf) {
-    customLpcAlgo_ = lpcAlgo;
-    customGain_ = gain;
-    customExtractFreq_ = extractFreq;
-    customUseQmf_ = useQmf;
-    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(inSampleRate_ * factor_), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
+void DspUpsampler::setFreqCustomParams(float gain, float extractFreq) {
+    customFreqGain_ = gain;
+    customFreqExtractFreq_ = extractFreq;
+    freqEngine_.configure(freqMode_, static_cast<double>(inSampleRate_ * factor_), customFreqGain_, customFreqExtractFreq_);
 }
 
 void DspUpsampler::setTransientMode(TransientMode mode) {
@@ -771,9 +654,7 @@ void DspUpsampler::setTransientCustomParams(bool useGroupDelay, bool useLattice)
 }
 
 double DspUpsampler::besselI0(double x) {
-    double sum = 1.0;
-    double term = 1.0;
-    double halfX = x * 0.5;
+    double sum = 1.0, term = 1.0, halfX = x * 0.5;
     for (int k = 1; k <= 30; ++k) {
         term *= (halfX / k);
         double termSq = term * term;
@@ -814,13 +695,10 @@ void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) 
     std::vector<double> causalCepstrum(fftSize, 0.0);
     causalCepstrum[0] = cepstrum[0];
     int half = fftSize / 2;
-    for (int n = 1; n < half; ++n) {
-        causalCepstrum[n] = 2.0 * cepstrum[n];
-    }
+    for (int n = 1; n < half; ++n) causalCepstrum[n] = 2.0 * cepstrum[n];
     causalCepstrum[half] = cepstrum[half];
 
-    std::vector<double> minReal(fftSize, 0.0);
-    std::vector<double> minImag(fftSize, 0.0);
+    std::vector<double> minReal(fftSize, 0.0), minImag(fftSize, 0.0);
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
         for (int n = 0; n < totalTaps; ++n) {
@@ -888,11 +766,7 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         polyCoeffs_[p].resize(tapsPerPhase_);
         for (int k = 0; k < tapsPerPhase_; ++k) {
             int protoIdx = k * factor + p;
-            if (protoIdx < totalTaps) {
-                polyCoeffs_[p][k] = static_cast<float>(protoFilter[protoIdx] * scale);
-            } else {
-                polyCoeffs_[p][k] = 0.0f;
-            }
+            polyCoeffs_[p][k] = (protoIdx < totalTaps) ? static_cast<float>(protoFilter[protoIdx] * scale) : 0.0f;
         }
     }
 
@@ -916,7 +790,7 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     equalizer_.setSampleRate(static_cast<double>(currentFs));
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(currentFs));
     transientRestorer_.configure(transientMode_, static_cast<double>(currentFs), customUseGroupDelay_, customUseLattice_);
-    lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(currentFs), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
+    freqEngine_.configure(freqMode_, static_cast<double>(currentFs), customFreqGain_, customFreqExtractFreq_);
     reset();
 }
 
@@ -935,11 +809,125 @@ void DspUpsampler::reset() {
     equalizer_.reset();
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
-    lpcHarmonicAi_.reset();
+    freqEngine_.reset();
+}
+
+void DspUpsampler::executeFftAnalysis() {
+    constexpr int N = 2048;
+    static float realHi[N], imagHi[N];
+    static float realLo[N], imagLo[N];
+
+    size_t currentPos = specRingPos_.load(std::memory_order_relaxed);
+
+    for (int i = 0; i < N; ++i) {
+        int idx = (currentPos + 4096 - N + i) & 4095;
+        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
+        realHi[i] = specRingBuf_[idx] * w;
+        imagHi[i] = 0.0f;
+    }
+
+    for (int i = 0; i < N; ++i) {
+        int baseIdx = (currentPos + 4096 - (N * 4) + (i * 4)) & 4095;
+        float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) & 4095] +
+                     specRingBuf_[(baseIdx + 2) & 4095] + specRingBuf_[(baseIdx + 3) & 4095]) * 0.25f;
+        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
+        realLo[i] = avg * w;
+        imagLo[i] = 0.0f;
+    }
+
+    auto runFft = [](float* r, float* im) {
+        int j = 0;
+        for (int i = 0; i < N - 1; ++i) {
+            if (i < j) {
+                std::swap(r[i], r[j]);
+                std::swap(im[i], im[j]);
+            }
+            int k = N >> 1;
+            while (k <= j) {
+                j -= k;
+                k >>= 1;
+            }
+            j += k;
+        }
+        for (int len = 2; len <= N; len <<= 1) {
+            int half = len >> 1;
+            double angle = -2.0 * PI / len;
+            float wStepR = static_cast<float>(std::cos(angle));
+            float wStepI = static_cast<float>(std::sin(angle));
+            for (int i = 0; i < N; i += len) {
+                float wR = 1.0f, wI = 0.0f;
+                for (int k = 0; k < half; ++k) {
+                    float uR = r[i + k], uI = im[i + k];
+                    float vR = r[i + k + half] * wR - im[i + k + half] * wI;
+                    float vI = r[i + k + half] * wI + im[i + k + half] * wR;
+                    r[i + k] = uR + vR;
+                    im[i + k] = uI + vI;
+                    r[i + k + half] = uR - vR;
+                    im[i + k + half] = uI - vI;
+                    float nextWR = wR * wStepR - wI * wStepI;
+                    wI = wR * wStepI + wI * wStepR;
+                    wR = nextWR;
+                }
+            }
+        }
+    };
+
+    runFft(realHi, imagHi);
+    runFft(realLo, imagLo);
+
+    static constexpr float FREQS[32] = {
+        31.25f, 39.37f, 49.61f, 62.50f, 78.75f, 99.21f, 125.00f, 157.49f, 198.43f, 250.00f,
+        314.98f, 396.85f, 500.00f, 629.96f, 793.70f, 1000.00f, 1259.92f, 1587.40f, 2000.00f,
+        2519.84f, 3174.80f, 4000.00f, 5039.68f, 6349.60f, 8000.00f, 10079.37f, 12699.21f, 16000.00f,
+        20158.74f, 25398.42f, 32000.00f, 40000.00f
+    };
+
+    float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
+    float binHzHi = currentFs / static_cast<float>(N);
+    float binHzLo = (currentFs * 0.25f) / static_cast<float>(N);
+    float nyquist = currentFs * 0.5f;
+
+    for (int b = 0; b < 32; ++b) {
+        float fc = FREQS[b];
+        if (fc > nyquist) {
+            spectrumDb_[b] = -60.0f;
+            continue;
+        }
+
+        float fLow = fc * 0.8909f;
+        float fHigh = fc * 1.1225f;
+        float powerSum = 0.0f;
+        int binCount = 0;
+
+        if (b < 12) {
+            int binStart = std::clamp(static_cast<int>(fLow / binHzLo), 1, N / 2 - 1);
+            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzLo), binStart, N / 2 - 1);
+            for (int k = binStart; k <= binEnd; ++k) {
+                powerSum += (realLo[k] * realLo[k] + imagLo[k] * imagLo[k]);
+                binCount++;
+            }
+        } else {
+            int binStart = std::clamp(static_cast<int>(fLow / binHzHi), 1, N / 2 - 1);
+            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzHi), binStart, N / 2 - 1);
+            for (int k = binStart; k <= binEnd; ++k) {
+                powerSum += (realHi[k] * realHi[k] + imagHi[k] * imagHi[k]);
+                binCount++;
+            }
+        }
+
+        float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
+        float rms = std::sqrt(meanPower) / (N * 0.20f);
+        float freqWeight = (b >= 28) ? 3.2f : ((b >= 24) ? 1.8f : 1.0f);
+        rms *= freqWeight;
+
+        float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
+        spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
+    }
 }
 
 void DspUpsampler::getSpectrum(float* out32Bands) {
     if (!out32Bands) return;
+    executeFftAnalysis();
     std::memcpy(out32Bands, spectrumDb_, sizeof(spectrumDb_));
 }
 
@@ -1023,7 +1011,6 @@ size_t DspUpsampler::process(
         }
     } else {
         const int subTaps = tapsPerPhase_;
-
         for (size_t i = 0; i < numInFrames; ++i) {
             historyL_[historyWritePos_] = tempInL_[i];
             historyR_[historyWritePos_] = tempInR_[i];
@@ -1033,13 +1020,10 @@ size_t DspUpsampler::process(
                 const float* histPtrL = &historyL_[historyWritePos_ - (subTaps - 1)];
                 const float* histPtrR = &historyR_[historyWritePos_ - (subTaps - 1)];
 
-                float sumL = 0.0f;
-                float sumR = 0.0f;
-
+                float sumL = 0.0f, sumR = 0.0f;
 #if USE_ARM_NEON
                 float32x4_t accL = vdupq_n_f32(0.0f);
                 float32x4_t accR = vdupq_n_f32(0.0f);
-
                 for (int k = 0; k < subTaps; k += 4) {
                     float32x4_t c = vld1q_f32(coeffPtr + k);
                     float32x4_t xL = vld1q_f32(histPtrL + k);
@@ -1047,7 +1031,6 @@ size_t DspUpsampler::process(
                     accL = vmlaq_f32(accL, c, xL);
                     accR = vmlaq_f32(accR, c, xR);
                 }
-
 #if defined(__aarch64__)
                 sumL = vaddvq_f32(accL);
                 sumR = vaddvq_f32(accR);
@@ -1057,7 +1040,6 @@ size_t DspUpsampler::process(
                 sumL = vget_lane_f32(vpadd_f32(rL, rL), 0);
                 sumR = vget_lane_f32(vpadd_f32(rR, rR), 0);
 #endif
-
 #else
                 for (int k = 0; k < subTaps; ++k) {
                     sumL += coeffPtr[k] * histPtrL[k];
@@ -1078,24 +1060,33 @@ size_t DspUpsampler::process(
         }
     }
 
-    // [Step 2 & Step 3] DSEE 超高域倍音復元ステージ
+    // [Step 2] トランジェント復元 & FREQ Engine
     if (!isDirectSource_) {
-        if (currentFactor >= 2 && dseeMode_ != DseeMode::OFF) {
-            transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            lpcHarmonicAi_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        if (currentFactor >= 2) {
+            if (transientMode_ != TransientMode::OFF) {
+                transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+            }
+            if (freqMode_ != FreqMode::OFF) {
+                freqEngine_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+            }
         }
 
-        // [Step 4] 64-bit 10-Band EQ
+        // [Step 3] 64-bit 10-Band EQ
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
-        // [Step 5] DC Phase Linearizer
+        // [Step 4] DC Phase Linearizer
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // ★ 最終出力PCMから直接マルチレート高精度スペクトルを解析
-    analyzeSpectrum(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    // リアルタイムスレッドではリングバッファへ格納
+    size_t curPos = specRingPos_.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < numOutFrames; ++i) {
+        specRingBuf_[curPos] = (tempOutL_[i] + tempOutR_[i]) * 0.5f;
+        curPos = (curPos + 1) & 4095;
+    }
+    specRingPos_.store(curPos, std::memory_order_release);
 
-    // [Step 6] ディザリング ＆ PCM パッキング
+    // [Step 5] ディザリング ＆ PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
@@ -1114,21 +1105,17 @@ size_t DspUpsampler::process(
         }
     } else if (outBytesPerSample == 3) {
         const double scale = 8388607.0;
-
         for (size_t i = 0; i < numOutFrames; ++i) {
             double rawL = static_cast<double>(tempOutL_[i]) * scale;
             double rawR = static_cast<double>(tempOutR_[i]) * scale;
-
             double shapedL = rawL;
             double shapedR = rawR;
 
             if (!isDirectSource_) {
                 double dL = getTpdfDitherL();
                 double dR = getTpdfDitherR(lrIndependentDither_);
-
                 if (ditherMode_ == DitherMode::TPDF) {
-                    shapedL += dL;
-                    shapedR += dR;
+                    shapedL += dL; shapedR += dR;
                 } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
                     shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
                     shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
@@ -1142,10 +1129,10 @@ size_t DspUpsampler::process(
             int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -8388608.0, 8388607.0));
 
             if (!isDirectSource_ && (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC)) {
-                double eL = std::clamp(shapedL - intL, -2.0, 2.0);
-                double eR = std::clamp(shapedR - intR, -2.0, 2.0);
-                errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0]; errHistL_[0] = eL;
-                errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0]; errHistR_[0] = eR;
+                errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0];
+                errHistL_[0] = std::clamp(shapedL - intL, -2.0, 2.0);
+                errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0];
+                errHistR_[0] = std::clamp(shapedR - intR, -2.0, 2.0);
             }
 
             if (intL < 0) intL = 0x1000000 + intL;
@@ -1161,21 +1148,17 @@ size_t DspUpsampler::process(
         }
     } else {
         const double scale = 32767.0;
-
         for (size_t i = 0; i < numOutFrames; ++i) {
             double rawL = static_cast<double>(tempOutL_[i]) * scale;
             double rawR = static_cast<double>(tempOutR_[i]) * scale;
-
             double shapedL = rawL;
             double shapedR = rawR;
 
             if (!isDirectSource_) {
                 double dL = getTpdfDitherL();
                 double dR = getTpdfDitherR(lrIndependentDither_);
-
                 if (ditherMode_ == DitherMode::TPDF) {
-                    shapedL += dL;
-                    shapedR += dR;
+                    shapedL += dL; shapedR += dR;
                 } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
                     shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
                     shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
@@ -1189,10 +1172,10 @@ size_t DspUpsampler::process(
             int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -32768.0, 32767.0));
 
             if (!isDirectSource_ && (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC)) {
-                double eL = std::clamp(shapedL - intL, -2.0, 2.0);
-                double eR = std::clamp(shapedR - intR, -2.0, 2.0);
-                errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0]; errHistL_[0] = eL;
-                errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0]; errHistR_[0] = eR;
+                errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0];
+                errHistL_[0] = std::clamp(shapedL - intL, -2.0, 2.0);
+                errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0];
+                errHistR_[0] = std::clamp(shapedR - intR, -2.0, 2.0);
             }
 
             dst[i * 4]     = intL & 0xFF;
