@@ -100,7 +100,7 @@ class MainActivity : AppCompatActivity() {
     private var currentArtworkBitmap: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
 
-    // ダイアログ内プレイヤーUI参照
+    // ダイアログ内UI参照
     private var activeDialogArtworkImage: ImageView? = null
     private var activeDialogSeekBar: SeekBar? = null
     private var activeDialogCurrentTime: TextView? = null
@@ -108,6 +108,7 @@ class MainActivity : AppCompatActivity() {
     private var activeDialogPlayPauseBtn: Button? = null
     private var activeDialogTrackTitle: TextView? = null
     private var activeDialogTrackArtist: TextView? = null
+    private var activeDialogEqView: WalkmanEqView? = null
     private var isUserSeeking = false
 
     private var bluetoothA2dp: BluetoothA2dp? = null
@@ -116,6 +117,7 @@ class MainActivity : AppCompatActivity() {
     private var isDirectSource = false
     private var isCascadeFir = true
     private var isLrIndependentDither = true
+    private var isSpectrumOn = true
 
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
@@ -279,12 +281,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            playbackService?.onPeakListener = { dbL, dbR, mask ->
+            playbackService?.onPeakListener = { dbL, dbR, mask, spectrumBands ->
                 lastPcmTime = System.currentTimeMillis()
                 peakDbL = dbL
                 peakDbR = dbR
                 bitActivityMask = bitActivityMask or mask
                 walkmanLevelMeter?.setLevels(dbL, dbR)
+                activeDialogEqView?.setSpectrumLevels(spectrumBands)
             }
 
             playbackService?.onDeviceDisconnectedListener = {
@@ -348,6 +351,7 @@ class MainActivity : AppCompatActivity() {
         isDirectSource = prefs.getBoolean("direct_source_enabled", false)
         isCascadeFir = prefs.getBoolean("cascade_fir_enabled", true)
         isLrIndependentDither = prefs.getBoolean("lr_dither_enabled", true)
+        isSpectrumOn = prefs.getBoolean("spectrum_enabled", true)
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
@@ -429,14 +433,12 @@ class MainActivity : AppCompatActivity() {
     private fun showSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
         
-        // ★ 背景の暗転（グレー化）を完全廃止し、上部レベルメーターを鮮明表示
         dialog.window?.setDimAmount(0f)
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
 
-        // ★ レベルメーター下まで隙間なく全展開
         dialog.setOnShowListener {
             val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet) as? FrameLayout
             if (bottomSheet != null) {
@@ -467,6 +469,10 @@ class MainActivity : AppCompatActivity() {
         val btnPrev = view.findViewById<Button>(R.id.dialogBtnPrevTrack)
         val btnNext = view.findViewById<Button>(R.id.dialogBtnNextTrack)
 
+        val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
+        val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
+        val switchSpectrumEnable = view.findViewById<SwitchCompat>(R.id.switchSpectrumEnable)
+
         activeDialogArtworkImage = imageArtwork
         activeDialogTrackTitle = textTrackTitle
         activeDialogTrackArtist = textTrackArtist
@@ -474,6 +480,15 @@ class MainActivity : AppCompatActivity() {
         activeDialogTotalTime = textTotalTime
         activeDialogSeekBar = seekBar
         activeDialogPlayPauseBtn = btnPlayPause
+        activeDialogEqView = walkmanEqView
+
+        walkmanEqView.isSpectrumEnabled = isSpectrumOn
+        switchSpectrumEnable.isChecked = isSpectrumOn
+        switchSpectrumEnable.setOnCheckedChangeListener { _, isChecked ->
+            isSpectrumOn = isChecked
+            prefs.edit { putBoolean("spectrum_enabled", isChecked) }
+            walkmanEqView.isSpectrumEnabled = isChecked
+        }
 
         updateDialogPlayerUi()
 
@@ -538,8 +553,6 @@ class MainActivity : AppCompatActivity() {
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
         val btnClose = view.findViewById<Button>(R.id.btnDialogClose)
 
-        val walkmanEqView = view.findViewById<WalkmanEqView>(R.id.walkmanEqView)
-        val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
         val textEqBandFreq = view.findViewById<TextView>(R.id.textEqBandFreq)
         val textEqGainValue = view.findViewById<TextView>(R.id.textEqGainValue)
         val btnEqPlus = view.findViewById<Button>(R.id.btnEqPlus)
@@ -562,6 +575,7 @@ class MainActivity : AppCompatActivity() {
             spinnerUpsample.isEnabled = dspEnabled
 
             switchEqEnable.isEnabled = dspEnabled
+            switchSpectrumEnable.isEnabled = dspEnabled
             btnEqEdit.isEnabled = dspEnabled
             btnEqFlat.isEnabled = dspEnabled
             btnEqPlus.isEnabled = dspEnabled
@@ -772,6 +786,7 @@ class MainActivity : AppCompatActivity() {
             activeDialogTotalTime = null
             activeDialogSeekBar = null
             activeDialogPlayPauseBtn = null
+            activeDialogEqView = null
         }
 
         btnClose.setOnClickListener { dialog.dismiss() }

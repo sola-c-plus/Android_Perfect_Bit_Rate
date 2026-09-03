@@ -39,8 +39,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 class BitPerfectPlaybackService : Service() {
 
@@ -68,9 +72,14 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    var onPeakListener: ((Float, Float, Int) -> Unit)? = null
+    // ★ ピーク ＆ 10バンドスペクトル通知リスナー
+    var onPeakListener: ((Float, Float, Int, FloatArray) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
+
+    // ★ 高速 10バンド FFT スペクトルアナライザー
+    private val spectrumAnalyzer = SpectrumAnalyzer()
+    private val tempSpectrumOut = FloatArray(10) { -50f }
 
     var isVolumeLocked = false
         set(value) {
@@ -91,7 +100,6 @@ class BitPerfectPlaybackService : Service() {
     private var currentArtwork: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
 
-    // ★ 画面消灯・バックグラウンド時の音量ボタン操作フック
     private var lastVolumeKeyTime = 0L
     private val volumeProvider = object : VolumeProviderCompat(
         VOLUME_CONTROL_RELATIVE,
@@ -309,7 +317,8 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        onPeakListener?.invoke(-60f, -60f, 0)
+        tempSpectrumOut.fill(-50f)
+        onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
     }
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
@@ -407,7 +416,8 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        onPeakListener?.invoke(-60f, -60f, 0)
+        tempSpectrumOut.fill(-50f)
+        onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
         trackExecutor.execute {
             audioLock.lock()
             try {
@@ -592,6 +602,7 @@ class BitPerfectPlaybackService : Service() {
                 baseSampleRate = baseRate
                 upsampleFactor = factor
                 effectiveSampleRate = baseRate * factor
+                spectrumAnalyzer.init(effectiveSampleRate)
 
                 val requestedEncodings = if (!isUsbDevice(targetDevice)) {
                     listOf(AudioFormat.ENCODING_PCM_16BIT)
@@ -766,6 +777,9 @@ class BitPerfectPlaybackService : Service() {
         var instantPeakR = -60f
         var bitMask = 0
 
+        val floatSamples = FloatArray(min(512, pcmBytes.size / (if (bitMode == "32bit") 8 else (if (bitMode == "24bit") 6 else 4))))
+        var sampleIdx = 0
+
         when (bitMode) {
             "32bit" -> {
                 var maxL = 0L
@@ -780,6 +794,9 @@ class BitPerfectPlaybackService : Service() {
                     bitMask = bitMask or (valL.toInt() and 0x7FFFFFFF) or (valR.toInt() and 0x7FFFFFFF)
                     if (rawL < 0 || rawR < 0 || valL >= 1073741824L || valR >= 1073741824L) {
                         bitMask = bitMask or (1 shl 31)
+                    }
+                    if (sampleIdx < floatSamples.size) {
+                        floatSamples[sampleIdx++] = ((rawL.toFloat() + rawR.toFloat()) * 0.5f) / 2147483647.0f
                     }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 2147483647.0f) else -60f
@@ -807,6 +824,9 @@ class BitPerfectPlaybackService : Service() {
                     if (rawL < 0 || rawR < 0 || valL >= 4194304L || valR >= 4194304L) {
                         bitMask = bitMask or 0x800000
                     }
+                    if (sampleIdx < floatSamples.size) {
+                        floatSamples[sampleIdx++] = ((rawL.toFloat() + rawR.toFloat()) * 0.5f) / 8388607.0f
+                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 8388607.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 8388607.0f) else -60f
@@ -825,13 +845,19 @@ class BitPerfectPlaybackService : Service() {
                     if (rawL < 0 || rawR < 0 || valL >= 16384 || valR >= 16384) {
                         bitMask = bitMask or 0x8000
                     }
+                    if (sampleIdx < floatSamples.size) {
+                        floatSamples[sampleIdx++] = ((rawL.toFloat() + rawR.toFloat()) * 0.5f) / 32767.0f
+                    }
                 }
                 instantPeakL = if (maxL > 0) 20 * log10(maxL / 32767.0f) else -60f
                 instantPeakR = if (maxR > 0) 20 * log10(maxR / 32767.0f) else -60f
             }
         }
 
-        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask)
+        // 10バンドスペクトル計算
+        spectrumAnalyzer.compute(floatSamples, sampleIdx, tempSpectrumOut)
+
+        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, tempSpectrumOut)
     }
 
     private fun createNotificationChannel() {
@@ -889,5 +915,91 @@ class BitPerfectPlaybackService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopServiceCleanly()
+    }
+
+    // ★ 内部用 高速 10バンド FFT スペクトル計算クラス
+    private class SpectrumAnalyzer {
+        private val fftSize = 512
+        private val window = FloatArray(fftSize) { i ->
+            (0.54 - 0.46 * cos(2.0 * Math.PI * i / (fftSize - 1))).toFloat()
+        }
+        private val real = FloatArray(fftSize)
+        private val imag = FloatArray(fftSize)
+        private val bandBins = IntArray(10)
+
+        fun init(sampleRate: Int) {
+            val freqs = floatArrayOf(31.25f, 62.5f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
+            val sr = max(8000, sampleRate)
+            for (i in freqs.indices) {
+                val bin = ((freqs[i] * fftSize) / sr).toInt().coerceIn(1, fftSize / 2 - 1)
+                bandBins[i] = bin
+            }
+        }
+
+        fun compute(samples: FloatArray, count: Int, outBands: FloatArray) {
+            val n = min(count, fftSize)
+            for (i in 0 until n) {
+                real[i] = samples[i] * window[i]
+                imag[i] = 0f
+            }
+            for (i in n until fftSize) {
+                real[i] = 0f
+                imag[i] = 0f
+            }
+
+            fft(real, imag, fftSize)
+
+            for (b in 0 until 10) {
+                val centerBin = bandBins[b]
+                val r = real[centerBin]
+                val im = imag[centerBin]
+                val mag = sqrt((r * r + im * im).toDouble()).toFloat() / (fftSize / 4f)
+                val db = if (mag > 1e-4f) (20f * log10(mag)).toFloat() else -50f
+                outBands[b] = db.coerceIn(-50f, 0f)
+            }
+        }
+
+        private fun fft(r: FloatArray, im: FloatArray, n: Int) {
+            var j = 0
+            for (i in 0 until n - 1) {
+                if (i < j) {
+                    val tr = r[i]; r[i] = r[j]; r[j] = tr
+                    val ti = im[i]; im[i] = im[j]; im[j] = ti
+                }
+                var k = n shr 1
+                while (k <= j) {
+                    j -= k
+                    k = k shr 1
+                }
+                j += k
+            }
+            var len = 2
+            while (len <= n) {
+                val half = len shr 1
+                val angle = -2.0 * Math.PI / len
+                val wStepR = cos(angle).toFloat()
+                val wStepI = sin(angle).toFloat()
+                var i = 0
+                while (i < n) {
+                    var wR = 1.0f
+                    var wI = 0.0f
+                    for (k in 0 until half) {
+                        val uR = r[i + k]
+                        val uI = im[i + k]
+                        val vR = r[i + k + half] * wR - im[i + k + half] * wI
+                        val vI = r[i + k + half] * wI + im[i + k + half] * wR
+                        r[i + k] = uR + vR
+                        im[i + k] = uI + vI
+                        r[i + k + half] = uR - vR
+                        im[i + k + half] = uI - vI
+                        val nextWR = wR * wStepR - wI * wStepI
+                        wI = wR * wStepI + wI * wStepR
+                        wR = nextWR
+                    }
+                    i += len
+                }
+                len = len shl 1
+            }
+        }
     }
 }

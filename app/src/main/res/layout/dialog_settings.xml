@@ -109,14 +109,14 @@
                     android:checked="false" />
             </LinearLayout>
 
-            <!-- 10-BAND EQUALIZER セクション -->
+            <!-- ★ 10-BAND EQUALIZER セクション (EQ SW ＆ その下に SPEC SW を配置) -->
             <LinearLayout
                 android:id="@+id/layoutSectionEq"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:background="#080808"
-                android:paddingTop="10dp"
+                android:paddingTop="8dp"
                 android:paddingBottom="10dp"
                 android:paddingStart="6dp"
                 android:paddingEnd="6dp"
@@ -129,7 +129,7 @@
                     android:gravity="center_vertical"
                     android:paddingStart="4dp"
                     android:paddingEnd="4dp"
-                    android:layout_marginBottom="8dp">
+                    android:layout_marginBottom="6dp">
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -148,20 +148,73 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="64bit IIR"
+                            android:text="64bit IIR + Realtime Spectrum"
                             android:textColor="#777777"
-                            android:textSize="9.5sp" />
+                            android:textSize="9sp" />
                     </LinearLayout>
 
-                    <androidx.appcompat.widget.SwitchCompat
-                        android:id="@+id/switchEqEnable"
+                    <!-- 右側: EQ SW とその下に SPEC SW -->
+                    <LinearLayout
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        app:thumbTint="@null"
-                        app:trackTint="@null"
-                        android:thumb="@drawable/switch_thumb_white"
-                        app:track="@drawable/switch_track_walkman_outline"
-                        android:checked="false" />
+                        android:orientation="vertical"
+                        android:gravity="end">
+
+                        <!-- EQ スイッチ -->
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginBottom="2dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="EQ"
+                                android:textColor="#CCCCCC"
+                                android:textSize="9sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="6dp" />
+
+                            <androidx.appcompat.widget.SwitchCompat
+                                android:id="@+id/switchEqEnable"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                app:thumbTint="@null"
+                                app:trackTint="@null"
+                                android:thumb="@drawable/switch_thumb_white"
+                                app:track="@drawable/switch_track_walkman_outline"
+                                android:checked="false" />
+                        </LinearLayout>
+
+                        <!-- ★ SPEC (スペクトル表示) スイッチ -->
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="SPEC"
+                                android:textColor="#E5A93C"
+                                android:textSize="9sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="6dp" />
+
+                            <androidx.appcompat.widget.SwitchCompat
+                                android:id="@+id/switchSpectrumEnable"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                app:thumbTint="@null"
+                                app:trackTint="@null"
+                                android:thumb="@drawable/switch_thumb_white"
+                                app:track="@drawable/switch_track_walkman_outline"
+                                android:checked="true" />
+                        </LinearLayout>
+                    </LinearLayout>
                 </LinearLayout>
 
                 <LinearLayout
@@ -630,7 +683,7 @@
 
     </androidx.core.widget.NestedScrollView>
 
-    <!-- ★ Xperia Music 風 下部固定ミニプレイヤーバー (大サムネ + 右配置シークバー + 大文字) -->
+    <!-- ★ Xperia Music 風 下部固定ミニプレイヤーバー -->
     <LinearLayout
         android:id="@+id/layoutDialogPlayerControl"
         android:layout_width="match_parent"
@@ -655,7 +708,7 @@
             android:paddingTop="8dp"
             android:paddingBottom="8dp">
 
-            <!-- 1. 左側: 大きなサムネイル / アルバムアート (角丸 58dp x 58dp) -->
+            <!-- 1. 左側: 大きなサムネイル / アルバムアート (58dp x 58dp) -->
             <androidx.cardview.widget.CardView
                 android:layout_width="58dp"
                 android:layout_height="58dp"

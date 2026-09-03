@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.*
@@ -6,6 +6,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -32,6 +33,17 @@ class WalkmanEqView @JvmOverloads constructor(
             invalidate()
         }
 
+    // ★ スペクトル表示スイッチ
+    var isSpectrumEnabled = true
+        set(value) {
+            field = value
+            if (!value) {
+                targetSpectrum.fill(-50f)
+                currentSpectrum.fill(-50f)
+            }
+            invalidate()
+        }
+
     var selectedBandIndex = 7
         set(value) {
             field = value.coerceIn(0, 9)
@@ -43,6 +55,12 @@ class WalkmanEqView @JvmOverloads constructor(
 
     var onGainChangedListener: ((Int, Float, FloatArray) -> Unit)? = null
     var onBandSelectedListener: ((Int, Float) -> Unit)? = null
+
+    // ★ スペクトルデータ（ターゲット ＆ 現在描画値 ＆ ディケイ減衰）
+    private val targetSpectrum = FloatArray(10) { -50f }
+    private val currentSpectrum = FloatArray(10) { -50f }
+    private var lastSpectrumDrawTime = 0L
+    private val spectrumDecayRate = 90f // 90 dB/sec
 
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#1C1C1C")
@@ -80,6 +98,20 @@ class WalkmanEqView @JvmOverloads constructor(
         pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
     }
 
+    // ★ 金色のスペクトルライン用ペイント
+    private val spectrumLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#E5A93C")
+        strokeWidth = 1.6f * density
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    // ★ スペクトル下部のグラデーション塗りペイント
+    private val spectrumFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+
     private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFFFFF")
         style = Paint.Style.FILL
@@ -108,12 +140,27 @@ class WalkmanEqView @JvmOverloads constructor(
 
     private val bandX = FloatArray(10)
     private val curvePath = Path()
+    private val spectrumPath = Path()
+    private val spectrumFillPath = Path()
+
+    fun setSpectrumLevels(levels: FloatArray) {
+        if (!isSpectrumEnabled) return
+        val count = min(levels.size, 10)
+        for (i in 0 until count) {
+            val safeDb = if (levels[i].isNaN() || levels[i].isInfinite()) -50f else levels[i].coerceIn(-50f, 0f)
+            targetSpectrum[i] = safeDb
+            if (safeDb > currentSpectrum[i]) {
+                currentSpectrum[i] = safeDb
+            }
+        }
+        postInvalidateOnAnimation()
+    }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val h = MeasureSpec.getSize(heightMeasureSpec).coerceAtLeast((150 * density).toInt())
         val topPadding = 6f * density
         val labelAreaHeight = 18f * density
-        val leftPadding = 14f * density   // ★ 枠0.5コ分右シフト ＆ 31Hz見切れ防止
+        val leftPadding = 14f * density
         val rightPadding = 10f * density
         val gridH = h.toFloat() - topPadding - labelAreaHeight
         val desiredGridW = gridH * 1.38f
@@ -134,7 +181,7 @@ class WalkmanEqView @JvmOverloads constructor(
 
         val labelAreaHeight = 18f * density
         val topPadding = 6f * density
-        val leftPadding = 14f * density   // ★ 枠0.5コ分右シフト
+        val leftPadding = 14f * density
         val rightPadding = 10f * density
         val availableHeight = h.toFloat() - topPadding - labelAreaHeight
 
@@ -152,12 +199,25 @@ class WalkmanEqView @JvmOverloads constructor(
         for (i in bandLabels.indices) {
             bandX[i] = gridLeft + i * stepX
         }
+
+        spectrumFillPaint.shader = LinearGradient(
+            0f, gridTop, 0f, gridBottom,
+            Color.parseColor("#35E5A93C"),
+            Color.parseColor("#00E5A93C"),
+            Shader.TileMode.CLAMP
+        )
     }
 
     private fun gainToY(gain: Float): Float {
         val clamped = gain.coerceIn(-10.0f, 10.0f)
         val norm = (clamped + 10.0f) / 20.0f
         return gridBottom - norm * gridHeight
+    }
+
+    private fun spectrumDbToY(db: Float): Float {
+        val clamped = db.coerceIn(-48f, 0f)
+        val norm = (clamped + 48f) / 48f // 0.0 ~ 1.0
+        return gridBottom - norm * (gridHeight * 0.94f)
     }
 
     private fun yToGain(y: Float): Float {
@@ -171,6 +231,19 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (gridWidth <= 0 || gridHeight <= 0) return
 
+        // 減衰アニメーション計算
+        val now = System.currentTimeMillis()
+        if (lastSpectrumDrawTime > 0L) {
+            val dt = (now - lastSpectrumDrawTime) / 1000f
+            for (i in 0 until 10) {
+                if (currentSpectrum[i] > targetSpectrum[i]) {
+                    currentSpectrum[i] = max(targetSpectrum[i], currentSpectrum[i] - spectrumDecayRate * dt)
+                }
+            }
+        }
+        lastSpectrumDrawTime = now
+
+        // グリッド背景
         val numHoriz = 20
         for (i in 0..numHoriz) {
             val y = gridTop + i * (gridHeight / numHoriz)
@@ -191,11 +264,79 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
+        // ★ 金色のスペクトル波形描画 (スプライン曲線 ＋ 半透明ゴールドフィル)
+        if (isSpectrumEnabled) {
+            val n = 10
+            val xSpec = FloatArray(n)
+            val ySpec = FloatArray(n)
+            for (i in 0 until n) {
+                xSpec[i] = bandX[i]
+                ySpec[i] = spectrumDbToY(currentSpectrum[i])
+            }
+
+            val dS = FloatArray(n)
+            val mS = FloatArray(n - 1)
+            for (i in 0 until n - 1) {
+                mS[i] = (ySpec[i + 1] - ySpec[i]) / (xSpec[i + 1] - xSpec[i])
+            }
+            dS[0] = mS[0]
+            dS[n - 1] = mS[n - 2]
+            for (i in 1 until n - 1) {
+                if (mS[i - 1] * mS[i] <= 0f) {
+                    dS[i] = 0f
+                } else {
+                    dS[i] = (mS[i - 1] + mS[i]) * 0.5f
+                }
+            }
+
+            spectrumPath.reset()
+            spectrumPath.moveTo(xSpec[0], ySpec[0])
+            for (i in 0 until n - 1) {
+                val hx = xSpec[i + 1] - xSpec[i]
+                val steps = 18
+                for (step in 1..steps) {
+                    val t = step.toFloat() / steps
+                    val t2 = t * t
+                    val t3 = t2 * t
+                    val h00 = 2 * t3 - 3 * t2 + 1
+                    val h10 = t3 - 2 * t2 + t
+                    val h01 = -2 * t3 + 3 * t2
+                    val h11 = t3 - t2
+                    val px = xSpec[i] + t * hx
+                    val py = h00 * ySpec[i] + h10 * hx * dS[i] + h01 * ySpec[i + 1] + h11 * hx * dS[i + 1]
+                    spectrumPath.lineTo(px, py.coerceIn(gridTop, gridBottom))
+                }
+            }
+
+            spectrumFillPath.reset()
+            spectrumFillPath.addPath(spectrumPath)
+            spectrumFillPath.lineTo(gridRight, gridBottom)
+            spectrumFillPath.lineTo(gridLeft, gridBottom)
+            spectrumFillPath.close()
+
+            canvas.drawPath(spectrumFillPath, spectrumFillPaint)
+            canvas.drawPath(spectrumPath, spectrumLinePaint)
+
+            // アニメーション継続判定
+            var isStillDecaying = false
+            for (i in 0 until 10) {
+                if (currentSpectrum[i] > targetSpectrum[i] + 0.1f) {
+                    isStillDecaying = true
+                    break
+                }
+            }
+            if (isStillDecaying) {
+                postInvalidateOnAnimation()
+            }
+        }
+
+        // カーソルライン (調整中)
         if (isEditMode && !isDirectBypass && selectedBandIndex in 0..9) {
             val curX = bandX[selectedBandIndex]
             canvas.drawLine(curX, gridTop, curX, gridBottom, cursorLinePaint)
         }
 
+        // EQ曲線 (白線)
         curvePath.reset()
         val n = 10
         val xArr = FloatArray(n)
