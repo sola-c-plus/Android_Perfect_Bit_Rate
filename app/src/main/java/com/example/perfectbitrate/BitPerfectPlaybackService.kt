@@ -68,7 +68,6 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    // ★ ピーク ＆ C++ Native 32バンド スペクトル通知リスナー
     var onPeakListener: ((Float, Float, Int, FloatArray) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
@@ -190,6 +189,7 @@ class BitPerfectPlaybackService : Service() {
 
         startPlaybackLoop()
         updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying)
     }
 
     fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
@@ -429,6 +429,7 @@ class BitPerfectPlaybackService : Service() {
             }
         }
         updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, false)
     }
 
     fun updatePlaybackState(isPlaying: Boolean, position: Long = currentPosition) {
@@ -452,6 +453,7 @@ class BitPerfectPlaybackService : Service() {
             forceCloseDacStream()
         }
         updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying)
     }
 
     fun updateCodec(codec: String) {
@@ -476,6 +478,7 @@ class BitPerfectPlaybackService : Service() {
 
         mediaSession.setMetadata(metaBuilder.build())
         updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, title, artist, currentArtwork, isCurrentlyPlaying)
 
         if (artworkUrl.isNotEmpty()) {
             imageExecutor.execute {
@@ -486,6 +489,7 @@ class BitPerfectPlaybackService : Service() {
                     metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
                     mediaSession.setMetadata(metaBuilder.build())
                     updateNotification()
+                    PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying)
                 } catch (e: Exception) {}
             }
         }
@@ -835,7 +839,6 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        // ★ C++ Native DSP 側から 32バンド スペクトルデータを直接取得
         NativeAudioEngine.nativeGetSpectrum(tempSpectrumOut)
 
         onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, tempSpectrumOut)

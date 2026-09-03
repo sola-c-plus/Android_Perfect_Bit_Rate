@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="@drawable/bg_widget_player"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
+    android:gravity="center_vertical">
+
+    <!-- サムネイル / アルバムアート -->
+    <ImageView
+        android:id="@+id/widgetImageArtwork"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/bg_badge_normal" />
+
+    <!-- 曲名 ＆ アーティスト -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="8dp">
+
+        <TextView
+            android:id="@+id/widgetTextTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Perfect Bit Rate"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:fontFamily="sans-serif-medium" />
+
+        <TextView
+            android:id="@+id/widgetTextArtist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="YouTube Music"
+            android:textColor="#AAAAAA"
+            android:textSize="11sp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:layout_marginTop="1dp" />
+    </LinearLayout>
+
+    <!-- コントロールボタン群 (白丸枠) -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <Button
+            android:id="@+id/widgetBtnPrev"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:text="⏮"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:background="@drawable/bg_btn_walkman_circle_small"
+            android:padding="0dp"
+            android:gravity="center"
+            android:layout_marginEnd="6dp" />
+
+        <Button
+            android:id="@+id/widgetBtnPlayPause"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:text="▶"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_btn_walkman_circle_large"
+            android:padding="0dp"
+            android:gravity="center"
+            android:layout_marginEnd="6dp" />
+
+        <Button
+            android:id="@+id/widgetBtnNext"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:text="⏭"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:background="@drawable/bg_btn_walkman_circle_small"
+            android:padding="0dp"
+            android:gravity="center" />
+    </LinearLayout>
+
+</LinearLayout>
