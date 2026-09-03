@@ -85,7 +85,6 @@ class MainActivity : AppCompatActivity() {
     private var isServiceBound = false
     private var activeWebExtensionPort: WebExtension.Port? = null
 
-    // ★ 音源本来のネイティブレート (AAC=44100, Opus=48000)
     private var baseSampleRate = 48000
     private var upsampleFactor = 1
     private var pcmPacketCount = 0L
@@ -1234,7 +1233,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ★ メッセージ受信ハンドラ: 音源ネイティブレートを正確に保持し、PCM受信時に上書き破壊させない
     private fun handleIncomingMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "pcm" -> {
@@ -1247,7 +1245,6 @@ class MainActivity : AppCompatActivity() {
                             pcmPacketCount += pcmBytes.size
                             isPlayingState = true
                             lastPcmTime = System.currentTimeMillis()
-                            // ★ baseSampleRate は codec で確定した本来の音源レート (44100 または 48000) を使用
                             playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
                         }
                     } catch (e: Exception) {
@@ -1260,7 +1257,6 @@ class MainActivity : AppCompatActivity() {
                 val rate = msg.optInt("sampleRate", 0)
                 if (rate > 0 && rate != baseSampleRate) {
                     baseSampleRate = rate
-                    // 音源レートが変わったので DAC とサービスを再同期
                     playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
                 }
                 playbackService?.updateCodec(currentCodec)
@@ -1355,8 +1351,7 @@ class MainActivity : AppCompatActivity() {
             else -> "16 bit"
         }
 
-        // ★ 音源ネイティブレート (44.1k系 または 48k系) と倍率の完全同期表示
-        val effectiveRate = baseSampleRate * activeFactor
+        val effectiveRate = playbackService?.effectiveSampleRate ?: (baseSampleRate * activeFactor)
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
         textTransfer.text = String.format("%.1f MB", mb)
