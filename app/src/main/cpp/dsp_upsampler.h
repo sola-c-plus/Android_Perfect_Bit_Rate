@@ -182,6 +182,7 @@ private:
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
     double envHfL_ = 0.0, envHfR_ = 0.0;
     double envTotalL_ = 0.0, envTotalR_ = 0.0;
+    double transientFluxL_ = 0.0, transientFluxR_ = 0.0; // ★ 宣言追加
     double targetGain_ = 0.25;
 
     double smoothedGainL_ = 0.0;

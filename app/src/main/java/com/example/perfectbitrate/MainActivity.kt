@@ -100,7 +100,6 @@ class MainActivity : AppCompatActivity() {
     private var currentArtworkBitmap: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
 
-    // ダイアログ内UI参照
     private var activeDialogArtworkImage: ImageView? = null
     private var activeDialogSeekBar: SeekBar? = null
     private var activeDialogCurrentTime: TextView? = null
@@ -166,12 +165,18 @@ class MainActivity : AppCompatActivity() {
 
     private val presetProfiles = mutableMapOf<Int, PresetProfile>()
 
+    // ★ プロスタジオ最適化 プリセット黄金値
     private fun initDefaultProfiles() {
-        presetProfiles[1] = PresetProfile(2, 3, 1, 0.13f, 11000.0f, useQmf = true, useGroupDelay = true, useLattice = false)
-        presetProfiles[2] = PresetProfile(3, 1, 2, 0.08f, 9000.0f, useQmf = true, useGroupDelay = false, useLattice = false)
-        presetProfiles[3] = PresetProfile(2, 1, 1, 0.12f, 10500.0f, useQmf = true, useGroupDelay = false, useLattice = true)
-        presetProfiles[4] = PresetProfile(2, 2, 3, 0.14f, 12000.0f, useQmf = true, useGroupDelay = true, useLattice = true)
-        presetProfiles[5] = PresetProfile(1, 3, 2, 0.10f, 9500.0f, useQmf = true, useGroupDelay = false, useLattice = false)
+        // [1] Auto AI: 完全自動インテリジェント適応 (Min Phase Sharp, Acoustic, DSEE AI, 0.16, 10.5kHz, QMF=ON, GD=ON, Lattice=ON)
+        presetProfiles[1] = PresetProfile(2, 3, 1, 0.16f, 10500.0f, useQmf = true, useGroupDelay = true, useLattice = true)
+        // [2] 男性ボーカル: サ行刺さりゼロ＆アナログ厚み (Min Phase Slow, Natural, K2 LPC, 0.11, 9.5kHz, QMF=ON, GD=OFF, Lattice=OFF)
+        presetProfiles[2] = PresetProfile(3, 1, 2, 0.11f, 9500.0f, useQmf = true, useGroupDelay = false, useLattice = false)
+        // [3] 女性ボーカル: ブレス透明感＆シルキーな伸び (Min Phase Sharp, Natural, DSEE AI, 0.14, 11.0kHz, QMF=ON, GD=OFF, Lattice=ON)
+        presetProfiles[3] = PresetProfile(2, 1, 1, 0.14f, 11000.0f, useQmf = true, useGroupDelay = false, useLattice = true)
+        // [4] パーカッション: ドラムパンチ＆金属倍音 (Min Phase Sharp, Punch, Exciter, 0.18, 11.5kHz, QMF=ON, GD=ON, Lattice=ON)
+        presetProfiles[4] = PresetProfile(2, 2, 3, 0.18f, 11500.0f, useQmf = true, useGroupDelay = true, useLattice = true)
+        // [5] ストリングス: 広大音場＆完全線形位相 (Linear Phase Slow, Acoustic, K2 LPC, 0.13, 10.0kHz, QMF=ON, GD=OFF, Lattice=OFF)
+        presetProfiles[5] = PresetProfile(1, 3, 2, 0.13f, 10000.0f, useQmf = true, useGroupDelay = false, useLattice = false)
 
         for (id in 1..5) {
             val p = presetProfiles[id]!!
@@ -826,10 +831,10 @@ class MainActivity : AppCompatActivity() {
         val firOptions = arrayOf("Linear Phase Sharp", "Linear Phase Slow", "Minimum Phase Sharp", "Minimum Phase Slow")
         val transientOptions = arrayOf("OFF", "Natural (CD)", "Punch (打撃)", "Acoustic (弦・打鍵)")
         val lpcOptions = arrayOf("DSEE HX AI (適応)", "K2 LPC Natural (物理)", "Adaptive Exciter (輪郭)")
-        val gainOptions = arrayOf("控えめ (0.08)", "標準 (0.12)", "豊か (0.14)", "強力 (0.16)")
-        val gainValues = floatArrayOf(0.08f, 0.12f, 0.14f, 0.16f)
-        val freqOptions = arrayOf("8,000 Hz", "9,000 Hz", "9,500 Hz", "10,500 Hz", "11,000 Hz", "12,000 Hz")
-        val freqValues = floatArrayOf(8000.0f, 9000.0f, 9500.0f, 10500.0f, 11000.0f, 12000.0f)
+        val gainOptions = arrayOf("控えめ (0.08)", "標準 (0.12)", "豊か (0.16)", "強力 (0.20)")
+        val gainValues = floatArrayOf(0.08f, 0.12f, 0.16f, 0.20f)
+        val freqOptions = arrayOf("8,000 Hz", "9,500 Hz", "10,000 Hz", "10,500 Hz", "11,000 Hz", "11,500 Hz")
+        val freqValues = floatArrayOf(8000.0f, 9500.0f, 10000.0f, 10500.0f, 11000.0f, 11500.0f)
 
         fun setupAdapter(sp: Spinner, items: Array<String>) {
             val ad = ArrayAdapter(this, R.layout.item_spinner_dap, items)
@@ -860,7 +865,7 @@ class MainActivity : AppCompatActivity() {
             devSpinnerTransient.setSelection(p.transientMode.coerceIn(0, 3))
             devSpinnerLpcAlgo.setSelection((p.lpcAlgo - 1).coerceIn(0, 2))
 
-            var closestGainIdx = 1
+            var closestGainIdx = 2
             var minGDiff = Float.MAX_VALUE
             for (i in gainValues.indices) {
                 val d = Math.abs(gainValues[i] - p.gain)
@@ -868,7 +873,7 @@ class MainActivity : AppCompatActivity() {
             }
             devSpinnerGain.setSelection(closestGainIdx)
 
-            var closestFIdx = 2
+            var closestFIdx = 3
             var minFDiff = Float.MAX_VALUE
             for (i in freqValues.indices) {
                 val d = Math.abs(freqValues[i] - p.extractFreq)

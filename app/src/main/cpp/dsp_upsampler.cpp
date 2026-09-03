@@ -212,17 +212,17 @@ void FirStage2x::processStereo(
 }
 
 // -----------------------------------------------------------------------------
-// ★ DspLpcHarmonicAi (ソフトサチュレーション型・無歪み倍音外挿エンジン)
+// ★ DspLpcHarmonicAi 実装
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
-    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.18f, 10000.0f, true);
+    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.16f, 10500.0f, true);
 }
 
 void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, float gain, float extractFreq, bool useQmf) {
     mode_ = mode;
     sampleRate_ = std::max(8000.0, sampleRate);
     lpcAlgo_ = lpcAlgo;
-    targetGain_ = static_cast<double>(gain) * 1.5; // 自然でリッチな倍音ゲイン
+    targetGain_ = static_cast<double>(gain) * 1.6;
     useQmf_ = useQmf;
     reset();
 
@@ -233,7 +233,7 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
 
     isBypass_ = false;
 
-    // 10k〜14kHz 原音高域抽出 HPF
+    // 原音高域抽出 HPF
     double fExtract = static_cast<double>(extractFreq);
     double kExtract = std::tan(PI * fExtract / sampleRate_);
     double a0 = 1.0 + kExtract;
@@ -241,7 +241,7 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
     hp_b1_ = -1.0 / a0;
     hp_a1_ = (kExtract - 1.0) / a0;
 
-    // ★ 18.5kHz 2次 Butterworth ハイレゾ通過 HPF (40kHzまでフラット通過)
+    // 18.5kHz ハイレゾ通過 HPF
     double fOutHp = std::min(18500.0, sampleRate_ * 0.45);
     double w0 = 2.0 * PI * fOutHp / sampleRate_;
     double alpha = std::sin(w0) / (2.0 * 0.70710678);
@@ -270,6 +270,7 @@ void DspLpcHarmonicAi::reset() {
     prevSampleL_ = 0.0; prevSampleR_ = 0.0;
     envHfL_ = 0.0; envHfR_ = 0.0;
     envTotalL_ = 0.0; envTotalR_ = 0.0;
+    transientFluxL_ = 0.0; transientFluxR_ = 0.0;
     smoothedGainL_ = 0.0; smoothedGainR_ = 0.0;
 }
 
@@ -281,7 +282,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
     for (size_t i = 0; i < numFrames; ++i) {
         // --- Left チャンネル ---
         double inL = static_cast<double>(left[i]);
-        // 1. 原音高域抽出 (10k〜14kHz)
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
 
@@ -290,24 +290,33 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envHfL_ = envHfL_ * 0.992 + absHfL * 0.008;
         envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
 
-        // ★ 2. ソフトサチュレーションによる無歪み倍音外挿 (パリパリ音ゼロ)
-        // 偶数次倍音 (2f, 4f: 20k〜30kHz): 滑らかな全波整流 - 直流追従
+        double diffL = std::abs(inL - prevSampleL_);
+        prevSampleL_ = inL;
+        transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
+        double attackRatioL = std::clamp((diffL - transientFluxL_ * 1.1) / (transientFluxL_ + 1e-4), 0.0, 1.0);
+
         double absSmoothL = std::sqrt(hiL * hiL + 1e-7);
         dcL_ = dcL_ * 0.995 + absSmoothL * 0.005;
-        double evenHarmL = (absSmoothL - dcL_) * 2.5;
+        double evenHarmL = (absSmoothL - dcL_) * 2.4;
 
-        // 奇数次倍音 (3f, 5f: 30k〜45kHz): ソフト tanh サチュレーション
-        double driveL = hiL * 4.0;
-        double oddHarmL = (std::tanh(driveL) - (hiL * 0.8)) * 1.6;
+        double driveL = hiL * 3.8;
+        double oddHarmL = (std::tanh(driveL) - (hiL * 0.8)) * 1.5;
 
-        double rawHarmL = evenHarmL * 0.65 + oddHarmL * 0.35;
-        if (lpcAlgo_ == 2) {
-            rawHarmL = evenHarmL * 0.80 + oddHarmL * 0.20; // 自然志向
-        } else if (lpcAlgo_ == 3) {
-            rawHarmL = evenHarmL * 0.50 + oddHarmL * 0.50; // エキサイター
+        double rawHarmL = 0.0;
+        if (mode_ == DseeMode::AUTO_AI) {
+            double evenW = 0.70 - attackRatioL * 0.25;
+            double oddW  = 0.30 + attackRatioL * 0.25;
+            rawHarmL = evenHarmL * evenW + oddHarmL * oddW;
+        } else {
+            if (lpcAlgo_ == 1) {
+                rawHarmL = evenHarmL * 0.65 + oddHarmL * 0.35;
+            } else if (lpcAlgo_ == 2) {
+                rawHarmL = evenHarmL * 0.82 + oddHarmL * 0.18;
+            } else {
+                rawHarmL = evenHarmL * 0.45 + oddHarmL * 0.55;
+            }
         }
 
-        // 3. 18.5kHz ハイレゾ HPF 通過
         double outHarmL = out_hp_b0_ * rawHarmL + out_s1_L_;
         out_s1_L_ = out_hp_b1_ * rawHarmL - out_hp_a1_ * outHarmL + out_s2_L_;
         out_s2_L_ = out_hp_b2_ * rawHarmL - out_hp_a2_ * outHarmL;
@@ -316,7 +325,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         double gainDiffL = targetDynGainL - smoothedGainL_;
         smoothedGainL_ += std::clamp(gainDiffL, -maxSlewPerSample, maxSlewPerSample);
 
-        // ★ 4. Soft-Knee リミッターでデジタルクリップ（音割れ）を完全防止
         double totalL = inL + outHarmL * smoothedGainL_;
         if (totalL > 0.96) {
             totalL = 0.96 + 0.04 * std::tanh((totalL - 0.96) / 0.04);
@@ -335,18 +343,31 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         envHfR_ = envHfR_ * 0.992 + absHfR * 0.008;
         envTotalR_ = envTotalR_ * 0.995 + absTotalR * 0.005;
 
+        double diffR = std::abs(inR - prevSampleR_);
+        prevSampleR_ = inR;
+        transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
+        double attackRatioR = std::clamp((diffR - transientFluxR_ * 1.1) / (transientFluxR_ + 1e-4), 0.0, 1.0);
+
         double absSmoothR = std::sqrt(hiR * hiR + 1e-7);
         dcR_ = dcR_ * 0.995 + absSmoothR * 0.005;
-        double evenHarmR = (absSmoothR - dcR_) * 2.5;
+        double evenHarmR = (absSmoothR - dcR_) * 2.4;
 
-        double driveR = hiR * 4.0;
-        double oddHarmR = (std::tanh(driveR) - (hiR * 0.8)) * 1.6;
+        double driveR = hiR * 3.8;
+        double oddHarmR = (std::tanh(driveR) - (hiR * 0.8)) * 1.5;
 
-        double rawHarmR = evenHarmR * 0.65 + oddHarmR * 0.35;
-        if (lpcAlgo_ == 2) {
-            rawHarmR = evenHarmR * 0.80 + oddHarmR * 0.20;
-        } else if (lpcAlgo_ == 3) {
-            rawHarmR = evenHarmR * 0.50 + oddHarmR * 0.50;
+        double rawHarmR = 0.0;
+        if (mode_ == DseeMode::AUTO_AI) {
+            double evenW = 0.70 - attackRatioR * 0.25;
+            double oddW  = 0.30 + attackRatioR * 0.25;
+            rawHarmR = evenHarmR * evenW + oddHarmR * oddW;
+        } else {
+            if (lpcAlgo_ == 1) {
+                rawHarmR = evenHarmR * 0.65 + oddHarmR * 0.35;
+            } else if (lpcAlgo_ == 2) {
+                rawHarmR = evenHarmR * 0.82 + oddHarmR * 0.18;
+            } else {
+                rawHarmR = evenHarmR * 0.45 + oddHarmR * 0.55;
+            }
         }
 
         double outHarmR = out_hp_b0_ * rawHarmR + out_s1_R_;
