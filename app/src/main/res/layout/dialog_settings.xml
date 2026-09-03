@@ -2,7 +2,7 @@
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="match_parent"
     android:background="@drawable/bg_bottom_sheet_dap"
     android:fillViewport="true">
 
@@ -12,8 +12,8 @@
         android:orientation="vertical"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="36dp">
+        android:paddingTop="8dp"
+        android:paddingBottom="48dp">
 
         <!-- ドラッグハンドルバー -->
         <View
@@ -21,7 +21,134 @@
             android:layout_height="4dp"
             android:layout_gravity="center_horizontal"
             android:background="#444444"
-            android:layout_marginBottom="10dp" />
+            android:layout_marginBottom="8dp" />
+
+        <!-- ★ 上部埋め込み型 メディアプレイヤーコントローラー -->
+        <LinearLayout
+            android:id="@+id/layoutDialogPlayerControl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#141414"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="10dp"
+            android:layout_marginBottom="12dp">
+
+            <!-- 曲名 ＆ アーティスト表示 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:id="@+id/dialogTextTrackTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="YouTube Music"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:fontFamily="sans-serif-medium" />
+
+                <TextView
+                    android:id="@+id/dialogTextTrackArtist"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text=""
+                    android:textColor="#AAAAAA"
+                    android:textSize="10.5sp"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+            </LinearLayout>
+
+            <!-- シークバー ＆ 経過/総時間 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/dialogTextCurrentTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textColor="#888888"
+                    android:textSize="10sp"
+                    android:fontFamily="monospace" />
+
+                <SeekBar
+                    android:id="@+id/dialogSeekBar"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="1000"
+                    android:progress="0"
+                    android:progressTint="#E5A93C"
+                    android:thumbTint="#FFFFFF"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp" />
+
+                <TextView
+                    android:id="@+id/dialogTextTotalTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textColor="#888888"
+                    android:textSize="10sp"
+                    android:fontFamily="monospace" />
+            </LinearLayout>
+
+            <!-- 再生コントロールボタン (前へ / 再生・一時停止 / 次へ) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_marginTop="4dp">
+
+                <Button
+                    android:id="@+id/dialogBtnPrevTrack"
+                    android:layout_width="40dp"
+                    android:layout_height="30dp"
+                    android:text="◀◀"
+                    android:textColor="#CCCCCC"
+                    android:textSize="10.5sp"
+                    android:background="@drawable/bg_btn_icon"
+                    android:padding="0dp"
+                    android:layout_marginEnd="16dp" />
+
+                <Button
+                    android:id="@+id/dialogBtnPlayPause"
+                    android:layout_width="54dp"
+                    android:layout_height="32dp"
+                    android:text="▶"
+                    android:textColor="#000000"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#E5A93C"
+                    android:padding="0dp"
+                    android:layout_marginEnd="16dp" />
+
+                <Button
+                    android:id="@+id/dialogBtnNextTrack"
+                    android:layout_width="40dp"
+                    android:layout_height="30dp"
+                    android:text="▶▶"
+                    android:textColor="#CCCCCC"
+                    android:textSize="10.5sp"
+                    android:background="@drawable/bg_btn_icon"
+                    android:padding="0dp" />
+            </LinearLayout>
+        </LinearLayout>
 
         <!-- タイトルバー -->
         <LinearLayout
@@ -29,7 +156,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginBottom="12dp">
+            android:layout_marginBottom="10dp">
 
             <TextView
                 android:layout_width="0dp"
@@ -37,7 +164,7 @@
                 android:layout_weight="1"
                 android:text="DSP SETTINGS"
                 android:textColor="#E5A93C"
-                android:textSize="14sp"
+                android:textSize="13.5sp"
                 android:textStyle="bold"
                 android:fontFamily="sans-serif-black"
                 android:letterSpacing="0.05" />
@@ -122,37 +249,37 @@
                 android:paddingEnd="4dp"
                 android:layout_marginBottom="8dp">
 
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
 
-                <TextView
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="10-BAND EQUALIZER"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="64bit IIR"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchEqEnable"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="10-BAND EQUALIZER"
-                    android:textColor="#FFFFFF"
-                    android:textSize="11.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="64bit IIR"
-                    android:textColor="#777777"
-                    android:textSize="9.5sp" />
-            </LinearLayout>
-
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchEqEnable"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                app:thumbTint="@null"
-                app:trackTint="@null"
-                android:thumb="@drawable/switch_thumb_white"
-                app:track="@drawable/switch_track_walkman_outline"
-                android:checked="false" />
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline"
+                    android:checked="false" />
             </LinearLayout>
 
             <LinearLayout

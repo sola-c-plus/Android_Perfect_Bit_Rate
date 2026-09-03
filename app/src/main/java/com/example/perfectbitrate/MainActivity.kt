@@ -32,9 +32,12 @@ import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -43,6 +46,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
@@ -63,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textPeak: TextView
     private lateinit var textBitDepth: TextView
     private var walkmanLevelMeter: WalkmanLevelMeterView? = null
+    private var topInfoPanel: View? = null
 
     private lateinit var geckoView: GeckoView
     private lateinit var geckoSession: GeckoSession
@@ -82,6 +87,20 @@ class MainActivity : AppCompatActivity() {
     private var activeOutputDevice: AudioDeviceInfo? = null
     private var currentCodec = "OPUS 160kbps (48k)"
     private var currentBtCodecName = ""
+
+    private var currentTitle = "YouTube Music"
+    private var currentArtist = ""
+    private var currentDuration = 0L
+    private var currentPosition = 0L
+
+    // ダイアログ内プレイヤーUI参照
+    private var activeDialogSeekBar: SeekBar? = null
+    private var activeDialogCurrentTime: TextView? = null
+    private var activeDialogTotalTime: TextView? = null
+    private var activeDialogPlayPauseBtn: Button? = null
+    private var activeDialogTrackTitle: TextView? = null
+    private var activeDialogTrackArtist: TextView? = null
+    private var isUserSeeking = false
 
     private var bluetoothA2dp: BluetoothA2dp? = null
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -194,6 +213,7 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(-60f, -60f)
             }
             updateStatus()
+            updateDialogPlayerUi()
             uiHandler.postDelayed(this, 100)
         }
     }
@@ -302,6 +322,7 @@ class MainActivity : AppCompatActivity() {
         appWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::MainActivityWakeLock")
         appWakeLock?.acquire()
 
+        topInfoPanel = findViewById(R.id.topInfoPanel)
         badgeDirect = findViewById(R.id.badgeDirect)
         textDacName = findViewById(R.id.textDacName)
         textRateBits = findViewById(R.id.textRateBits)
@@ -368,14 +389,117 @@ class MainActivity : AppCompatActivity() {
         return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
     }
 
+    private fun formatTime(ms: Long): String {
+        if (ms <= 0L) return "0:00"
+        val totalSeconds = ms / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return String.format(java.util.Locale.US, "%d:%02d", minutes, seconds)
+    }
+
+    private fun updateDialogPlayerUi() {
+        activeDialogTrackTitle?.text = currentTitle
+        activeDialogTrackArtist?.text = currentArtist
+        activeDialogPlayPauseBtn?.text = if (isPlayingState) "❚❚" else "▶"
+
+        if (!isUserSeeking && currentDuration > 0) {
+            val progress = ((currentPosition.toDouble() / currentDuration.toDouble()) * 1000).toInt().coerceIn(0, 1000)
+            activeDialogSeekBar?.progress = progress
+            activeDialogCurrentTime?.text = formatTime(currentPosition)
+            activeDialogTotalTime?.text = formatTime(currentDuration)
+        } else if (currentDuration <= 0L) {
+            activeDialogSeekBar?.progress = 0
+            activeDialogCurrentTime?.text = "0:00"
+            activeDialogTotalTime?.text = "0:00"
+        }
+    }
+
     private fun showSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
 
+        // ★ レベルメーター等インフォパネルの直下までシートを完全にフィット（上部隙間埋め）
         dialog.setOnShowListener {
-            val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
-            bottomSheet?.setBackgroundColor(Color.TRANSPARENT)
+            val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet) as? FrameLayout
+            if (bottomSheet != null) {
+                bottomSheet.setBackgroundColor(Color.TRANSPARENT)
+                val behavior = BottomSheetBehavior.from(bottomSheet)
+                behavior.state = BottomSheetBehavior.STATE_EXPANDED
+                behavior.skipCollapsed = true
+
+                val panelH = topInfoPanel?.height ?: 0
+                val screenH = resources.displayMetrics.heightPixels
+                val targetH = screenH - panelH
+                if (targetH > 0) {
+                    val lp = bottomSheet.layoutParams
+                    lp.height = targetH
+                    bottomSheet.layoutParams = lp
+                    behavior.peekHeight = targetH
+                }
+            }
+        }
+
+        // プレイヤーコントロールビューの取得
+        val textTrackTitle = view.findViewById<TextView>(R.id.dialogTextTrackTitle)
+        val textTrackArtist = view.findViewById<TextView>(R.id.dialogTextTrackArtist)
+        val textCurrentTime = view.findViewById<TextView>(R.id.dialogTextCurrentTime)
+        val textTotalTime = view.findViewById<TextView>(R.id.dialogTextTotalTime)
+        val seekBar = view.findViewById<SeekBar>(R.id.dialogSeekBar)
+        val btnPlayPause = view.findViewById<Button>(R.id.dialogBtnPlayPause)
+        val btnPrev = view.findViewById<Button>(R.id.dialogBtnPrevTrack)
+        val btnNext = view.findViewById<Button>(R.id.dialogBtnNextTrack)
+
+        activeDialogTrackTitle = textTrackTitle
+        activeDialogTrackArtist = textTrackArtist
+        activeDialogCurrentTime = textCurrentTime
+        activeDialogTotalTime = textTotalTime
+        activeDialogSeekBar = seekBar
+        activeDialogPlayPauseBtn = btnPlayPause
+
+        updateDialogPlayerUi()
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser && currentDuration > 0) {
+                    val seekMs = (progress.toLong() * currentDuration) / 1000L
+                    textCurrentTime.text = formatTime(seekMs)
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {
+                isUserSeeking = true
+            }
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                isUserSeeking = false
+                if (currentDuration > 0 && sb != null) {
+                    val seekMs = (sb.progress.toLong() * currentDuration) / 1000L
+                    try {
+                        activeWebExtensionPort?.postMessage(JSONObject().apply {
+                            put("command", "seek")
+                            put("position", seekMs)
+                        })
+                    } catch (e: Exception) {}
+                }
+            }
+        })
+
+        btnPlayPause.setOnClickListener {
+            val cmd = if (isPlayingState) "pause" else "play"
+            try {
+                activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", cmd) })
+            } catch (e: Exception) {}
+        }
+
+        btnPrev.setOnClickListener {
+            try {
+                activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "prev") })
+            } catch (e: Exception) {}
+        }
+
+        btnNext.setOnClickListener {
+            try {
+                activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "next") })
+            } catch (e: Exception) {}
         }
 
         val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
@@ -620,6 +744,15 @@ class MainActivity : AppCompatActivity() {
             isAdBlockOn = isChecked
             prefs.edit { putBoolean("ad_block_enabled", isChecked) }
             sendAdBlockSetting(isChecked)
+        }
+
+        dialog.setOnDismissListener {
+            activeDialogTrackTitle = null
+            activeDialogTrackArtist = null
+            activeDialogCurrentTime = null
+            activeDialogTotalTime = null
+            activeDialogSeekBar = null
+            activeDialogPlayPauseBtn = null
         }
 
         btnClose.setOnClickListener { dialog.dismiss() }
@@ -960,7 +1093,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ★ 0dB SW ON時: 音量UPで次へ、音量DOWNで前へスキップ + 最大音量固定
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
             val isUsb = isUsbDevice(activeOutputDevice)
@@ -1098,14 +1230,20 @@ class MainActivity : AppCompatActivity() {
                 val title = msg.optString("title", "YouTube Music")
                 val artist = msg.optString("artist", "")
                 val artwork = msg.optString("artwork", "")
+                currentTitle = title
+                currentArtist = artist
                 playbackService?.updateMetadata(title, artist, artwork)
+                updateDialogPlayerUi()
             }
             "progress" -> {
                 val current = msg.optLong("current", 0L)
                 val duration = msg.optLong("duration", 0L)
                 val isPlaying = msg.optBoolean("playing", isPlayingState)
+                currentPosition = current
+                currentDuration = duration
                 isPlayingState = isPlaying
                 playbackService?.updateProgress(current, duration, isPlaying)
+                updateDialogPlayerUi()
             }
             "state" -> {
                 val isPlaying = msg.optBoolean("playing", true)
@@ -1117,6 +1255,7 @@ class MainActivity : AppCompatActivity() {
                     walkmanLevelMeter?.reset()
                 }
                 playbackService?.updatePlaybackState(isPlaying)
+                updateDialogPlayerUi()
             }
         }
     }
