@@ -17,6 +17,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioMixerAttributes
 import android.media.AudioTrack
+import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -45,6 +46,7 @@ import kotlin.math.max
 class BitPerfectPlaybackService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     var audioTrack: AudioTrack? = null
     private lateinit var audioManager: AudioManager
 
@@ -165,6 +167,15 @@ class BitPerfectPlaybackService : Service() {
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::ServiceWakeLock")
         wakeLock?.acquire()
 
+        // ★ 消灯時にWi-Fiがスリープしてストリーミングが止まるのを防ぐ High-Perf Wi-Fi Lock
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "PerfectBitRate::WifiLock")
+            wifiLock?.acquire()
+        } catch (e: Exception) {
+            Log.w("BitPerfect", "WifiLock acquisition failed", e)
+        }
+
         try {
             ContextCompat.registerReceiver(
                 this,
@@ -252,7 +263,10 @@ class BitPerfectPlaybackService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                     audioManager.clearPreferredMixerAttributes(mediaAttr, dev)
-                } catch (e: Exception) {}
+                    Log.i("BitPerfect", "★ Cleared previous mixer attributes on ${dev.productName}")
+                } catch (e: Exception) {
+                    Log.e("BitPerfect", "Clear mixer attributes error", e)
+                }
             }
             lastConfiguredMixerDevice = null
         }
@@ -294,16 +308,13 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ レート切り替え時：古いレートの残骸PCMを即座に完全パージし、新しい設定が完了するまでブロック
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
         isCurrentlyPlaying = true
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
         val targetEffectiveRate = actualInputRate * upsampleFactor
 
-        // レートの不一致を検知した瞬間
         if (actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate) {
-            // 1. 古いレートの残骸PCMキューをその場で直ちに全消去 (スロー/早送り再生の根絶)
             pcmQueue.clear()
             isBuffering.set(true)
             NativeAudioEngine.nativeResetUpsampler()
@@ -320,11 +331,9 @@ class BitPerfectPlaybackService : Service() {
             effectiveSampleRate = targetEffectiveRate
             NativeAudioEngine.nativeConfigureUpsampler(upsampleFactor, baseSampleRate)
 
-            // 2. 新しいレートでAudioTrackを再初期化
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
             }
-            // 3. 古いストリーム設定のまま下へ流さず、このパケットは安全に破棄
             return
         }
 
@@ -350,7 +359,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ 曲切り替え時の即時バッファ消去
     fun resetBuffer() {
         isBuffering.set(true)
         pcmQueue.clear()
@@ -617,6 +625,7 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 clearPreviousMixerAttributes()
+                try { Thread.sleep(200) } catch (e: InterruptedException) {}
 
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
@@ -624,7 +633,6 @@ class BitPerfectPlaybackService : Service() {
 
                 var targetRate = baseRate * factor
 
-                // DACハードウェア上限自動クランプ
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                     val supportedMixers = try {
                         audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -769,8 +777,18 @@ class BitPerfectPlaybackService : Service() {
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
+            var heartbeatCounter = 0
             while (isRunning) {
                 try {
+                    // ★ 2秒ごとにWebExtensionへハートビートを送信してバックグラウンド停止を阻止
+                    heartbeatCounter++
+                    if (heartbeatCounter >= 20) {
+                        heartbeatCounter = 0
+                        try {
+                            onCommandListener?.invoke("heartbeat")
+                        } catch (e: Exception) {}
+                    }
+
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
                             Thread.sleep(10)
@@ -931,6 +949,10 @@ class BitPerfectPlaybackService : Service() {
             finally {
                 audioLock.unlock()
             }
+        }
+
+        if (wifiLock?.isHeld == true) {
+            wifiLock?.release()
         }
 
         if (wakeLock?.isHeld == true) {

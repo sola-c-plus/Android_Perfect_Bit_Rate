@@ -17,6 +17,7 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -24,12 +25,14 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
@@ -117,6 +120,11 @@ class MainActivity : AppCompatActivity() {
     private var isCascadeFir = true
     private var isLrIndependentDither = true
     private var isSpectrumOn = true
+
+    // ★ テーマモード設定 ("dark", "light", "auto")
+    private var currentThemeMode = "dark"
+    private val themeOptions = arrayOf("Dark (ダーク)", "Light (ライト)", "Auto (端末の設定に連動)")
+    private val themeValues = arrayOf("dark", "light", "auto")
 
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
@@ -297,13 +305,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            // ★ サービスからのコマンド（ハートビート含む）をWebExtensionに転送
             playbackService?.onCommandListener = { cmd ->
                 try {
                     val jsonCmd = JSONObject().apply { put("command", cmd) }
                     activeWebExtensionPort?.postMessage(jsonCmd)
-                } catch (e: Exception) {
-                    Log.e("BitPerfect", "Failed to send command", e)
-                }
+                } catch (e: Exception) {}
             }
 
             playbackService?.onSeekListener = { pos ->
@@ -313,9 +320,7 @@ class MainActivity : AppCompatActivity() {
                         put("position", pos)
                     }
                     activeWebExtensionPort?.postMessage(jsonCmd)
-                } catch (e: Exception) {
-                    Log.e("BitPerfect", "Failed to send seek", e)
-                }
+                } catch (e: Exception) {}
             }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -352,6 +357,7 @@ class MainActivity : AppCompatActivity() {
         isLrIndependentDither = prefs.getBoolean("lr_dither_enabled", true)
         isSpectrumOn = prefs.getBoolean("spectrum_enabled", true)
         isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
+        currentThemeMode = prefs.getString("ui_theme_mode", "dark") ?: "dark"
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
@@ -378,6 +384,8 @@ class MainActivity : AppCompatActivity() {
         registerAudioDeviceCallback()
         setupGeckoView()
 
+        applyThemeUi(currentThemeMode)
+
         btnReload.setOnClickListener {
             reloadDirectStream()
         }
@@ -393,6 +401,55 @@ class MainActivity : AppCompatActivity() {
         }
 
         uiHandler.post(uiUpdateRunnable)
+    }
+
+    // ★ テーマ（Dark / Light / Auto）の動的配色切り替え
+    private fun isDarkThemeActive(): Boolean {
+        return when (currentThemeMode) {
+            "light" -> false
+            "auto" -> {
+                val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+                nightMode == Configuration.UI_MODE_NIGHT_YES
+            }
+            else -> true
+        }
+    }
+
+    private fun applyThemeUi(themeMode: String) {
+        currentThemeMode = themeMode
+        val isDark = isDarkThemeActive()
+
+        val panelBg = if (isDark) Color.parseColor("#0D0D0D") else Color.parseColor("#F2F2F7")
+        val mainText = if (isDark) Color.WHITE else Color.parseColor("#1C1C1E")
+        val subText = if (isDark) Color.parseColor("#A0A0A0") else Color.parseColor("#636366")
+        val peakText = if (isDark) Color.parseColor("#B0B0B0") else Color.parseColor("#48484A")
+
+        topInfoPanel?.setBackgroundColor(panelBg)
+        textDacName.setTextColor(mainText)
+        textRateBits.setTextColor(mainText)
+        textCodec.setTextColor(subText)
+        textTransfer.setTextColor(subText)
+        textPeak.setTextColor(peakText)
+    }
+
+    private fun requestIgnoreBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (e2: Exception) {}
+                }
+            } else {
+                Toast.makeText(this, "バッテリー最適化は既に「無制限」に設定されています", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
@@ -455,6 +512,54 @@ class MainActivity : AppCompatActivity() {
                     behavior.peekHeight = targetH
                 }
             }
+        }
+
+        // ★ タブ切り替えボタンの制御
+        val btnTabDsp = view.findViewById<Button>(R.id.btnTabDsp)
+        val btnTabUiSystem = view.findViewById<Button>(R.id.btnTabUiSystem)
+        val layoutTabDspContainer = view.findViewById<View>(R.id.layoutTabDspContainer)
+        val layoutTabUiContainer = view.findViewById<View>(R.id.layoutTabUiContainer)
+
+        btnTabDsp.setOnClickListener {
+            layoutTabDspContainer.visibility = View.VISIBLE
+            layoutTabUiContainer.visibility = View.GONE
+            btnTabDsp.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#E5A93C")))
+            btnTabDsp.setTextColor(Color.WHITE)
+            btnTabUiSystem.setBackgroundResource(R.drawable.bg_btn_dap_outline)
+            btnTabUiSystem.setTextColor(Color.parseColor("#888888"))
+        }
+
+        btnTabUiSystem.setOnClickListener {
+            layoutTabDspContainer.visibility = View.GONE
+            layoutTabUiContainer.visibility = View.VISIBLE
+            btnTabUiSystem.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#E5A93C")))
+            btnTabUiSystem.setTextColor(Color.WHITE)
+            btnTabDsp.setBackgroundResource(R.drawable.bg_btn_dap_outline)
+            btnTabDsp.setTextColor(Color.parseColor("#888888"))
+        }
+
+        // テーマ設定スピナー
+        val spinnerTheme = view.findViewById<Spinner>(R.id.dialogSpinnerTheme)
+        val themeAdapter = ArrayAdapter(this, R.layout.item_spinner_dap, themeOptions)
+        themeAdapter.setDropDownViewResource(R.layout.item_spinner_dap)
+        spinnerTheme.adapter = themeAdapter
+        spinnerTheme.setSelection(themeValues.indexOf(currentThemeMode).coerceAtLeast(0))
+        spinnerTheme.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selected = themeValues[position]
+                if (selected != currentThemeMode) {
+                    currentThemeMode = selected
+                    prefs.edit { putString("ui_theme_mode", selected) }
+                    applyThemeUi(selected)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // バッテリー無制限化ボタン
+        val btnBatteryIgnore = view.findViewById<Button>(R.id.btnBatteryIgnore)
+        btnBatteryIgnore.setOnClickListener {
+            requestIgnoreBatteryOptimizations()
         }
 
         val imageArtwork = view.findViewById<ImageView>(R.id.dialogImageArtwork)
@@ -1233,11 +1338,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ★ 曲変更・フラッシュ受信ハンドラ
     private fun handleIncomingMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "flush" -> {
-                // 曲が変わった瞬間に即座に残留キューをパージ
                 playbackService?.resetBuffer()
             }
             "pcm" -> {

@@ -99,10 +99,13 @@ function forceFullVolume() {
 }
 setInterval(forceFullVolume, 2000);
 
+// ★ バックグラウンド停止を阻止する覚醒関数
 function keepPlayingInBackground() {
-    const video = currentMediaElement || document.querySelector('video');
-    if (userWantsPlaying && video && video.paused && !video.ended) {
-        video.play().catch(() => {});
+    const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
+    if (video) {
+        if (userWantsPlaying && video.paused && !video.ended) {
+            video.play().catch(() => {});
+        }
     }
     if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
         audioCtx.resume().catch(() => {});
@@ -182,7 +185,6 @@ function attachAudioPipeline(mediaEl) {
     if (currentMediaElement !== mediaEl) {
         currentMediaElement = mediaEl;
 
-        // ★ 曲・メディア切り替えイベントのフック: 曲が変わった瞬間にミリ秒で即座に検知＆フラッシュ
         const onTrackChanged = () => {
             scanStreamCodec();
             postNativeMessage({ type: "flush" });
@@ -286,7 +288,10 @@ function handleNativeMessage(msg) {
     const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
     const video = currentMediaElement || document.querySelector('video');
 
-    if (cmd === 'play') {
+    if (cmd === 'heartbeat') {
+        // ★ Nativeからの定期ハートビートでブラウザエンジンを常時覚醒
+        keepPlayingInBackground();
+    } else if (cmd === 'play') {
         userWantsPlaying = true;
         getAudioContext();
         if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
