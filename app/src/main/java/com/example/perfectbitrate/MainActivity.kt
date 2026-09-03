@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -85,6 +85,7 @@ class MainActivity : AppCompatActivity() {
     private var isServiceBound = false
     private var activeWebExtensionPort: WebExtension.Port? = null
 
+    // ★ 音源本来のネイティブレート (AAC=44100, Opus=48000)
     private var baseSampleRate = 48000
     private var upsampleFactor = 1
     private var pcmPacketCount = 0L
@@ -212,7 +213,6 @@ class MainActivity : AppCompatActivity() {
     private var isPlayingState = false
 
     private val uiHandler = Handler(Looper.getMainLooper())
-    // ★ 30ms 高速UI更新ループ
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
@@ -388,7 +388,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnSettings.setOnLongClickListener {
-            Toast.makeText(this, "🔧 DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "⚙ DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
             showDevPresetsDialog()
             true
         }
@@ -432,7 +432,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
-        
         dialog.window?.setDimAmount(0f)
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
@@ -824,7 +823,7 @@ class MainActivity : AppCompatActivity() {
         val targetIds = arrayOf(1, 2, 3, 4, 5)
 
         val firOptions = arrayOf("Linear Phase Sharp", "Linear Phase Slow", "Minimum Phase Sharp", "Minimum Phase Slow")
-        val transientOptions = arrayOf("OFF", "Natural (CD)", "Punch (打撃)", "Acoustic (弦・打鍵)")
+        val transientOptions = arrayOf("OFF", "Natural (CD)", "Punch (打楽器)", "Acoustic (弦・打弦)")
         val lpcOptions = arrayOf("DSEE HX AI (適応)", "K2 LPC Natural (物理)", "Adaptive Exciter (輪郭)")
         val gainOptions = arrayOf("控えめ (0.08)", "標準 (0.12)", "豊か (0.16)", "強力 (0.20)")
         val gainValues = floatArrayOf(0.08f, 0.12f, 0.16f, 0.20f)
@@ -956,7 +955,7 @@ class MainActivity : AppCompatActivity() {
             initDefaultProfiles()
             updateUiForProfile(currentEditTargetId)
             saveCurrentEditProfile()
-            Toast.makeText(this, "黄金値（最適初期値）にリセットしました", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "初期値（最適初期値）にリセットしました", Toast.LENGTH_SHORT).show()
         }
 
         btnDevClose.setOnClickListener { dialog.dismiss() }
@@ -1235,21 +1234,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ メッセージ受信ハンドラ: 音源ネイティブレートを正確に保持し、PCM受信時に上書き破壊させない
     private fun handleIncomingMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "pcm" -> {
                 val base64Pcm = msg.optString("pcm", "")
                 if (base64Pcm.isNotEmpty()) {
                     val inBitMode = msg.optString("bitMode", "float32")
-                    val sampleRate = msg.optInt("sampleRate", baseSampleRate)
-                    if (sampleRate > 0) baseSampleRate = sampleRate
-
                     try {
                         val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
                         if (pcmBytes != null && pcmBytes.isNotEmpty()) {
                             pcmPacketCount += pcmBytes.size
                             isPlayingState = true
                             lastPcmTime = System.currentTimeMillis()
+                            // ★ baseSampleRate は codec で確定した本来の音源レート (44100 または 48000) を使用
                             playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
                         }
                     } catch (e: Exception) {
@@ -1259,9 +1257,14 @@ class MainActivity : AppCompatActivity() {
             }
             "codec" -> {
                 currentCodec = msg.optString("codec", currentCodec)
-                val sampleRate = msg.optInt("sampleRate", baseSampleRate)
-                if (sampleRate > 0) baseSampleRate = sampleRate
+                val rate = msg.optInt("sampleRate", 0)
+                if (rate > 0 && rate != baseSampleRate) {
+                    baseSampleRate = rate
+                    // 音源レートが変わったので DAC とサービスを再同期
+                    playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
+                }
                 playbackService?.updateCodec(currentCodec)
+                updateStatus()
             }
             "meta" -> {
                 val title = msg.optString("title", "YouTube Music")
@@ -1352,6 +1355,7 @@ class MainActivity : AppCompatActivity() {
             else -> "16 bit"
         }
 
+        // ★ 音源ネイティブレート (44.1k系 または 48k系) と倍率の完全同期表示
         val effectiveRate = baseSampleRate * activeFactor
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"

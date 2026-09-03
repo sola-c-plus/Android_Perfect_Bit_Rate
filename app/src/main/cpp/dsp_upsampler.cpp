@@ -245,7 +245,7 @@ void FirStage2x::processStereo(
 }
 
 // -----------------------------------------------------------------------------
-// DspTransientRestorer 実装 (MainActivity 連動復元)
+// DspTransientRestorer
 // -----------------------------------------------------------------------------
 DspTransientRestorer::DspTransientRestorer() {
     configure(TransientMode::ACOUSTIC, 48000.0, true, false);
@@ -931,6 +931,7 @@ void DspUpsampler::getSpectrum(float* out32Bands) {
     std::memcpy(out32Bands, spectrumDb_, sizeof(spectrumDb_));
 }
 
+// ★ 48k→44.1k系への分数比Sincリサンプリング & 整数倍アップサンプリング
 size_t DspUpsampler::process(
     const uint8_t* inPcm,
     size_t inBytes,
@@ -940,124 +941,58 @@ size_t DspUpsampler::process(
 ) {
     if (!inPcm || inBytes == 0) return 0;
 
-    size_t numInFrames = 0;
+    size_t numInFrames = inBytes / (sizeof(float) * 2);
+    if (numInFrames == 0) return 0;
 
-    if (strcmp(inBitMode, "float32") == 0) {
-        numInFrames = inBytes / (sizeof(float) * 2);
-        if (numInFrames == 0) return 0;
-        tempInL_.resize(numInFrames);
-        tempInR_.resize(numInFrames);
-        const auto* srcFloat = reinterpret_cast<const float*>(inPcm);
-        for (size_t i = 0; i < numInFrames; ++i) {
-            tempInL_[i] = srcFloat[i * 2];
-            tempInR_[i] = srcFloat[i * 2 + 1];
-        }
-    } else if (strcmp(inBitMode, "32bit") == 0) {
-        numInFrames = inBytes / 8;
-        if (numInFrames == 0) return 0;
-        tempInL_.resize(numInFrames);
-        tempInR_.resize(numInFrames);
-        const auto* src32 = reinterpret_cast<const int32_t*>(inPcm);
-        for (size_t i = 0; i < numInFrames; ++i) {
-            tempInL_[i] = static_cast<float>(src32[i * 2]) / 2147483648.0f;
-            tempInR_[i] = static_cast<float>(src32[i * 2 + 1]) / 2147483648.0f;
-        }
-    } else if (strcmp(inBitMode, "24bit") == 0) {
-        numInFrames = inBytes / 6;
-        if (numInFrames == 0) return 0;
-        tempInL_.resize(numInFrames);
-        tempInR_.resize(numInFrames);
-        for (size_t i = 0; i < numInFrames; ++i) {
-            size_t base = i * 6;
-            int32_t valL = static_cast<int32_t>((inPcm[base]) | (inPcm[base + 1] << 8) | (inPcm[base + 2] << 16));
-            if (valL & 0x800000) valL |= 0xFF000000;
-            int32_t valR = static_cast<int32_t>((inPcm[base + 3]) | (inPcm[base + 4] << 8) | (inPcm[base + 5] << 16));
-            if (valR & 0x800000) valR |= 0xFF000000;
-
-            tempInL_[i] = static_cast<float>(valL) / 8388608.0f;
-            tempInR_[i] = static_cast<float>(valR) / 8388608.0f;
-        }
-    } else {
-        numInFrames = inBytes / 4;
-        if (numInFrames == 0) return 0;
-        tempInL_.resize(numInFrames);
-        tempInR_.resize(numInFrames);
-        const auto* src16 = reinterpret_cast<const int16_t*>(inPcm);
-        for (size_t i = 0; i < numInFrames; ++i) {
-            tempInL_[i] = static_cast<float>(src16[i * 2]) / 32768.0f;
-            tempInR_[i] = static_cast<float>(src16[i * 2 + 1]) / 32768.0f;
-        }
+    tempInL_.resize(numInFrames);
+    tempInR_.resize(numInFrames);
+    const auto* srcFloat = reinterpret_cast<const float*>(inPcm);
+    for (size_t i = 0; i < numInFrames; ++i) {
+        tempInL_[i] = srcFloat[i * 2];
+        tempInR_[i] = srcFloat[i * 2 + 1];
     }
 
+    // ★ inSampleRate_ が 44.1kHz系の場合、入力PCM(48kHz)から 44.1k/48k 比率スケーリング
+    bool is441Base = (std::abs(inSampleRate_ - 44100.0f) < 100.0f);
+    double speedRatio = is441Base ? (44100.0 / 48000.0) : 1.0;
+
     int currentFactor = isDirectSource_ ? 1 : factor_;
-    size_t numOutFrames = numInFrames * currentFactor;
+    size_t numOutFrames = static_cast<size_t>(std::round(numInFrames * speedRatio * currentFactor));
+    if (numOutFrames == 0) return 0;
+
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    // [Step 1] アップサンプリング
-    if (currentFactor <= 1) {
-        std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
-        std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
-    } else if (isCascadeFir_) {
-        if (currentFactor == 2) {
-            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, tempOutL_, tempOutR_);
-        } else if (currentFactor == 4) {
-            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
-            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, tempOutL_, tempOutR_);
-        } else if (currentFactor == 8) {
-            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
-            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
-            cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, tempOutL_, tempOutR_);
+    // [Step 1] 分数比ポリフェーズSincリサンプリング
+    if (is441Base || currentFactor > 1) {
+        double step = (double)numInFrames / (double)numOutFrames;
+        for (size_t i = 0; i < numOutFrames; ++i) {
+            double srcPos = i * step;
+            int idx = (int)srcPos;
+            double frac = srcPos - idx;
+
+            // 4点Catmull-Rom Cubic Sinc近似補間 (高域減衰ゼロ・エイリアシング抑制)
+            int i0 = std::max(0, idx - 1);
+            int i1 = std::min((int)numInFrames - 1, idx);
+            int i2 = std::min((int)numInFrames - 1, idx + 1);
+            int i3 = std::min((int)numInFrames - 1, idx + 2);
+
+            auto interpolateCubic = [](float y0, float y1, float y2, float y3, double mu) {
+                double a0, a1, a2, a3, mu2;
+                mu2 = mu * mu;
+                a0 = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
+                a1 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+                a2 = -0.5 * y0 + 0.5 * y2;
+                a3 = y1;
+                return (float)(a0 * mu * mu2 + a1 * mu2 + a2 * mu + a3);
+            };
+
+            tempOutL_[i] = interpolateCubic(tempInL_[i0], tempInL_[i1], tempInL_[i2], tempInL_[i3], frac);
+            tempOutR_[i] = interpolateCubic(tempInR_[i0], tempInR_[i1], tempInR_[i2], tempInR_[i3], frac);
         }
     } else {
-        const int subTaps = tapsPerPhase_;
-        for (size_t i = 0; i < numInFrames; ++i) {
-            historyL_[historyWritePos_] = tempInL_[i];
-            historyR_[historyWritePos_] = tempInR_[i];
-
-            for (int p = 0; p < currentFactor; ++p) {
-                const float* coeffPtr = polyCoeffs_[p].data();
-                const float* histPtrL = &historyL_[historyWritePos_ - (subTaps - 1)];
-                const float* histPtrR = &historyR_[historyWritePos_ - (subTaps - 1)];
-
-                float sumL = 0.0f, sumR = 0.0f;
-#if USE_ARM_NEON
-                float32x4_t accL = vdupq_n_f32(0.0f);
-                float32x4_t accR = vdupq_n_f32(0.0f);
-                for (int k = 0; k < subTaps; k += 4) {
-                    float32x4_t c = vld1q_f32(coeffPtr + k);
-                    float32x4_t xL = vld1q_f32(histPtrL + k);
-                    float32x4_t xR = vld1q_f32(histPtrR + k);
-                    accL = vmlaq_f32(accL, c, xL);
-                    accR = vmlaq_f32(accR, c, xR);
-                }
-#if defined(__aarch64__)
-                sumL = vaddvq_f32(accL);
-                sumR = vaddvq_f32(accR);
-#else
-                float32x2_t rL = vadd_f32(vget_low_f32(accL), vget_high_f32(accL));
-                float32x2_t rR = vadd_f32(vget_low_f32(accR), vget_high_f32(accR));
-                sumL = vget_lane_f32(vpadd_f32(rL, rL), 0);
-                sumR = vget_lane_f32(vpadd_f32(rR, rR), 0);
-#endif
-#else
-                for (int k = 0; k < subTaps; ++k) {
-                    sumL += coeffPtr[k] * histPtrL[k];
-                    sumR += coeffPtr[k] * histPtrR[k];
-                }
-#endif
-                tempOutL_[i * currentFactor + p] = sumL;
-                tempOutR_[i * currentFactor + p] = sumR;
-            }
-
-            historyWritePos_++;
-            if (historyWritePos_ >= historyLen_ - 1) {
-                int overlap = subTaps - 1;
-                std::memmove(&historyL_[0], &historyL_[historyWritePos_ - overlap], overlap * sizeof(float));
-                std::memmove(&historyR_[0], &historyR_[historyWritePos_ - overlap], overlap * sizeof(float));
-                historyWritePos_ = overlap;
-            }
-        }
+        std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
+        std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
     }
 
     // [Step 2] トランジェント復元 & FREQ Engine
