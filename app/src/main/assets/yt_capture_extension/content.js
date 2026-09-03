@@ -99,13 +99,12 @@ function forceFullVolume() {
 }
 setInterval(forceFullVolume, 2000);
 
-// ★ バックグラウンド停止を阻止する覚醒関数
+// ★ ユーザーが明示的に再生を望んでいる場合のみ再生維持 (勝手な再開を阻止)
 function keepPlayingInBackground() {
+    if (!userWantsPlaying) return;
     const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
-    if (video) {
-        if (userWantsPlaying && video.paused && !video.ended) {
-            video.play().catch(() => {});
-        }
+    if (video && video.paused && !video.ended) {
+        video.play().catch(() => {});
     }
     if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
         audioCtx.resume().catch(() => {});
@@ -192,6 +191,17 @@ function attachAudioPipeline(mediaEl) {
         mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
         mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
         mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
+
+        // ★ 一時停止イベントを検知して確実にフラグを下ろす (勝手な再開を撲滅)
+        mediaEl.addEventListener('pause', () => {
+            userWantsPlaying = false;
+            postNativeMessage({ type: "state", playing: false });
+        }, { passive: true });
+
+        mediaEl.addEventListener('play', () => {
+            userWantsPlaying = true;
+            postNativeMessage({ type: "state", playing: true });
+        }, { passive: true });
     }
 
     try {
@@ -267,6 +277,8 @@ HTMLMediaElement.prototype.play = function() {
 
 const origPause = HTMLMediaElement.prototype.pause;
 HTMLMediaElement.prototype.pause = function() {
+    userWantsPlaying = false;
+    postNativeMessage({ type: "state", playing: false });
     return origPause.apply(this, arguments);
 };
 
@@ -289,7 +301,6 @@ function handleNativeMessage(msg) {
     const video = currentMediaElement || document.querySelector('video');
 
     if (cmd === 'heartbeat') {
-        // ★ Nativeからの定期ハートビートでブラウザエンジンを常時覚醒
         keepPlayingInBackground();
     } else if (cmd === 'play') {
         userWantsPlaying = true;

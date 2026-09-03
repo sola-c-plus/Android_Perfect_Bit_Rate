@@ -1,15 +1,23 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_checked="true">
-        <shape android:shape="oval">
-            <size android:width="14dp" android:height="14dp" />
-            <solid android:color="#D49B28" />
-        </shape>
+        <layer-list>
+            <item android:gravity="center" android:width="15dp" android:height="15dp">
+                <shape android:shape="oval">
+                    <solid android:color="#D49B28" />
+                    <size android:width="15dp" android:height="15dp" />
+                </shape>
+            </item>
+        </layer-list>
     </item>
     <item>
-        <shape android:shape="oval">
-            <size android:width="14dp" android:height="14dp" />
-            <solid android:color="#8E8E93" />
-        </shape>
+        <layer-list>
+            <item android:gravity="center" android:width="15dp" android:height="15dp">
+                <shape android:shape="oval">
+                    <solid android:color="#8E8E93" />
+                    <size android:width="15dp" android:height="15dp" />
+                </shape>
+            </item>
+        </layer-list>
     </item>
 </selector>

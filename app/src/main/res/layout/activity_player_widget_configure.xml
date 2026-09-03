@@ -35,7 +35,7 @@
             android:id="@+id/radioDark"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="🌙 ダーク (Dark / 黒基調)"
+            android:text="Dark (ダーク / 黒基調)"
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:layout_marginBottom="8dp" />
@@ -44,7 +44,7 @@
             android:id="@+id/radioLight"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="☀️ ライト (Light / 白基調)"
+            android:text="Light (ライト / 白基調)"
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:layout_marginBottom="8dp" />
@@ -53,7 +53,7 @@
             android:id="@+id/radioAuto"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="📱 端末設定に連動 (System Auto)"
+            android:text="System Auto (端末設定に連動)"
             android:textColor="#FFFFFF"
             android:textSize="12sp" />
     </RadioGroup>

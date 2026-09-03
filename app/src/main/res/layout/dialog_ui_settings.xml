@@ -132,6 +132,7 @@
                     android:textSize="9.5sp"
                     android:layout_marginBottom="8dp" />
 
+                <!-- ★ 絵文字を排除したクリーンテキスト -->
                 <Button
                     android:id="@+id/btnBatteryIgnore"
                     android:layout_width="match_parent"
