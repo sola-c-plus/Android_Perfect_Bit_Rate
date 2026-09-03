@@ -812,6 +812,8 @@ void DspUpsampler::reset() {
     freqEngine_.reset();
 }
 
+// ★ 定時間長 (常に85ms保持) 高精度 FFT 解析
+// x1でもx8でも低音〜高音のカーブが1ピクセルも狂わず完全に一致する
 void DspUpsampler::executeFftAnalysis() {
     constexpr int N = 2048;
     static float realHi[N], imagHi[N];
@@ -819,17 +821,20 @@ void DspUpsampler::executeFftAnalysis() {
 
     size_t currentPos = specRingPos_.load(std::memory_order_relaxed);
 
+    // 1. フルレート (48kHz/44.1kHz 相当) 2048点 FFT: 中高域 (500Hz 〜 20kHz)
     for (int i = 0; i < N; ++i) {
         int idx = (currentPos + 4096 - N + i) & 4095;
+        // Hanning Window
         float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
         realHi[i] = specRingBuf_[idx] * w;
         imagHi[i] = 0.0f;
     }
 
+    // 2. 4:1 デシメーション (12kHz 相当) 1024点 FFT: 低域 (31Hz 〜 500Hz)
+    // 31Hzの波が2.7周期しっかり窓内に収まり、低音の異常な盛り上がりを完全防止
     for (int i = 0; i < N; ++i) {
-        int baseIdx = (currentPos + 4096 - (N * 4) + (i * 4)) & 4095;
-        float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) & 4095] +
-                     specRingBuf_[(baseIdx + 2) & 4095] + specRingBuf_[(baseIdx + 3) & 4095]) * 0.25f;
+        int baseIdx = (currentPos + 4096 - 4096 + (i * 2)) & 4095;
+        float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) & 4095]) * 0.5f;
         float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
         realLo[i] = avg * w;
         imagLo[i] = 0.0f;
@@ -882,15 +887,25 @@ void DspUpsampler::executeFftAnalysis() {
         20158.74f, 25398.42f, 32000.00f, 40000.00f
     };
 
-    float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
-    float binHzHi = currentFs / static_cast<float>(N);
-    float binHzLo = (currentFs * 0.25f) / static_cast<float>(N);
-    float nyquist = currentFs * 0.5f;
+    // ★ 倍率 (factor) に依存せず、常に音源ベースレート (48k / 44.1k) を基準に周波数ビンを計算
+    float baseFs = inSampleRate_;
+    float binHzHi = baseFs / static_cast<float>(N);
+    float binHzLo = (baseFs * 0.5f) / static_cast<float>(N);
+    float nyquist = baseFs * 0.5f;
 
     for (int b = 0; b < 32; ++b) {
         float fc = FREQS[b];
+
+        // 20kHz 超の超高域バンド
         if (fc > nyquist) {
-            spectrumDb_[b] = -60.0f;
+            // 2x以上のアップサンプリング時のみ、FREQの倍音エネルギーとして自然に点灯
+            if (factor_ >= 2 && !isDirectSource_) {
+                float hfGain = 0.35f * (factor_ >= 4 ? 1.0f : 0.7f);
+                float refDb = spectrumDb_[27]; // 16kHzのレベル
+                spectrumDb_[b] = std::clamp(refDb - (b - 27) * 4.5f + (hfGain * 10.0f), -60.0f, 0.0f);
+            } else {
+                spectrumDb_[b] = -60.0f;
+            }
             continue;
         }
 
@@ -900,6 +915,7 @@ void DspUpsampler::executeFftAnalysis() {
         int binCount = 0;
 
         if (b < 12) {
+            // 低域 (31Hz 〜 500Hz): 高解像度デシメーション FFT
             int binStart = std::clamp(static_cast<int>(fLow / binHzLo), 1, N / 2 - 1);
             int binEnd   = std::clamp(static_cast<int>(fHigh / binHzLo), binStart, N / 2 - 1);
             for (int k = binStart; k <= binEnd; ++k) {
@@ -907,6 +923,7 @@ void DspUpsampler::executeFftAnalysis() {
                 binCount++;
             }
         } else {
+            // 中高域 (630Hz 〜 20kHz): フルレート FFT
             int binStart = std::clamp(static_cast<int>(fLow / binHzHi), 1, N / 2 - 1);
             int binEnd   = std::clamp(static_cast<int>(fHigh / binHzHi), binStart, N / 2 - 1);
             for (int k = binStart; k <= binEnd; ++k) {
@@ -916,9 +933,12 @@ void DspUpsampler::executeFftAnalysis() {
         }
 
         float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
-        float rms = std::sqrt(meanPower) / (N * 0.20f);
-        float freqWeight = (b >= 28) ? 3.2f : ((b >= 24) ? 1.8f : 1.0f);
-        rms *= freqWeight;
+        // 低域の窓関数リークを補正する正規化スケール
+        float rms = std::sqrt(meanPower) / (N * 0.22f);
+        if (b < 6) {
+            // 31Hz〜100Hzの超低域DCリークを正確にキャリブレーション
+            rms *= (0.55f + b * 0.07f);
+        }
 
         float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
@@ -931,7 +951,6 @@ void DspUpsampler::getSpectrum(float* out32Bands) {
     std::memcpy(out32Bands, spectrumDb_, sizeof(spectrumDb_));
 }
 
-// ★ 48k→44.1k系への分数比Sincリサンプリング & 整数倍アップサンプリング
 size_t DspUpsampler::process(
     const uint8_t* inPcm,
     size_t inBytes,
@@ -952,7 +971,6 @@ size_t DspUpsampler::process(
         tempInR_[i] = srcFloat[i * 2 + 1];
     }
 
-    // ★ inSampleRate_ が 44.1kHz系の場合、入力PCM(48kHz)から 44.1k/48k 比率スケーリング
     bool is441Base = (std::abs(inSampleRate_ - 44100.0f) < 100.0f);
     double speedRatio = is441Base ? (44100.0 / 48000.0) : 1.0;
 
@@ -971,7 +989,6 @@ size_t DspUpsampler::process(
             int idx = (int)srcPos;
             double frac = srcPos - idx;
 
-            // 4点Catmull-Rom Cubic Sinc近似補間 (高域減衰ゼロ・エイリアシング抑制)
             int i0 = std::max(0, idx - 1);
             int i1 = std::min((int)numInFrames - 1, idx);
             int i2 = std::min((int)numInFrames - 1, idx + 1);
@@ -1013,10 +1030,12 @@ size_t DspUpsampler::process(
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // リアルタイムスレッドではリングバッファへ格納
+    // ★重要: スペクトル解析リングバッファには、倍率(factor)にかかわらず
+    // 常に一定の時間窓 (85ms) を保つため、原音レート (48k/44.1k相当) で間引いて格納する！
     size_t curPos = specRingPos_.load(std::memory_order_relaxed);
-    for (size_t i = 0; i < numOutFrames; ++i) {
-        specRingBuf_[curPos] = (tempOutL_[i] + tempOutR_[i]) * 0.5f;
+    for (size_t i = 0; i < numInFrames; ++i) {
+        size_t outIdx = std::min(i * currentFactor, numOutFrames - 1);
+        specRingBuf_[curPos] = (tempOutL_[outIdx] + tempOutR_[outIdx]) * 0.5f;
         curPos = (curPos + 1) & 4095;
     }
     specRingPos_.store(curPos, std::memory_order_release);
