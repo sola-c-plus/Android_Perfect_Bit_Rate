@@ -34,6 +34,7 @@ import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -427,6 +428,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
+        
+        // ★ 背景の暗転（グレー化）を完全廃止し、上部レベルメーターを鮮明表示
+        dialog.window?.setDimAmount(0f)
+        dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialog.setContentView(view)
 
@@ -774,6 +780,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDevPresetsDialog() {
         val dialog = BottomSheetDialog(this, R.style.CustomBottomSheetDialogTheme)
+        dialog.window?.setDimAmount(0f)
+        dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+
         val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
         dialog.setContentView(view)
 
