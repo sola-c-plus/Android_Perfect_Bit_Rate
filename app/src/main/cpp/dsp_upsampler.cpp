@@ -212,17 +212,17 @@ void FirStage2x::processStereo(
 }
 
 // -----------------------------------------------------------------------------
-// DspLpcHarmonicAi 実装
+// ★ DspLpcHarmonicAi (2次・3次・4次多段高調波外挿 ＆ 18.5kHz ハイレゾ HPF)
 // -----------------------------------------------------------------------------
 DspLpcHarmonicAi::DspLpcHarmonicAi() {
-    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.13f, 11000.0f, true);
+    configure(DseeMode::AUTO_AI, 48000.0, 1, 0.20f, 10000.0f, true);
 }
 
 void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, float gain, float extractFreq, bool useQmf) {
     mode_ = mode;
     sampleRate_ = std::max(8000.0, sampleRate);
     lpcAlgo_ = lpcAlgo;
-    targetGain_ = static_cast<double>(gain);
+    targetGain_ = static_cast<double>(gain) * 3.5; // 40kHz まで十分なエネルギーを供給
     useQmf_ = useQmf;
     reset();
 
@@ -233,39 +233,39 @@ void DspLpcHarmonicAi::configure(DseeMode mode, double sampleRate, int lpcAlgo, 
 
     isBypass_ = false;
 
+    // 10k〜14kHz 原音高域抽出 HPF
     double fExtract = static_cast<double>(extractFreq);
-    double fCenter = (sampleRate_ >= 352800.0) ? 32000.0 : ((sampleRate_ >= 176400.0) ? 28000.0 : ((sampleRate_ >= 88200.0) ? 22500.0 : 16000.0));
-    double Q = 1.15;
-    fCenter = std::min(fCenter, sampleRate_ * 0.45);
-
     double kExtract = std::tan(PI * fExtract / sampleRate_);
     double a0 = 1.0 + kExtract;
     hp_b0_ = 1.0 / a0;
     hp_b1_ = -1.0 / a0;
     hp_a1_ = (kExtract - 1.0) / a0;
 
-    double w0 = 2.0 * PI * fCenter / sampleRate_;
-    double alpha = std::sin(w0) / (2.0 * Q);
+    // ★ 18.5kHz 2次 Butterworth ハイレゾ通過 HPF (40kHzまで完全にフラット通過)
+    double fOutHp = std::min(18500.0, sampleRate_ * 0.45);
+    double w0 = 2.0 * PI * fOutHp / sampleRate_;
+    double alpha = std::sin(w0) / (2.0 * 0.70710678);
+    double cosw0 = std::cos(w0);
 
-    double b0_raw = alpha;
-    double b1_raw = 0.0;
-    double b2_raw = -alpha;
+    double b0_raw = (1.0 + cosw0) / 2.0;
+    double b1_raw = -(1.0 + cosw0);
+    double b2_raw = (1.0 + cosw0) / 2.0;
     double a0_raw = 1.0 + alpha;
-    double a1_raw = -2.0 * std::cos(w0);
+    double a1_raw = -2.0 * cosw0;
     double a2_raw = 1.0 - alpha;
 
     double inv_a0 = 1.0 / a0_raw;
-    bp_b0_ = b0_raw * inv_a0;
-    bp_b1_ = b1_raw * inv_a0;
-    bp_b2_ = b2_raw * inv_a0;
-    bp_a1_ = a1_raw * inv_a0;
-    bp_a2_ = a2_raw * inv_a0;
+    out_hp_b0_ = b0_raw * inv_a0;
+    out_hp_b1_ = b1_raw * inv_a0;
+    out_hp_b2_ = b2_raw * inv_a0;
+    out_hp_a1_ = a1_raw * inv_a0;
+    out_hp_a2_ = a2_raw * inv_a0;
 }
 
 void DspLpcHarmonicAi::reset() {
     hp_s1_L_ = 0.0; hp_s1_R_ = 0.0;
-    bp_s1_L_ = 0.0; bp_s2_L_ = 0.0;
-    bp_s1_R_ = 0.0; bp_s2_R_ = 0.0;
+    out_s1_L_ = 0.0; out_s2_L_ = 0.0;
+    out_s1_R_ = 0.0; out_s2_R_ = 0.0;
     prevSampleL_ = 0.0; prevSampleR_ = 0.0;
     envHfL_ = 0.0; envHfR_ = 0.0;
     envTotalL_ = 0.0; envTotalR_ = 0.0;
@@ -277,98 +277,92 @@ void DspLpcHarmonicAi::reset() {
 void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
-    const double maxSlewPerSample = 0.0008;
+    const double maxSlewPerSample = 0.002;
 
     for (size_t i = 0; i < numFrames; ++i) {
+        // --- Left チャンネル ---
         double inL = static_cast<double>(left[i]);
+        // 1. 10k〜14kHz 原音高域を抽出
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
 
         double absHfL = std::abs(hiL);
         double absTotalL = std::abs(inL);
-        envHfL_ = envHfL_ * 0.992 + absHfL * 0.008;
+        envHfL_ = envHfL_ * 0.990 + absHfL * 0.010;
         envTotalL_ = envTotalL_ * 0.995 + absTotalL * 0.005;
 
         double diffL = std::abs(inL - prevSampleL_);
         prevSampleL_ = inL;
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
-        double transientScoreL = std::clamp((diffL - transientFluxL_ * 1.2) / (transientFluxL_ + 1e-5), 0.0, 1.0);
-        double stationaryScoreL = 1.0 - transientScoreL;
 
-        lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-6)) * 0.01;
-        lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.1, 0.9);
+        lpcAlphaL_ = lpcAlphaL_ * 0.99 + (absHfL / (envTotalL_ + 1e-5)) * 0.01;
+        lpcAlphaL_ = std::clamp(lpcAlphaL_, 0.2, 0.95);
 
-        double normHiL = std::clamp(hiL * 2.0, -1.0, 1.0);
-        double cheb2_L = (2.0 * normHiL * normHiL - 1.0) * envHfL_;
+        // ★ 2. チェビシェフ多項式による 2次・3次・4次高調波外挿 (20k〜40kHz+ 拡張)
+        double normHiL = hiL / (envHfL_ + 1e-4);
+        normHiL = std::clamp(normHiL, -2.5, 2.5);
 
-        double harmL = 0.0;
-        if (useQmf_ || mode_ == DseeMode::AUTO_AI) {
-            double toneL = hiL * lpcAlphaL_ * 2.0;
-            double noiseL = cheb2_L * 1.5;
-            double steadyHarm = toneL * 0.70 + noiseL * 0.30;
-            harmL = steadyHarm * stationaryScoreL;
-        } else {
-            if (lpcAlgo_ == 1) {
-                harmL = (hiL * lpcAlphaL_ * 2.2 + cheb2_L * 1.4) * stationaryScoreL;
-            } else if (lpcAlgo_ == 2) {
-                harmL = (hiL * lpcAlphaL_ * 1.8 + cheb2_L * 0.8) * stationaryScoreL;
-            } else {
-                harmL = (hiL * 0.8) * stationaryScoreL;
-            }
+        // 第2高調波 (2f: 20k〜28kHz)
+        double h2_L = (2.0 * normHiL * normHiL - 1.0) * envHfL_;
+        // 第3高調波 (3f: 30k〜42kHz)
+        double h3_L = (4.0 * normHiL * normHiL * normHiL - 3.0 * normHiL) * envHfL_ * 0.75;
+        // 第4高調波 (4f: 40k〜56kHz)
+        double h4_L = (8.0 * std::pow(normHiL, 4) - 8.0 * (normHiL * normHiL) + 1.0) * envHfL_ * 0.50;
+
+        double rawHarmL = h2_L * 0.50 + h3_L * 0.35 + h4_L * 0.25;
+        if (lpcAlgo_ == 2) {
+            rawHarmL = h2_L * 0.65 + h3_L * 0.25 + h4_L * 0.15; // 自然志向
+        } else if (lpcAlgo_ == 3) {
+            rawHarmL = h2_L * 0.40 + h3_L * 0.40 + h4_L * 0.35; // エキサイター
         }
 
-        double outHarmL = bp_b0_ * harmL + bp_s1_L_;
-        bp_s1_L_ = bp_b1_ * harmL - bp_a1_ * outHarmL + bp_s2_L_;
-        bp_s2_L_ = bp_b2_ * harmL - bp_a2_ * outHarmL;
+        // 3. 18.5kHz ハイレゾ HPF 通過 (40kHzまで完全に通過)
+        double outHarmL = out_hp_b0_ * rawHarmL + out_s1_L_;
+        out_s1_L_ = out_hp_b1_ * rawHarmL - out_hp_a1_ * outHarmL + out_s2_L_;
+        out_s2_L_ = out_hp_b2_ * rawHarmL - out_hp_a2_ * outHarmL;
 
-        double targetDynGainL = std::min(envHfL_ * 8.0, targetGain_);
+        double targetDynGainL = std::min(envHfL_ * 15.0, targetGain_);
         double gainDiffL = targetDynGainL - smoothedGainL_;
         smoothedGainL_ += std::clamp(gainDiffL, -maxSlewPerSample, maxSlewPerSample);
 
         left[i] = static_cast<float>(inL + outHarmL * smoothedGainL_);
 
+        // --- Right チャンネル ---
         double inR = static_cast<double>(right[i]);
         double hiR = hp_b0_ * inR + hp_s1_R_;
         hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
 
         double absHfR = std::abs(hiR);
         double absTotalR = std::abs(inR);
-        envHfR_ = envHfR_ * 0.992 + absHfR * 0.008;
+        envHfR_ = envHfR_ * 0.990 + absHfR * 0.010;
         envTotalR_ = envTotalR_ * 0.995 + absTotalR * 0.005;
 
         double diffR = std::abs(inR - prevSampleR_);
         prevSampleR_ = inR;
         transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
-        double transientScoreR = std::clamp((diffR - transientFluxR_ * 1.2) / (transientFluxR_ + 1e-5), 0.0, 1.0);
-        double stationaryScoreR = 1.0 - transientScoreR;
 
-        lpcAlphaR_ = lpcAlphaR_ * 0.99 + (absHfR / (envTotalR_ + 1e-6)) * 0.01;
-        lpcAlphaR_ = std::clamp(lpcAlphaR_, 0.1, 0.9);
+        lpcAlphaR_ = lpcAlphaR_ * 0.99 + (absHfR / (envTotalR_ + 1e-5)) * 0.01;
+        lpcAlphaR_ = std::clamp(lpcAlphaR_, 0.2, 0.95);
 
-        double normHiR = std::clamp(hiR * 2.0, -1.0, 1.0);
-        double cheb2_R = (2.0 * normHiR * normHiR - 1.0) * envHfR_;
+        double normHiR = hiR / (envHfR_ + 1e-4);
+        normHiR = std::clamp(normHiR, -2.5, 2.5);
 
-        double harmR = 0.0;
-        if (useQmf_ || mode_ == DseeMode::AUTO_AI) {
-            double toneR = hiR * lpcAlphaR_ * 2.0;
-            double noiseR = cheb2_R * 1.5;
-            double steadyHarm = toneR * 0.70 + noiseR * 0.30;
-            harmR = steadyHarm * stationaryScoreR;
-        } else {
-            if (lpcAlgo_ == 1) {
-                harmR = (hiR * lpcAlphaR_ * 2.2 + cheb2_R * 1.4) * stationaryScoreR;
-            } else if (lpcAlgo_ == 2) {
-                harmR = (hiR * lpcAlphaR_ * 1.8 + cheb2_R * 0.8) * stationaryScoreR;
-            } else {
-                harmR = (hiR * 0.8) * stationaryScoreR;
-            }
+        double h2_R = (2.0 * normHiR * normHiR - 1.0) * envHfR_;
+        double h3_R = (4.0 * normHiR * normHiR * normHiR - 3.0 * normHiR) * envHfR_ * 0.75;
+        double h4_R = (8.0 * std::pow(normHiR, 4) - 8.0 * (normHiR * normHiR) + 1.0) * envHfR_ * 0.50;
+
+        double rawHarmR = h2_R * 0.50 + h3_R * 0.35 + h4_R * 0.25;
+        if (lpcAlgo_ == 2) {
+            rawHarmR = h2_R * 0.65 + h3_R * 0.25 + h4_R * 0.15;
+        } else if (lpcAlgo_ == 3) {
+            rawHarmR = h2_R * 0.40 + h3_R * 0.40 + h4_R * 0.35;
         }
 
-        double outHarmR = bp_b0_ * harmR + bp_s1_R_;
-        bp_s1_R_ = bp_b1_ * harmR - bp_a1_ * outHarmR + bp_s2_R_;
-        bp_s2_R_ = bp_b2_ * harmR - bp_a2_ * outHarmR;
+        double outHarmR = out_hp_b0_ * rawHarmR + out_s1_R_;
+        out_s1_R_ = out_hp_b1_ * rawHarmR - out_hp_a1_ * outHarmR + out_s2_R_;
+        out_s2_R_ = out_hp_b2_ * rawHarmR - out_hp_a2_ * outHarmR;
 
-        double targetDynGainR = std::min(envHfR_ * 8.0, targetGain_);
+        double targetDynGainR = std::min(envHfR_ * 15.0, targetGain_);
         double gainDiffR = targetDynGainR - smoothedGainR_;
         smoothedGainR_ += std::clamp(gainDiffR, -maxSlewPerSample, maxSlewPerSample);
 
@@ -569,7 +563,7 @@ void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFr
 // DspUpsampler 実装
 // -----------------------------------------------------------------------------
 DspUpsampler::DspUpsampler() {
-    specRingBuf_.assign(2048, 0.0f);
+    specRingBuf_.assign(4096, 0.0f);
     std::fill(std::begin(spectrumDb_), std::end(spectrumDb_), -60.0f);
     configure(1, 48000.0f);
 }
@@ -797,66 +791,75 @@ void DspUpsampler::reset() {
     lpcHarmonicAi_.reset();
 }
 
-// ★ 32バンド 20Hz 〜 40kHz 高解像度 2048点 FFT ＆ 1/3オクターブ帯域エネルギー積算
+// ★ 低域デシメーション高解像度 FFT ＆ 32バンド 1/3オクターブ積分
 void DspUpsampler::analyzeSpectrum(const float* l, const float* r, size_t numFrames) {
     if (!l || !r || numFrames == 0) return;
 
-    // リングバッファに追記
     for (size_t i = 0; i < numFrames; ++i) {
         specRingBuf_[specRingPos_] = (l[i] + r[i]) * 0.5f;
-        specRingPos_ = (specRingPos_ + 1) % 2048;
+        specRingPos_ = (specRingPos_ + 1) % 4096;
     }
 
     constexpr int N = 2048;
-    static float real[N];
-    static float imag[N];
+    static float realHi[N], imagHi[N];
+    static float realLo[N], imagLo[N];
 
-    // Hann 窓をかけながらコピー
+    // 1. 高域用 (630Hz 〜 40kHz) フルレート 2048点 FFT
     for (int i = 0; i < N; ++i) {
-        int idx = (specRingPos_ + i) % N;
+        int idx = (specRingPos_ + 4096 - N + i) % 4096;
         float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
-        real[i] = specRingBuf_[idx] * w;
-        imag[i] = 0.0f;
+        realHi[i] = specRingBuf_[idx] * w;
+        imagHi[i] = 0.0f;
     }
 
-    // Cooley-Tukey Radix-2 FFT
-    int j = 0;
-    for (int i = 0; i < N - 1; ++i) {
-        if (i < j) {
-            std::swap(real[i], real[j]);
-            std::swap(imag[i], imag[j]);
-        }
-        int k = N >> 1;
-        while (k <= j) {
-            j -= k;
-            k >>= 1;
-        }
-        j += k;
+    // 2. 低域用 (25Hz 〜 500Hz) 4:1 デシメーション (実効サンプリングレート 1/4) 2048点 FFT
+    for (int i = 0; i < N; ++i) {
+        int baseIdx = (specRingPos_ + 4096 - (N * 4) + (i * 4)) % 4096;
+        float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) % 4096] + specRingBuf_[(baseIdx + 2) % 4096] + specRingBuf_[(baseIdx + 3) % 4096]) * 0.25f;
+        float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
+        realLo[i] = avg * w;
+        imagLo[i] = 0.0f;
     }
 
-    for (int len = 2; len <= N; len <<= 1) {
-        int half = len >> 1;
-        double angle = -2.0 * PI / len;
-        float wStepR = static_cast<float>(std::cos(angle));
-        float wStepI = static_cast<float>(std::sin(angle));
-        for (int i = 0; i < N; i += len) {
-            float wR = 1.0f;
-            float wI = 0.0f;
-            for (int k = 0; k < half; ++k) {
-                float uR = real[i + k];
-                float uI = imag[i + k];
-                float vR = real[i + k + half] * wR - imag[i + k + half] * wI;
-                float vI = real[i + k + half] * wI + imag[i + k + half] * wR;
-                real[i + k] = uR + vR;
-                imag[i + k] = uI + vI;
-                real[i + k + half] = uR - vR;
-                imag[i + k + half] = uI - vI;
-                float nextWR = wR * wStepR - wI * wStepI;
-                wI = wR * wStepI + wI * wStepR;
-                wR = nextWR;
+    auto runFft = [](float* r, float* im) {
+        int j = 0;
+        for (int i = 0; i < N - 1; ++i) {
+            if (i < j) {
+                std::swap(r[i], r[j]);
+                std::swap(im[i], im[j]);
+            }
+            int k = N >> 1;
+            while (k <= j) {
+                j -= k;
+                k >>= 1;
+            }
+            j += k;
+        }
+        for (int len = 2; len <= N; len <<= 1) {
+            int half = len >> 1;
+            double angle = -2.0 * PI / len;
+            float wStepR = static_cast<float>(std::cos(angle));
+            float wStepI = static_cast<float>(std::sin(angle));
+            for (int i = 0; i < N; i += len) {
+                float wR = 1.0f, wI = 0.0f;
+                for (int k = 0; k < half; ++k) {
+                    float uR = r[i + k], uI = im[i + k];
+                    float vR = r[i + k + half] * wR - im[i + k + half] * wI;
+                    float vI = r[i + k + half] * wI + im[i + k + half] * wR;
+                    r[i + k] = uR + vR;
+                    im[i + k] = uI + vI;
+                    r[i + k + half] = uR - vR;
+                    im[i + k + half] = uI - vI;
+                    float nextWR = wR * wStepR - wI * wStepI;
+                    wI = wR * wStepI + wI * wStepR;
+                    wR = nextWR;
+                }
             }
         }
-    }
+    };
+
+    runFft(realHi, imagHi);
+    runFft(realLo, imagLo);
 
     static constexpr float FREQS[32] = {
         25.0f, 31.5f, 40.0f, 50.0f, 63.0f, 80.0f, 100.0f, 125.0f, 160.0f, 200.0f,
@@ -866,10 +869,10 @@ void DspUpsampler::analyzeSpectrum(const float* l, const float* r, size_t numFra
     };
 
     float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
-    float binHz = currentFs / static_cast<float>(N);
+    float binHzHi = currentFs / static_cast<float>(N);
+    float binHzLo = (currentFs * 0.25f) / static_cast<float>(N);
     float nyquist = currentFs * 0.5f;
 
-    // 各バンドの帯域幅 [fc / 2^(1/6), fc * 2^(1/6)] 内のパワースペクトル合算
     for (int b = 0; b < 32; ++b) {
         float fc = FREQS[b];
         if (fc > nyquist) {
@@ -880,22 +883,33 @@ void DspUpsampler::analyzeSpectrum(const float* l, const float* r, size_t numFra
         float fLow = fc * 0.8909f;
         float fHigh = fc * 1.1225f;
 
-        int binStart = std::clamp(static_cast<int>(fLow / binHz), 1, N / 2 - 1);
-        int binEnd   = std::clamp(static_cast<int>(fHigh / binHz), binStart, N / 2 - 1);
-
         float powerSum = 0.0f;
         int binCount = 0;
-        for (int k = binStart; k <= binEnd; ++k) {
-            float rK = real[k];
-            float iK = imag[k];
-            powerSum += (rK * rK + iK * iK);
-            binCount++;
+
+        if (b < 14) { // 低域 (25Hz 〜 500Hz: デシメーション高解像度 FFT 適用)
+            int binStart = std::clamp(static_cast<int>(fLow / binHzLo), 1, N / 2 - 1);
+            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzLo), binStart, N / 2 - 1);
+            for (int k = binStart; k <= binEnd; ++k) {
+                powerSum += (realLo[k] * realLo[k] + imagLo[k] * imagLo[k]);
+                binCount++;
+            }
+        } else { // 高域 (630Hz 〜 40kHz: フルレート FFT 適用)
+            int binStart = std::clamp(static_cast<int>(fLow / binHzHi), 1, N / 2 - 1);
+            int binEnd   = std::clamp(static_cast<int>(fHigh / binHzHi), binStart, N / 2 - 1);
+            for (int k = binStart; k <= binEnd; ++k) {
+                powerSum += (realHi[k] * realHi[k] + imagHi[k] * imagHi[k]);
+                binCount++;
+            }
         }
 
         float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
-        float rms = std::sqrt(meanPower) / (N * 0.25f);
-        float db = (rms > 1e-5f) ? (20.0f * std::log10(rms)) : -60.0f;
+        float rms = std::sqrt(meanPower) / (N * 0.22f);
 
+        // ★ 聴感周波数特性および超高域感度補正
+        float freqWeight = (fc >= 20000.0f) ? 2.5f : ((fc >= 8000.0f) ? 1.5f : 1.0f);
+        rms *= freqWeight;
+
+        float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
     }
 }
@@ -1054,7 +1068,7 @@ size_t DspUpsampler::process(
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // ★ 最終出力PCM（Float32生データ）から直接高精度スペクトルを解析
+    // ★ 最終出力PCMから直接マルチレート高精度スペクトルを解析
     analyzeSpectrum(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
     // [Step 6] ディザリング ＆ PCM パッキング

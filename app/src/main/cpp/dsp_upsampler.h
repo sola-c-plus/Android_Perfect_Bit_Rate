@@ -155,7 +155,7 @@ private:
 class DspLpcHarmonicAi {
 public:
     DspLpcHarmonicAi();
-    void configure(DseeMode mode, double sampleRate, int lpcAlgo = 1, float gain = 0.12f, float extractFreq = 10000.0f, bool useQmf = false);
+    void configure(DseeMode mode, double sampleRate, int lpcAlgo = 1, float gain = 0.18f, float extractFreq = 10000.0f, bool useQmf = false);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
 
@@ -166,20 +166,22 @@ private:
     int lpcAlgo_ = 1;
     bool useQmf_ = false;
 
+    // 10k〜14k 原音抽出 HPF
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
-    double bp_b0_ = 1.0, bp_b1_ = 0.0, bp_b2_ = -1.0;
-    double bp_a1_ = 0.0, bp_a2_ = 0.0;
-    double bp_s1_L_ = 0.0, bp_s2_L_ = 0.0;
-    double bp_s1_R_ = 0.0, bp_s2_R_ = 0.0;
+    // ★ 18.5kHz〜40kHz+ ハイレゾ通過 HPF
+    double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
+    double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
+    double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
+    double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
     double envHfL_ = 0.0, envHfR_ = 0.0;
     double envTotalL_ = 0.0, envTotalR_ = 0.0;
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
     double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
-    double targetGain_ = 0.12;
+    double targetGain_ = 0.35;
 
     double smoothedGainL_ = 0.0;
     double smoothedGainR_ = 0.0;
@@ -230,7 +232,6 @@ public:
 
     void reset();
 
-    // ★ C++ Native 32バンド スペクトルデータ取得
     void getSpectrum(float* out32Bands);
 
 private:
@@ -238,7 +239,7 @@ private:
     void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
 
-    // ★ 2048点 高解像度 FFT ＆ 1/3オクターブ積分
+    // ★ マルチレート（低域デシメーション＋高域フルレート）2048点 FFT 解析
     void analyzeSpectrum(const float* l, const float* r, size_t numFrames);
 
     int factor_ = 1;
@@ -258,8 +259,8 @@ private:
     TransientMode transientMode_ = TransientMode::ACOUSTIC;
 
     int customLpcAlgo_ = 1;
-    float customGain_ = 0.14f;
-    float customExtractFreq_ = 12000.0f;
+    float customGain_ = 0.18f;
+    float customExtractFreq_ = 10000.0f;
     bool customUseQmf_ = true;
 
     bool customUseGroupDelay_ = true;
@@ -286,7 +287,6 @@ private:
     std::vector<float, AlignedAllocator<float, 16>> tempOutL_;
     std::vector<float, AlignedAllocator<float, 16>> tempOutR_;
 
-    // ★ 32バンド スペクトル解析用バッファ
     float spectrumDb_[32] = {-60.0f};
     std::vector<float> specRingBuf_;
     size_t specRingPos_ = 0;
