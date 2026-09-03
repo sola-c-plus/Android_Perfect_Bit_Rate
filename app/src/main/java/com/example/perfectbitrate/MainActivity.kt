@@ -165,17 +165,11 @@ class MainActivity : AppCompatActivity() {
 
     private val presetProfiles = mutableMapOf<Int, PresetProfile>()
 
-    // ★ プロスタジオ最適化 プリセット黄金値
     private fun initDefaultProfiles() {
-        // [1] Auto AI: 完全自動インテリジェント適応 (Min Phase Sharp, Acoustic, DSEE AI, 0.16, 10.5kHz, QMF=ON, GD=ON, Lattice=ON)
         presetProfiles[1] = PresetProfile(2, 3, 1, 0.16f, 10500.0f, useQmf = true, useGroupDelay = true, useLattice = true)
-        // [2] 男性ボーカル: サ行刺さりゼロ＆アナログ厚み (Min Phase Slow, Natural, K2 LPC, 0.11, 9.5kHz, QMF=ON, GD=OFF, Lattice=OFF)
         presetProfiles[2] = PresetProfile(3, 1, 2, 0.11f, 9500.0f, useQmf = true, useGroupDelay = false, useLattice = false)
-        // [3] 女性ボーカル: ブレス透明感＆シルキーな伸び (Min Phase Sharp, Natural, DSEE AI, 0.14, 11.0kHz, QMF=ON, GD=OFF, Lattice=ON)
         presetProfiles[3] = PresetProfile(2, 1, 1, 0.14f, 11000.0f, useQmf = true, useGroupDelay = false, useLattice = true)
-        // [4] パーカッション: ドラムパンチ＆金属倍音 (Min Phase Sharp, Punch, Exciter, 0.18, 11.5kHz, QMF=ON, GD=ON, Lattice=ON)
         presetProfiles[4] = PresetProfile(2, 2, 3, 0.18f, 11500.0f, useQmf = true, useGroupDelay = true, useLattice = true)
-        // [5] ストリングス: 広大音場＆完全線形位相 (Linear Phase Slow, Acoustic, K2 LPC, 0.13, 10.0kHz, QMF=ON, GD=OFF, Lattice=OFF)
         presetProfiles[5] = PresetProfile(1, 3, 2, 0.13f, 10000.0f, useQmf = true, useGroupDelay = false, useLattice = false)
 
         for (id in 1..5) {
@@ -218,6 +212,7 @@ class MainActivity : AppCompatActivity() {
     private var isPlayingState = false
 
     private val uiHandler = Handler(Looper.getMainLooper())
+    // ★ 30ms 高速UI更新ループ
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
@@ -229,7 +224,7 @@ class MainActivity : AppCompatActivity() {
             }
             updateStatus()
             updateDialogPlayerUi()
-            uiHandler.postDelayed(this, 100)
+            uiHandler.postDelayed(this, 30)
         }
     }
 

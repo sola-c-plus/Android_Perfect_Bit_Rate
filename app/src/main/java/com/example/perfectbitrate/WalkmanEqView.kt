@@ -68,7 +68,6 @@ class WalkmanEqView @JvmOverloads constructor(
     private val targetSpectrum = FloatArray(NUM_SPEC_BANDS) { -55f }
     private val currentSpectrum = FloatArray(NUM_SPEC_BANDS) { -55f }
     private var lastSpectrumDrawTime = 0L
-    private val spectrumDecayRate = 90f
 
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#1C1C1C")
@@ -179,9 +178,6 @@ class WalkmanEqView @JvmOverloads constructor(
         for (i in 0 until count) {
             val safeDb = if (levels[i].isNaN() || levels[i].isInfinite()) -55f else levels[i].coerceIn(-55f, 0f)
             targetSpectrum[i] = safeDb
-            if (safeDb > currentSpectrum[i]) {
-                currentSpectrum[i] = safeDb
-            }
         }
         postInvalidateOnAnimation()
     }
@@ -237,7 +233,7 @@ class WalkmanEqView @JvmOverloads constructor(
 
         spectrumFillPaint.shader = LinearGradient(
             0f, gridTop, 0f, gridBottom,
-            Color.parseColor("#3AE5A93C"),
+            Color.parseColor("#3CE5A93C"),
             Color.parseColor("#00E5A93C"),
             Shader.TileMode.CLAMP
         )
@@ -249,10 +245,9 @@ class WalkmanEqView @JvmOverloads constructor(
         return gridBottom - norm * gridHeight
     }
 
-    // ★ スペクトルの描画レンジ (-50dB 〜 0dB をフルスケール描画)
     private fun spectrumDbToY(db: Float): Float {
-        val clamped = db.coerceIn(-50f, 0f)
-        val norm = (clamped + 50f) / 50f
+        val clamped = db.coerceIn(-52f, 0f)
+        val norm = (clamped + 52f) / 52f
         return gridBottom - norm * (gridHeight * 0.96f)
     }
 
@@ -267,16 +262,22 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (gridWidth <= 0 || gridHeight <= 0) return
 
+        // ★ 60fps / 120fps 完全同期の超滑らかなアタック・ディケイ補間
         val now = System.currentTimeMillis()
-        if (lastSpectrumDrawTime > 0L) {
-            val dt = (now - lastSpectrumDrawTime) / 1000f
-            for (i in 0 until NUM_SPEC_BANDS) {
-                if (currentSpectrum[i] > targetSpectrum[i]) {
-                    currentSpectrum[i] = max(targetSpectrum[i], currentSpectrum[i] - spectrumDecayRate * dt)
-                }
+        val dt = if (lastSpectrumDrawTime > 0L) min(0.05f, (now - lastSpectrumDrawTime) / 1000f) else 0.016f
+        lastSpectrumDrawTime = now
+
+        for (i in 0 until NUM_SPEC_BANDS) {
+            val target = targetSpectrum[i]
+            val current = currentSpectrum[i]
+            if (target > current) {
+                // 上昇時: 瞬時になめらか追従
+                currentSpectrum[i] = current + (target - current) * 0.40f
+            } else {
+                // 下降時: 75dB/s で絹のように滑らかに減衰
+                currentSpectrum[i] = max(target, current - 75f * dt)
             }
         }
-        lastSpectrumDrawTime = now
 
         // ハイレゾ超高域ゾーン (20kHz〜44kHz) の薄いゴールド背景ハイライト
         val x20k = freqToX(20000.0)
@@ -308,7 +309,7 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
-        // ★ 32バンド スペクトル波形描画
+        // ★ 32バンド スペクトル波形描画 (25Hz 〜 40kHz)
         if (isSpectrumEnabled) {
             val n = NUM_SPEC_BANDS
             val xSpec = FloatArray(n)
@@ -362,14 +363,14 @@ class WalkmanEqView @JvmOverloads constructor(
             canvas.drawPath(spectrumFillPath, spectrumFillPaint)
             canvas.drawPath(spectrumPath, spectrumLinePaint)
 
-            var isStillDecaying = false
+            var isStillMoving = false
             for (i in 0 until NUM_SPEC_BANDS) {
-                if (currentSpectrum[i] > targetSpectrum[i] + 0.1f) {
-                    isStillDecaying = true
+                if (abs(currentSpectrum[i] - targetSpectrum[i]) > 0.05f) {
+                    isStillMoving = true
                     break
                 }
             }
-            if (isStillDecaying) {
+            if (isStillMoving) {
                 postInvalidateOnAnimation()
             }
         }

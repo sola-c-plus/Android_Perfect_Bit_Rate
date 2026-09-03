@@ -166,23 +166,20 @@ private:
     int lpcAlgo_ = 1;
     bool useQmf_ = false;
 
-    // 10k〜14k 原音抽出 HPF
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
-    // 18.5kHz〜40kHz+ ハイレゾ通過 HPF
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
-    // DCブロッカー状態
     double dcL_ = 0.0, dcR_ = 0.0;
 
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
     double envHfL_ = 0.0, envHfR_ = 0.0;
     double envTotalL_ = 0.0, envTotalR_ = 0.0;
-    double transientFluxL_ = 0.0, transientFluxR_ = 0.0; // ★ 宣言追加
+    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
     double targetGain_ = 0.25;
 
     double smoothedGainL_ = 0.0;
@@ -241,7 +238,26 @@ private:
     void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
 
-    void analyzeSpectrum(const float* l, const float* r, size_t numFrames);
+    // ★ 32バンド 2次 IIR フィルタバンク構造体
+    struct SpecBiquad {
+        float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+        float a1 = 0.0f, a2 = 0.0f;
+        float s1 = 0.0f, s2 = 0.0f;
+        float env = 0.0f;
+        bool active = true;
+
+        void initBandpass(float f0, float Q, float fs);
+        inline float processSample(float in) {
+            if (!active) return 0.0f;
+            float out = b0 * in + s1;
+            s1 = b1 * in - a1 * out + s2;
+            s2 = b2 * in - a2 * out;
+            return out;
+        }
+    };
+
+    void initSpectrumFilterBank(float fs);
+    void processSpectrumFilterBank(const float* l, const float* r, size_t numFrames);
 
     int factor_ = 1;
     float inSampleRate_ = 48000.0f;
@@ -288,7 +304,7 @@ private:
     std::vector<float, AlignedAllocator<float, 16>> tempOutL_;
     std::vector<float, AlignedAllocator<float, 16>> tempOutR_;
 
+    // ★ 32バンド IIR フィルタバンク
+    std::array<SpecBiquad, 32> specFilters_;
     float spectrumDb_[32] = {-60.0f};
-    std::vector<float> specRingBuf_;
-    size_t specRingPos_ = 0;
 };
