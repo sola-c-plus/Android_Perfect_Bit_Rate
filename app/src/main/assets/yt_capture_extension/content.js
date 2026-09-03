@@ -157,7 +157,6 @@ function scanStreamCodec() {
         lastCodecName = detectedName;
         detectedStreamRate = detectedRate;
 
-        // 音源の本来のネイティブレート (AAC=44100, Opus=48000) を通知
         postNativeMessage({
             type: "codec",
             codec: detectedName,
@@ -165,7 +164,7 @@ function scanStreamCodec() {
         });
     }
 }
-setInterval(scanStreamCodec, 1500);
+setInterval(scanStreamCodec, 1000);
 
 function bytesToBase64(bytes) {
     let binary = '';
@@ -180,7 +179,18 @@ function bytesToBase64(bytes) {
 
 function attachAudioPipeline(mediaEl) {
     if (!mediaEl) return;
-    currentMediaElement = mediaEl;
+    if (currentMediaElement !== mediaEl) {
+        currentMediaElement = mediaEl;
+
+        // ★ 曲・メディア切り替えイベントのフック: 曲が変わった瞬間にミリ秒で即座に検知＆フラッシュ
+        const onTrackChanged = () => {
+            scanStreamCodec();
+            postNativeMessage({ type: "flush" });
+        };
+        mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
+        mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
+        mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
+    }
 
     try {
         const ctx = getAudioContext();
@@ -219,19 +229,15 @@ function attachAudioPipeline(mediaEl) {
 
                 const base64Pcm = bytesToBase64(bytes);
 
-                // PCMデータとともに、音源レートとキャプチャレートを両方通知
                 postNativeMessage({
                     type: "pcm",
                     pcm: base64Pcm,
                     sampleRate: detectedStreamRate,
-                    captureRate: ctx.sampleRate || 48000,
                     bitMode: "float32"
                 });
             };
         }
 
-        // ★重要: ctx.destination ではなく、仮想ストリーム (createMediaStreamDestination) に接続！
-        // これにより GeckoView が Android OS の USB DAC (192kHzポート) を占有するのを完全遮断する
         if (!virtualDest || virtualDest.context !== ctx) {
             virtualDest = ctx.createMediaStreamDestination();
         }
@@ -297,10 +303,13 @@ function handleNativeMessage(msg) {
         }
     } else if (cmd === 'next') {
         document.querySelector('.next-button')?.click();
+        postNativeMessage({ type: "flush" });
     } else if (cmd === 'prev') {
         document.querySelector('.previous-button')?.click();
+        postNativeMessage({ type: "flush" });
     } else if (cmd === 'seek' && msg.position !== undefined) {
         if (video) video.currentTime = msg.position / 1000.0;
+        postNativeMessage({ type: "flush" });
     } else if (cmd === 'setAdBlock' && msg.enabled !== undefined) {
         adBlockEnabled = msg.enabled;
         updateAdBlockStyles(msg.enabled);

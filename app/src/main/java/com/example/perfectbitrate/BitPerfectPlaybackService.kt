@@ -91,7 +91,7 @@ class BitPerfectPlaybackService : Service() {
     private var currentDuration = 0L
     private var currentPosition = 0L
     @Volatile var isCurrentlyPlaying = false
-    private var currentArtwork: Bitmap? = null
+    private var currentArtworkBitmap: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
 
     private var lastVolumeKeyTime = 0L
@@ -187,7 +187,7 @@ class BitPerfectPlaybackService : Service() {
 
         startPlaybackLoop()
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying, currentPosition, currentDuration)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isCurrentlyPlaying, currentPosition, currentDuration)
     }
 
     fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
@@ -242,7 +242,6 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
-    // ★ 古いミキサー設定の完全消去
     private fun clearPreviousMixerAttributes() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val devToClear = lastConfiguredMixerDevice ?: activeOutputDevice
@@ -253,12 +252,29 @@ class BitPerfectPlaybackService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                     audioManager.clearPreferredMixerAttributes(mediaAttr, dev)
-                    Log.i("BitPerfect", "★ Successfully cleared previous mixer attributes on ${dev.productName}")
-                } catch (e: Exception) {
-                    Log.e("BitPerfect", "Clear mixer attributes error", e)
-                }
+                } catch (e: Exception) {}
             }
             lastConfiguredMixerDevice = null
+        }
+    }
+
+    fun setOutputDevice(device: AudioDeviceInfo?) {
+        val changed = (activeOutputDevice?.id != device?.id)
+        activeOutputDevice = device
+
+        if (device == null) {
+            isVolumeLocked = false
+            muteVolumeToZero()
+            clearPreviousMixerAttributes()
+        }
+
+        updateVolumeControlMode()
+
+        if (changed && device != null) {
+            isBuffering.set(true)
+            trackExecutor.execute {
+                initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, device)
+            }
         }
     }
 
@@ -271,26 +287,49 @@ class BitPerfectPlaybackService : Service() {
         }
         upsampleFactor = validFactor
         effectiveSampleRate = baseSampleRate * validFactor
+        NativeAudioEngine.nativeConfigureUpsampler(validFactor, baseSampleRate)
         isBuffering.set(true)
         trackExecutor.execute {
             initAudioTrack(currentBitMode, baseSampleRate, validFactor, activeOutputDevice)
         }
     }
 
+    // ★ レート切り替え時：古いレートの残骸PCMを即座に完全パージし、新しい設定が完了するまでブロック
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
         isCurrentlyPlaying = true
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
         val targetEffectiveRate = actualInputRate * upsampleFactor
 
-        val needsRecreate = (actualInputRate != baseSampleRate ||
-                             targetEffectiveRate != effectiveSampleRate || 
-                             audioTrack == null || 
-                             audioTrack?.state != AudioTrack.STATE_INITIALIZED)
+        // レートの不一致を検知した瞬間
+        if (actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate) {
+            // 1. 古いレートの残骸PCMキューをその場で直ちに全消去 (スロー/早送り再生の根絶)
+            pcmQueue.clear()
+            isBuffering.set(true)
+            NativeAudioEngine.nativeResetUpsampler()
 
-        if (needsRecreate && !isInitializingTrack.get()) {
+            audioLock.lock()
+            try {
+                audioTrack?.flush()
+            } catch (e: Exception) {}
+            finally {
+                audioLock.unlock()
+            }
+
             baseSampleRate = actualInputRate
             effectiveSampleRate = targetEffectiveRate
+            NativeAudioEngine.nativeConfigureUpsampler(upsampleFactor, baseSampleRate)
+
+            // 2. 新しいレートでAudioTrackを再初期化
+            trackExecutor.execute {
+                initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
+            }
+            // 3. 古いストリーム設定のまま下へ流さず、このパケットは安全に破棄
+            return
+        }
+
+        val needsRecreate = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED)
+        if (needsRecreate && !isInitializingTrack.get()) {
             isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, activeOutputDevice)
@@ -311,32 +350,20 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★ 曲切り替え時の即時バッファ消去
     fun resetBuffer() {
         isBuffering.set(true)
         pcmQueue.clear()
+        audioLock.lock()
+        try {
+            audioTrack?.flush()
+        } catch (e: Exception) {}
+        finally {
+            audioLock.unlock()
+        }
         NativeAudioEngine.nativeResetUpsampler()
         tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
-    }
-
-    fun setOutputDevice(device: AudioDeviceInfo?) {
-        val changed = (activeOutputDevice?.id != device?.id)
-        activeOutputDevice = device
-
-        if (device == null) {
-            isVolumeLocked = false
-            muteVolumeToZero()
-            clearPreviousMixerAttributes()
-        }
-
-        updateVolumeControlMode()
-
-        if (changed && audioTrack != null) {
-            isBuffering.set(true)
-            trackExecutor.execute {
-                initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, device)
-            }
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -401,14 +428,14 @@ class BitPerfectPlaybackService : Service() {
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentArtist)
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
 
-        if (currentArtwork != null) {
-            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
-            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
+        if (currentArtworkBitmap != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtworkBitmap)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtworkBitmap)
         }
 
         mediaSession.setMetadata(metaBuilder.build())
         updatePlaybackState(isPlaying, currentMs)
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying, currentMs, durationMs)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isPlaying, currentMs, durationMs)
     }
 
     fun forceCloseDacStream() {
@@ -435,7 +462,7 @@ class BitPerfectPlaybackService : Service() {
             }
         }
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, false, currentPosition, currentDuration)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, false, currentPosition, currentDuration)
     }
 
     fun updatePlaybackState(isPlaying: Boolean, position: Long = currentPosition) {
@@ -459,7 +486,7 @@ class BitPerfectPlaybackService : Service() {
             forceCloseDacStream()
         }
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isPlaying, position, currentDuration)
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isPlaying, position, currentDuration)
     }
 
     fun updateCodec(codec: String) {
@@ -477,25 +504,26 @@ class BitPerfectPlaybackService : Service() {
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, currentDuration)
 
-        if (currentArtwork != null) {
-            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
-            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
+        if (currentArtworkBitmap != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtworkBitmap)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtworkBitmap)
         }
 
         mediaSession.setMetadata(metaBuilder.build())
         updateNotification()
-        PlayerWidgetProvider.updateAllWidgets(this, title, artist, currentArtwork, isCurrentlyPlaying, currentPosition, currentDuration)
+        PlayerWidgetProvider.updateAllWidgets(this, title, artist, currentArtworkBitmap, isCurrentlyPlaying, currentPosition, currentDuration)
 
         if (artworkUrl.isNotEmpty()) {
             imageExecutor.execute {
                 try {
                     val stream = URL(artworkUrl).openStream()
-                    currentArtwork = BitmapFactory.decodeStream(stream)
-                    metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, currentArtwork)
-                    metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, currentArtwork)
+                    val bmp = BitmapFactory.decodeStream(stream)
+                    currentArtworkBitmap = bmp
+                    metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bmp)
+                    metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bmp)
                     mediaSession.setMetadata(metaBuilder.build())
                     updateNotification()
-                    PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtwork, isCurrentlyPlaying, currentPosition, currentDuration)
+                    PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isCurrentlyPlaying, currentPosition, currentDuration)
                 } catch (e: Exception) {}
             }
         }
@@ -535,7 +563,7 @@ class BitPerfectPlaybackService : Service() {
             .setContentTitle(currentTitle)
             .setContentText("$currentArtist | $currentCodec$upsampleTag")
             .setSubText("${effectiveSampleRate}Hz $bitStr $deviceLabel")
-            .setLargeIcon(currentArtwork)
+            .setLargeIcon(currentArtworkBitmap)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(contentPendingIntent)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -560,7 +588,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ DAC性能上限自動クランプ & 192k強制ロック完全解消初期化
     fun initAudioTrack(
         bitMode: String,
         baseRate: Int = baseSampleRate,
@@ -574,7 +601,6 @@ class BitPerfectPlaybackService : Service() {
         try {
             audioLock.lock()
             try {
-                // 1. 旧トラック停止と完全解放
                 val oldTrack = audioTrack
                 audioTrack = null
                 pcmQueue.clear()
@@ -590,11 +616,7 @@ class BitPerfectPlaybackService : Service() {
                     } catch (e: Exception) {}
                 }
 
-                // ★ 古い192k設定をOSから確実に解除
                 clearPreviousMixerAttributes()
-
-                // DACハードウェアのPLLロック完全解除待ち (200ms)
-                try { Thread.sleep(200) } catch (e: InterruptedException) {}
 
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
@@ -602,8 +624,7 @@ class BitPerfectPlaybackService : Service() {
 
                 var targetRate = baseRate * factor
 
-                // ★ DACハードウェア上限自動クランプ (Hardware Capability Guard)
-                // 192kまでしか対応していないDACで384kを要求してゾンビ化するのを物理的に防ぐ
+                // DACハードウェア上限自動クランプ
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                     val supportedMixers = try {
                         audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -613,11 +634,9 @@ class BitPerfectPlaybackService : Service() {
 
                     val supportedRates = supportedMixers.map { it.format.sampleRate }.toSet()
                     if (supportedRates.isNotEmpty() && !supportedRates.contains(targetRate)) {
-                        // 要求レート以下の最大対応レートに自動クランプ (例: 384k -> 192k)
                         val safeClampedRate = supportedRates.filter { it <= targetRate }.maxOrNull()
                             ?: supportedRates.maxOrNull()
                             ?: targetRate
-                        Log.w("BitPerfect", "★ Target rate $targetRate Hz exceeds DAC capacity! Clamped to $safeClampedRate Hz.")
                         targetRate = safeClampedRate
                     }
                 }
@@ -634,7 +653,6 @@ class BitPerfectPlaybackService : Service() {
                 var finalEncoding = AudioFormat.ENCODING_PCM_16BIT
                 var lockSuccess = false
 
-                // 2. Android 14+ ハードウェアクロック切り替え
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                     val supportedMixers = try {
                         audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -679,12 +697,9 @@ class BitPerfectPlaybackService : Service() {
                                 lastConfiguredMixerDevice = targetDevice
                                 finalEncoding = matched.format.encoding
                                 lockSuccess = true
-                                Log.i("BitPerfect", "★ DAC Clock Locked to ${effectiveSampleRate} Hz (enc=$finalEncoding): SUCCESS")
                                 break
                             }
-                        } catch (e: Exception) {
-                            Log.w("BitPerfect", "Mixer set try failed for enc=$tryEnc", e)
-                        }
+                        } catch (e: Exception) {}
                     }
 
                     if (!lockSuccess) {
@@ -692,7 +707,6 @@ class BitPerfectPlaybackService : Service() {
                     }
                 }
 
-                // 3. AudioTrack の作成
                 val bytesPerSample = when (finalEncoding) {
                     AudioFormat.ENCODING_PCM_32BIT -> 4
                     AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3

@@ -1233,8 +1233,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ 曲変更・フラッシュ受信ハンドラ
     private fun handleIncomingMessage(msg: JSONObject) {
         when (msg.optString("type")) {
+            "flush" -> {
+                // 曲が変わった瞬間に即座に残留キューをパージ
+                playbackService?.resetBuffer()
+            }
             "pcm" -> {
                 val base64Pcm = msg.optString("pcm", "")
                 if (base64Pcm.isNotEmpty()) {
@@ -1256,6 +1261,7 @@ class MainActivity : AppCompatActivity() {
                 currentCodec = msg.optString("codec", currentCodec)
                 val rate = msg.optInt("sampleRate", 0)
                 if (rate > 0 && rate != baseSampleRate) {
+                    playbackService?.resetBuffer()
                     baseSampleRate = rate
                     playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
                 }
