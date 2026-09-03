@@ -45,7 +45,7 @@ const itagMap = {
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
 
-// ★ スマート反転 (Smart Invert): Shadow DOMを貫通して全文字・ボタンを高コントラスト黒化
+// ★ 正確なスマート反転: コンテナ(panelやdiv)を巻き込まず、メディア要素そのものだけをピンポイント再反転
 const SMART_INVERT_CSS = `
     /* 1. ページ全体を反転して完全White化 (黒背景->白, 白文字->黒) */
     html {
@@ -53,19 +53,32 @@ const SMART_INVERT_CSS = `
         background-color: #000000 !important;
     }
 
-    /* 2. アルバムジャケット・動画・サムネイル・アイコン画像を再反転 (本来のフルカラーを100%維持) */
-    img, video, picture, canvas,
-    yt-img-shadow, ytmusic-thumbnail-renderer,
-    .image.ytmusic-two-row-item-renderer,
-    #thumbnail, #avatar, #artist-header,
+    /* 2. 画像・動画・キャンバス・背景画像「のみ」を再反転 (本来のフルカラーを100%維持) */
+    /* ※ 親コンテナ(div, panel, yt-img-shadow等)には絶対に指定しないことで二重反転・UI白飛びを完全根絶 */
+    img,
+    video,
+    canvas,
     [style*="background-image"],
-    ytmusic-player-page #main-panel img,
-    ytmusic-player #song-image img {
+    [style*="background: url"] {
         filter: invert(1) hue-rotate(180deg) !important;
     }
 
-    /* 3. 背景暗転オーバーレイの濁りを除去 */
-    tp-yt-iron-overlay-backdrop, iron-overlay-backdrop {
+    /* 3. pictureタグ等のコンテナへの二重適用を明示的に遮断 */
+    picture {
+        filter: none !important;
+    }
+
+    /* 4. YT MUSIC ロゴ補正: アイコンを鮮やかな赤、文字を白背景でクッキリ読める黒として表示 */
+    ytmusic-logo img,
+    a.ytmusic-logo img,
+    .logo.ytmusic-logo,
+    img[src*="on_platform_logo_dark"] {
+        filter: saturate(400%) contrast(120%) !important;
+    }
+
+    /* 5. 背景暗転オーバーレイの濁りを除去 */
+    tp-yt-iron-overlay-backdrop,
+    iron-overlay-backdrop {
         opacity: 0.35 !important;
     }
 `;
