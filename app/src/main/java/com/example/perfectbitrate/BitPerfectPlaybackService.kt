@@ -72,14 +72,14 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    // ★ ピーク ＆ 10バンドスペクトル通知リスナー
+    // ★ ピーク ＆ 32バンド スペクトル通知リスナー
     var onPeakListener: ((Float, Float, Int, FloatArray) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
 
-    // ★ 高速 10バンド FFT スペクトルアナライザー
-    private val spectrumAnalyzer = SpectrumAnalyzer()
-    private val tempSpectrumOut = FloatArray(10) { -50f }
+    // ★ 32バンド FFT スペクトルアナライザー
+    private val spectrumAnalyzer = SpectrumAnalyzer32()
+    private val tempSpectrumOut = FloatArray(32) { -50f }
 
     var isVolumeLocked = false
         set(value) {
@@ -854,7 +854,7 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        // 10バンドスペクトル計算
+        // 32バンド スペクトル計算
         spectrumAnalyzer.compute(floatSamples, sampleIdx, tempSpectrumOut)
 
         onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, tempSpectrumOut)
@@ -917,18 +917,24 @@ class BitPerfectPlaybackService : Service() {
         stopServiceCleanly()
     }
 
-    // ★ 内部用 高速 10バンド FFT スペクトル計算クラス
-    private class SpectrumAnalyzer {
+    // ★ 32バンド 高精度対数 FFT スペクトルアナライザー
+    private class SpectrumAnalyzer32 {
         private val fftSize = 512
         private val window = FloatArray(fftSize) { i ->
             (0.54 - 0.46 * cos(2.0 * Math.PI * i / (fftSize - 1))).toFloat()
         }
         private val real = FloatArray(fftSize)
         private val imag = FloatArray(fftSize)
-        private val bandBins = IntArray(10)
+
+        private val freqs = floatArrayOf(
+            25f, 31.5f, 40f, 50f, 63f, 80f, 100f, 125f, 160f, 200f,
+            250f, 315f, 400f, 500f, 630f, 800f, 1000f, 1250f, 1600f, 2000f,
+            2500f, 3150f, 4000f, 5000f, 6300f, 8000f, 10000f, 12500f, 16000f, 20000f,
+            28000f, 40000f
+        )
+        private val bandBins = IntArray(freqs.size)
 
         fun init(sampleRate: Int) {
-            val freqs = floatArrayOf(31.25f, 62.5f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
             val sr = max(8000, sampleRate)
             for (i in freqs.indices) {
                 val bin = ((freqs[i] * fftSize) / sr).toInt().coerceIn(1, fftSize / 2 - 1)
@@ -949,7 +955,8 @@ class BitPerfectPlaybackService : Service() {
 
             fft(real, imag, fftSize)
 
-            for (b in 0 until 10) {
+            val outLen = min(outBands.size, freqs.size)
+            for (b in 0 until outLen) {
                 val centerBin = bandBins[b]
                 val r = real[centerBin]
                 val im = imag[centerBin]
