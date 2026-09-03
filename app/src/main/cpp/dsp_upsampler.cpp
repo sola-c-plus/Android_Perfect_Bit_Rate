@@ -278,7 +278,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
     const double maxSlewPerSample = 0.001;
 
     for (size_t i = 0; i < numFrames; ++i) {
-        // Left
         double inL = static_cast<double>(left[i]);
         double hiL = hp_b0_ * inL + hp_s1_L_;
         hp_s1_L_ = hp_b1_ * inL - hp_a1_ * hiL;
@@ -331,7 +330,6 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         }
         left[i] = static_cast<float>(totalL);
 
-        // Right
         double inR = static_cast<double>(right[i]);
         double hiR = hp_b0_ * inR + hp_s1_R_;
         hp_s1_R_ = hp_b1_ * inR - hp_a1_ * hiR;
@@ -576,7 +574,7 @@ void DspDcPhaseLinearizer::processStereo(float* left, float* right, size_t numFr
 }
 
 // -----------------------------------------------------------------------------
-// ★ 32バンド 2次 IIR フィルタバンク (極限の軽さ ＆ 完璧な低域分離) 実装
+// ★ 32バンド 1/3オクターブ完全同期 2次 IIR フィルタバンク
 // -----------------------------------------------------------------------------
 void DspUpsampler::SpecBiquad::initBandpass(float f0, float Q, float fs) {
     s1 = 0.0f;
@@ -610,15 +608,15 @@ void DspUpsampler::SpecBiquad::initBandpass(float f0, float Q, float fs) {
 }
 
 void DspUpsampler::initSpectrumFilterBank(float fs) {
+    // ★ 31.25Hz から 40,000Hz までの 1/3オクターブ等間隔完全同期周波数 (32バンド)
     static constexpr float FREQS[32] = {
-        25.0f, 31.5f, 40.0f, 50.0f, 63.0f, 80.0f, 100.0f, 125.0f, 160.0f, 200.0f,
-        250.0f, 315.0f, 400.0f, 500.0f, 630.0f, 800.0f, 1000.0f, 1250.0f, 1600.0f, 2000.0f,
-        2500.0f, 3150.0f, 4000.0f, 5000.0f, 6300.0f, 8000.0f, 10000.0f, 12500.0f, 16000.0f, 20000.0f,
-        28000.0f, 40000.0f
+        31.25f, 39.37f, 49.61f, 62.50f, 78.75f, 99.21f, 125.00f, 157.49f, 198.43f, 250.00f,
+        314.98f, 396.85f, 500.00f, 629.96f, 793.70f, 1000.00f, 1259.92f, 1587.40f, 2000.00f,
+        2519.84f, 3174.80f, 4000.00f, 5039.68f, 6349.60f, 8000.00f, 10079.37f, 12699.21f, 16000.00f,
+        20158.74f, 25398.42f, 32000.00f, 40000.00f
     };
 
     for (int b = 0; b < 32; ++b) {
-        // 低域は選択度をややシャープ(Q=2.2)に、高域は広帯域(Q=1.6)に設定
         float Q = (b < 12) ? 2.2f : 1.6f;
         specFilters_[b].initBandpass(FREQS[b], Q, fs);
     }
@@ -627,7 +625,6 @@ void DspUpsampler::initSpectrumFilterBank(float fs) {
 void DspUpsampler::processSpectrumFilterBank(const float* l, const float* r, size_t numFrames) {
     if (!l || !r || numFrames == 0) return;
 
-    // 処理負荷を極限まで抑えるため 8サンプルごとにデシメーション追従
     constexpr size_t step = 8;
     for (size_t i = 0; i < numFrames; i += step) {
         float mono = (l[i] + r[i]) * 0.5f;
@@ -639,7 +636,6 @@ void DspUpsampler::processSpectrumFilterBank(const float* l, const float* r, siz
             float y = f.processSample(mono);
             float absY = std::abs(y);
 
-            // アタック: 超高速 (1ms), リリース: 滑らか (45ms)
             if (absY > f.env) {
                 f.env = f.env * 0.70f + absY * 0.30f;
             } else {
@@ -648,7 +644,6 @@ void DspUpsampler::processSpectrumFilterBank(const float* l, const float* r, siz
         }
     }
 
-    // 各バンドの dBFS 算出 (感度重み付け)
     for (int b = 0; b < 32; ++b) {
         auto& f = specFilters_[b];
         if (!f.active) {
@@ -656,7 +651,6 @@ void DspUpsampler::processSpectrumFilterBank(const float* l, const float* r, siz
             continue;
         }
 
-        // 超高域の視覚感度を補正
         float gainFactor = (b >= 28) ? 3.0f : ((b >= 20) ? 1.8f : 1.2f);
         float val = f.env * gainFactor;
         float db = (val > 1e-5f) ? (20.0f * std::log10(val)) : -60.0f;
@@ -876,7 +870,6 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     transientRestorer_.configure(transientMode_, static_cast<double>(currentFs), customUseGroupDelay_, customUseLattice_);
     lpcHarmonicAi_.configure(dseeMode_, static_cast<double>(currentFs), customLpcAlgo_, customGain_, customExtractFreq_, customUseQmf_);
 
-    // ★ フィルタバンクの周波数初期化
     initSpectrumFilterBank(currentFs);
     reset();
 }

@@ -6,7 +6,6 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
-import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -19,15 +18,17 @@ class WalkmanEqView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
+    // ★ 31Hz から 40kHz までの完全10等分オクターブラベル (全11本)
     val bandLabels = arrayOf("31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K", "40K")
     val eqFrequencies = doubleArrayOf(31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
     val gains = FloatArray(10) { 0.0f }
 
+    // ★ 32バンド 1/3オクターブ等間隔スペクトル周波数 (31.25Hz 〜 40,000Hz)
     val spectrumFrequencies = floatArrayOf(
-        25f, 31.5f, 40f, 50f, 63f, 80f, 100f, 125f, 160f, 200f,
-        250f, 315f, 400f, 500f, 630f, 800f, 1000f, 1250f, 1600f, 2000f,
-        2500f, 3150f, 4000f, 5000f, 6300f, 8000f, 10000f, 12500f, 16000f, 20000f,
-        28000f, 40000f
+        31.25f, 39.37f, 49.61f, 62.50f, 78.75f, 99.21f, 125.00f, 157.49f, 198.43f, 250.00f,
+        314.98f, 396.85f, 500.00f, 629.96f, 793.70f, 1000.00f, 1259.92f, 1587.40f, 2000.00f,
+        2519.84f, 3174.80f, 4000.00f, 5039.68f, 6349.60f, 8000.00f, 10079.37f, 12699.21f, 16000.00f,
+        20158.74f, 25398.42f, 32000.00f, 40000.00f
     )
     val NUM_SPEC_BANDS = spectrumFrequencies.size
 
@@ -155,22 +156,13 @@ class WalkmanEqView @JvmOverloads constructor(
     private var gridHeight = 0f
     private var gridWidth = 0f
 
-    private val eqBandX = FloatArray(10)
     private val labelX = FloatArray(11)
+    private val eqBandX = FloatArray(10)
     private val specBandX = FloatArray(NUM_SPEC_BANDS)
 
     private val curvePath = Path()
     private val spectrumPath = Path()
     private val spectrumFillPath = Path()
-
-    private val logMinF = log10(22.0)
-    private val logMaxF = log10(44000.0)
-
-    private fun freqToX(freq: Double): Float {
-        val f = freq.coerceIn(22.0, 44000.0)
-        val norm = ((log10(f) - logMinF) / (logMaxF - logMinF)).toFloat().coerceIn(0f, 1f)
-        return gridLeft + norm * gridWidth
-    }
 
     fun setSpectrumLevels(levels: FloatArray) {
         if (!isSpectrumEnabled) return
@@ -221,14 +213,18 @@ class WalkmanEqView @JvmOverloads constructor(
         gridTop = topPadding
         gridBottom = gridTop + gridHeight
 
-        for (i in 0 until 10) {
-            eqBandX[i] = freqToX(eqFrequencies[i])
-            labelX[i] = eqBandX[i]
+        // ★ 10等分 完全均等オクターブグリッド X座標算出
+        val stepX = gridWidth / 10f
+        for (i in 0..10) {
+            labelX[i] = gridLeft + i * stepX
+            if (i < 10) {
+                eqBandX[i] = labelX[i]
+            }
         }
-        labelX[10] = freqToX(40000.0)
 
+        // ★ 32バンド スペクトルX座標 (左端 31.25Hz 〜 右端 40kHz を 1/3オクターブ均等配置)
         for (i in 0 until NUM_SPEC_BANDS) {
-            specBandX[i] = freqToX(spectrumFrequencies[i].toDouble())
+            specBandX[i] = gridLeft + (i.toFloat() / (NUM_SPEC_BANDS - 1).toFloat()) * gridWidth
         }
 
         spectrumFillPaint.shader = LinearGradient(
@@ -262,7 +258,7 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (gridWidth <= 0 || gridHeight <= 0) return
 
-        // ★ 60fps / 120fps 完全同期の超滑らかなアタック・ディケイ補間
+        // 60fps ヌルヌル補間計算
         val now = System.currentTimeMillis()
         val dt = if (lastSpectrumDrawTime > 0L) min(0.05f, (now - lastSpectrumDrawTime) / 1000f) else 0.016f
         lastSpectrumDrawTime = now
@@ -271,17 +267,15 @@ class WalkmanEqView @JvmOverloads constructor(
             val target = targetSpectrum[i]
             val current = currentSpectrum[i]
             if (target > current) {
-                // 上昇時: 瞬時になめらか追従
                 currentSpectrum[i] = current + (target - current) * 0.40f
             } else {
-                // 下降時: 75dB/s で絹のように滑らかに減衰
                 currentSpectrum[i] = max(target, current - 75f * dt)
             }
         }
 
-        // ハイレゾ超高域ゾーン (20kHz〜44kHz) の薄いゴールド背景ハイライト
-        val x20k = freqToX(20000.0)
-        canvas.drawRect(x20k, gridTop, gridRight, gridBottom, hiResZonePaint)
+        // ★ ハイレゾ超高域ゾーン (16kHz〜40kHz の第10区画) をゴールド背景ハイライト
+        val x16k = labelX[9]
+        canvas.drawRect(x16k, gridTop, gridRight, gridBottom, hiResZonePaint)
 
         // 水平グリッド線
         val numHoriz = 20
@@ -294,7 +288,7 @@ class WalkmanEqView @JvmOverloads constructor(
             }
         }
 
-        // 垂直グリッド線 ＆ ラベル
+        // ★ 垂直グリッド線 ＆ ラベル (31Hz 〜 40K 完全一致描画)
         val labelY = height.toFloat() - 4f * density
         for (i in bandLabels.indices) {
             val x = labelX[i]
@@ -309,7 +303,7 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
-        // ★ 32バンド スペクトル波形描画 (25Hz 〜 40kHz)
+        // ★ 32バンド スペクトル波形描画 (31Hz 〜 40kHz 完全同期)
         if (isSpectrumEnabled) {
             val n = NUM_SPEC_BANDS
             val xSpec = FloatArray(n)
