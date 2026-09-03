@@ -302,7 +302,7 @@ void DspLpcHarmonicAi::processStereo(float* left, float* right, size_t numFrames
         double driveL = hiL * 3.8;
         double oddHarmL = (std::tanh(driveL) - (hiL * 0.8)) * 1.5;
 
-        double rawHarmL = 0.0;
+        double rawH　armL = 0.0;
         if (mode_ == DseeMode::AUTO_AI) {
             double evenW = 0.70 - attackRatioL * 0.25;
             double oddW  = 0.30 + attackRatioL * 0.25;
