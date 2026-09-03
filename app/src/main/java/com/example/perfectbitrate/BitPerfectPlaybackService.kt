@@ -242,6 +242,7 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
+    // ★ 以前のミキサー設定を安全にクリア
     private fun clearPreviousMixerAttributes() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             lastConfiguredMixerDevice?.let { dev ->
@@ -251,13 +252,15 @@ class BitPerfectPlaybackService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                     audioManager.clearPreferredMixerAttributes(mediaAttr, dev)
-                } catch (e: Exception) {}
+                    Log.i("BitPerfect", "★ Cleared previous preferred mixer attributes on ${dev.productName}")
+                } catch (e: Exception) {
+                    Log.e("BitPerfect", "Clear mixer attributes error", e)
+                }
             }
             lastConfiguredMixerDevice = null
         }
     }
 
-    // ★ 1x=48k, 2x=96k, 4x=192k, 8x=384k を厳密に設定
     fun setUpsampling(factor: Int) {
         val validFactor = when (factor) {
             2 -> 2
@@ -277,8 +280,7 @@ class BitPerfectPlaybackService : Service() {
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
         isCurrentlyPlaying = true
 
-        // 入力PCMタイムベース（48000Hz）と一致させ、ピッチ狂い（スロー再生）を根絶
-        val actualInputRate = if (sampleRate > 0) sampleRate else 48000
+        val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
         val targetEffectiveRate = actualInputRate * upsampleFactor
 
         val needsRecreate = (actualInputRate != baseSampleRate ||
@@ -428,6 +430,7 @@ class BitPerfectPlaybackService : Service() {
                     } catch (e: Exception) {}
                 }
                 audioTrack = null
+                clearPreviousMixerAttributes()
             } finally {
                 audioLock.unlock()
             }
@@ -558,7 +561,7 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ getSupportedMixerAttributes の中から DAC が確実に受理する属性実体を抽出・設定
+    // ★ 192k 固定化を解消する厳密なハードウェア DAC 初期化シーケンス
     fun initAudioTrack(
         bitMode: String,
         baseRate: Int = baseSampleRate,
@@ -572,6 +575,7 @@ class BitPerfectPlaybackService : Service() {
         try {
             audioLock.lock()
             try {
+                // 1. 旧トラック停止と完全解放
                 val oldTrack = audioTrack
                 audioTrack = null
                 pcmQueue.clear()
@@ -587,7 +591,11 @@ class BitPerfectPlaybackService : Service() {
                     } catch (e: Exception) {}
                 }
 
-                try { Thread.sleep(120) } catch (e: InterruptedException) {}
+                // ★重要: 古いミキサー属性 (192k等) をOSから明示的に解除！
+                clearPreviousMixerAttributes()
+
+                // DACハードウェアのPLLロック解放待ち (150ms)
+                try { Thread.sleep(150) } catch (e: InterruptedException) {}
 
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
@@ -615,13 +623,19 @@ class BitPerfectPlaybackService : Service() {
                 var createdTrack: AudioTrack? = null
                 var finalEncoding = AudioFormat.ENCODING_PCM_16BIT
 
+                val mediaAttr = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+
                 for (enc in requestedEncodings) {
                     try {
-                        // ★ OSのサポートリストから実体オブジェクトを検索してセット (確実に受理させる)
+                        // 2. Android 14+ ハードウェアクロック切り替え
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                             try {
                                 val supportedMixers = audioManager.getSupportedMixerAttributes(targetDevice!!)
                                 
+                                // サポートリストから目的のレート（44.1k/48k/88.2k/96k/176.4k/192k）に完全一致するものを選択
                                 val matched = supportedMixers.firstOrNull { 
                                     it.format.sampleRate == effectiveSampleRate && 
                                     it.format.encoding == enc &&
@@ -631,29 +645,37 @@ class BitPerfectPlaybackService : Service() {
                                     it.format.encoding == enc
                                 } ?: supportedMixers.firstOrNull { 
                                     it.format.sampleRate == effectiveSampleRate
-                                } ?: AudioMixerAttributes.Builder(
-                                    AudioFormat.Builder()
-                                        .setSampleRate(effectiveSampleRate)
-                                        .setEncoding(enc)
-                                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                                        .build()
-                                ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
+                                }
 
-                                val mediaAttr = AudioAttributes.Builder()
-                                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                    .build()
+                                if (matched != null) {
+                                    val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, matched)
+                                    if (ok) {
+                                        lastConfiguredMixerDevice = targetDevice
+                                        Log.i("BitPerfect", "★ setPreferredMixerAttributes to ${matched.format.sampleRate} Hz: SUCCESS")
+                                    } else {
+                                        Log.w("BitPerfect", "setPreferredMixerAttributes returned false for ${effectiveSampleRate} Hz")
+                                    }
+                                } else {
+                                    // リストに見当たらない場合は新規ビルダーで要求
+                                    val customMixer = AudioMixerAttributes.Builder(
+                                        AudioFormat.Builder()
+                                            .setSampleRate(effectiveSampleRate)
+                                            .setEncoding(enc)
+                                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                            .build()
+                                    ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT).build()
 
-                                val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice!!, matched)
-                                if (ok) {
-                                    lastConfiguredMixerDevice = targetDevice
-                                    Log.i("BitPerfect", "★ DAC Clock Locked to ${matched.format.sampleRate} Hz (enc=${matched.format.encoding}): SUCCESS")
+                                    val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice, customMixer)
+                                    if (ok) {
+                                        lastConfiguredMixerDevice = targetDevice
+                                    }
                                 }
                             } catch (e: Exception) {
                                 Log.e("BitPerfect", "Mixer attribute error: ${e.message}")
                             }
                         }
 
+                        // 3. AudioTrack の作成
                         val bytesPerSample = when (enc) {
                             AudioFormat.ENCODING_PCM_32BIT -> 4
                             AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
@@ -665,12 +687,7 @@ class BitPerfectPlaybackService : Service() {
                         val bufferSize = max(if (minBuf > 0) minBuf * 4 else 16384, desiredBuf)
 
                         val track = AudioTrack.Builder()
-                            .setAudioAttributes(
-                                AudioAttributes.Builder()
-                                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                    .build()
-                            )
+                            .setAudioAttributes(mediaAttr)
                             .setAudioFormat(
                                 AudioFormat.Builder()
                                     .setEncoding(enc)
