@@ -138,7 +138,7 @@ private:
     bool useGroupDelay_ = false;
     bool useLattice_ = false;
 
-    double attackGain_ = 1.5;
+    double attackGain_ = 1.2;
     double fastAlpha_ = 0.04;
     double slowAlpha_ = 0.002;
 
@@ -170,18 +170,19 @@ private:
     double hp_b0_ = 1.0, hp_b1_ = -1.0, hp_a1_ = 0.0;
     double hp_s1_L_ = 0.0, hp_s1_R_ = 0.0;
 
-    // ★ 18.5kHz〜40kHz+ ハイレゾ通過 HPF
+    // 18.5kHz〜40kHz+ ハイレゾ通過 HPF
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
+    // DCブロッカー状態
+    double dcL_ = 0.0, dcR_ = 0.0;
+
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
     double envHfL_ = 0.0, envHfR_ = 0.0;
     double envTotalL_ = 0.0, envTotalR_ = 0.0;
-    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
-    double lpcAlphaL_ = 0.5, lpcAlphaR_ = 0.5;
-    double targetGain_ = 0.35;
+    double targetGain_ = 0.25;
 
     double smoothedGainL_ = 0.0;
     double smoothedGainR_ = 0.0;
@@ -239,7 +240,6 @@ private:
     void convertToMinimumPhase(std::vector<double>& h, int totalTaps);
     double besselI0(double x);
 
-    // ★ マルチレート（低域デシメーション＋高域フルレート）2048点 FFT 解析
     void analyzeSpectrum(const float* l, const float* r, size_t numFrames);
 
     int factor_ = 1;
