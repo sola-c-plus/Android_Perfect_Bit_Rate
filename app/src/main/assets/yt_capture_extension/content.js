@@ -45,160 +45,28 @@ const itagMap = {
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
 };
 
-// ★ コントラスト崩壊を完全に解消した完成版 White Mode CSS
-const WHITE_THEME_CSS = `
-    :root {
-        --ytmusic-color-primary1: #ffffff !important;
-        --ytmusic-color-primary2: #f5f5f7 !important;
-        --ytmusic-color-primary3: #e5e5ea !important;
-        --ytmusic-color-text1: #1c1c1e !important;
-        --ytmusic-color-text2: #3a3a3c !important;
-        --ytmusic-color-text3: #636366 !important;
-        --ytmusic-color-white1: #1c1c1e !important;
-        --ytmusic-color-white2: #2c2c2e !important;
-        --ytmusic-color-black1: #ffffff !important;
-        --ytmusic-color-black2: #f2f2f7 !important;
-        --ytmusic-color-black3: #e5e5ea !important;
-        --ytmusic-color-black4: #d1d1d6 !important;
-        --ytmusic-brand-background-solid: #ffffff !important;
-        --yt-spec-base-background: #ffffff !important;
-        --yt-spec-text-primary: #1c1c1e !important;
-        --yt-spec-text-secondary: #3a3a3c !important;
-        --yt-spec-text-disabled: #8e8e93 !important;
-        --ytmusic-overlay-background-brand: rgba(255, 255, 255, 0.96) !important;
-        --ytmusic-guide-background: #ffffff !important;
+// ★ スマート反転 (Smart Invert): Shadow DOMを貫通して全文字・ボタンを高コントラスト黒化
+const SMART_INVERT_CSS = `
+    /* 1. ページ全体を反転して完全White化 (黒背景->白, 白文字->黒) */
+    html {
+        filter: invert(1) hue-rotate(180deg) !important;
+        background-color: #000000 !important;
     }
 
-    html, body, #background.ytmusic-app, ytmusic-app {
-        background-color: #ffffff !important;
-        background: #ffffff !important;
-        color: #1c1c1e !important;
-    }
-
-    /* 上部ナビゲーションバー */
-    ytmusic-nav-bar, #nav-bar-background {
-        background: #ffffff !important;
-        border-bottom: 1px solid #e0e0e5 !important;
-    }
-
-    /* ★ 左側ドロワーメニュー (ホーム、探索、ライブラリ、ログイン) の完全修復 */
-    ytmusic-guide-renderer,
-    #guide-wrapper.ytmusic-app,
-    tp-yt-app-drawer,
-    tp-yt-app-drawer #contentContainer {
-        background-color: #ffffff !important;
-        background: #ffffff !important;
-        color: #1c1c1e !important;
-    }
-
-    /* ドロワーメニュー内のテキスト・アイコンのコントラスト完全保証 */
-    ytmusic-guide-entry-renderer tp-yt-paper-item,
-    ytmusic-guide-entry-renderer .title,
-    ytmusic-guide-section-renderer,
-    #guide-links-primary,
-    #guide-links-secondary,
-    ytmusic-guide-signin-promo-renderer {
-        color: #1c1c1e !important;
-    }
-
-    ytmusic-guide-signin-promo-renderer .descriptive-text {
-        color: #3a3a3c !important;
-        font-weight: 500 !important;
-    }
-
-    ytmusic-guide-entry-renderer yt-icon,
-    ytmusic-guide-entry-renderer iron-icon,
-    ytmusic-nav-bar yt-icon,
-    ytmusic-nav-bar iron-icon {
-        fill: #1c1c1e !important;
-        color: #1c1c1e !important;
-    }
-
-    /* 選択中のメニュー項目 */
-    ytmusic-guide-entry-renderer[is-primary] tp-yt-paper-item {
-        background: #f2f2f7 !important;
-    }
-
-    /* ボタン・リンク */
-    yt-button-renderer[is-paper-button],
-    tp-yt-paper-button {
-        color: #1c1c1e !important;
-    }
-
-    /* ログインボタンの背景と文字 */
-    ytmusic-guide-signin-promo-renderer tp-yt-paper-button,
-    #sign-in-button tp-yt-paper-button {
-        background-color: #1c1c1e !important;
-        color: #ffffff !important;
-        border-radius: 20px !important;
-    }
-    #sign-in-button tp-yt-paper-button yt-formatted-string {
-        color: #ffffff !important;
-    }
-
-    /* 下部プレイヤーバー */
-    ytmusic-player-bar, #player-bar-background {
-        background: #f8f8fa !important;
-        border-top: 1px solid #e0e0e5 !important;
-    }
-
-    /* メインコンテンツエリア */
-    ytmusic-browse-response,
-    .background-gradient,
-    ytmusic-item-section-renderer,
-    #contents.ytmusic-section-list-renderer {
-        background: #ffffff !important;
-    }
-
-    /* 曲名・アーティスト・見出し */
-    .title.ytmusic-carousel-shelf-basic-header-renderer,
-    .title.ytmusic-header-renderer,
-    ytmusic-responsive-list-item-renderer [title],
-    ytmusic-two-row-item-renderer [title],
-    #title.ytmusic-player-bar,
-    .yt-simple-endpoint {
-        color: #1c1c1e !important;
-    }
-
-    .subtitle.ytmusic-header-renderer,
-    .byline.ytmusic-player-bar,
-    .byline.ytmusic-responsive-list-item-renderer,
-    .byline.ytmusic-two-row-item-renderer,
-    yt-formatted-string[has-link-only_]:not([force-default-style]) {
-        color: #48484a !important;
-    }
-
-    /* チップ (ワークアウト、通勤、リラックス等) */
-    ytmusic-chip-cloud-chip-renderer {
-        background: #f2f2f7 !important;
-        color: #1c1c1e !important;
-        border: 1px solid #e0e0e5 !important;
-    }
-    ytmusic-chip-cloud-chip-renderer[is-selected] {
-        background: #1c1c1e !important;
-        color: #ffffff !important;
-    }
-
-    /* ポップアップメニュー */
-    tp-yt-paper-listbox,
-    ytmusic-menu-popup-renderer {
-        background-color: #ffffff !important;
-        border: 1px solid #e0e0e5 !important;
-        color: #1c1c1e !important;
-    }
-    ytmusic-menu-navigation-item-renderer[is-selected],
-    ytmusic-menu-service-item-renderer:hover {
-        background: #f2f2f7 !important;
-    }
-
-    /* YouTube Music ロゴの反転 */
-    .logo.style-scope.ytmusic-logo, picture.ytmusic-logo {
+    /* 2. アルバムジャケット・動画・サムネイル・アイコン画像を再反転 (本来のフルカラーを100%維持) */
+    img, video, picture, canvas,
+    yt-img-shadow, ytmusic-thumbnail-renderer,
+    .image.ytmusic-two-row-item-renderer,
+    #thumbnail, #avatar, #artist-header,
+    [style*="background-image"],
+    ytmusic-player-page #main-panel img,
+    ytmusic-player #song-image img {
         filter: invert(1) hue-rotate(180deg) !important;
     }
 
-    /* アルバムアート・動画サムネイルの反転除外 (鮮明に維持) */
-    img, video, .image.ytmusic-two-row-item-renderer, yt-img-shadow img, #thumbnail img {
-        filter: none !important;
+    /* 3. 背景暗転オーバーレイの濁りを除去 */
+    tp-yt-iron-overlay-backdrop, iron-overlay-backdrop {
+        opacity: 0.35 !important;
     }
 `;
 
@@ -208,8 +76,8 @@ function updateWebWhiteTheme(enable) {
     if (enable) {
         if (!whiteStyleElement) {
             whiteStyleElement = document.createElement('style');
-            whiteStyleElement.id = 'bp-ytm-white-theme';
-            whiteStyleElement.textContent = WHITE_THEME_CSS;
+            whiteStyleElement.id = 'bp-ytm-smart-invert';
+            whiteStyleElement.textContent = SMART_INVERT_CSS;
             document.head?.appendChild(whiteStyleElement);
         }
     } else {
@@ -467,8 +335,7 @@ setInterval(findAndAttachVideo, 1000);
 
 const observer = new MutationObserver(() => {
     findAndAttachVideo();
-    // DOM動的生成時もWhiteテーマを欠損なく維持
-    if (isWhiteThemeActive && !document.getElementById('bp-ytm-white-theme')) {
+    if (isWhiteThemeActive && !document.getElementById('bp-ytm-smart-invert')) {
         updateWebWhiteTheme(true);
     }
 });
