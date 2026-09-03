@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.*
@@ -18,12 +18,10 @@ class WalkmanEqView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
-    // ★ 31Hz から 40kHz までの完全10等分オクターブラベル (全11本)
     val bandLabels = arrayOf("31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K", "40K")
     val eqFrequencies = doubleArrayOf(31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
     val gains = FloatArray(10) { 0.0f }
 
-    // ★ 32バンド 1/3オクターブ等間隔スペクトル周波数 (31.25Hz 〜 40,000Hz)
     val spectrumFrequencies = floatArrayOf(
         31.25f, 39.37f, 49.61f, 62.50f, 78.75f, 99.21f, 125.00f, 157.49f, 198.43f, 250.00f,
         314.98f, 396.85f, 500.00f, 629.96f, 793.70f, 1000.00f, 1259.92f, 1587.40f, 2000.00f,
@@ -54,6 +52,13 @@ class WalkmanEqView @JvmOverloads constructor(
             invalidate()
         }
 
+    var isLightMode = false
+        set(value) {
+            field = value
+            updatePaintsForTheme()
+            invalidate()
+        }
+
     var selectedBandIndex = 7
         set(value) {
             field = value.coerceIn(0, 9)
@@ -70,47 +75,31 @@ class WalkmanEqView @JvmOverloads constructor(
     private val currentSpectrum = FloatArray(NUM_SPEC_BANDS) { -55f }
     private var lastSpectrumDrawTime = 0L
 
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#1C1C1C")
-        strokeWidth = 0.75f * density
-    }
-
+    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val hiResZonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#18E5A93C")
         style = Paint.Style.FILL
     }
-
-    private val centerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#3C3C3C")
-        strokeWidth = 1.0f * density
-    }
-
+    private val centerLinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val gridBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#2E2E2E")
         strokeWidth = 1.0f * density
         style = Paint.Style.STROKE
     }
-
     private val cursorLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#E5A93C")
         strokeWidth = 1.2f * density
     }
-
     private val curvePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFFFFF")
         strokeWidth = 2.0f * density
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-
     private val bypassCurvePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#444444")
         strokeWidth = 1.5f * density
         style = Paint.Style.STROKE
         pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
     }
-
     private val spectrumLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#E5A93C")
         strokeWidth = 1.6f * density
@@ -118,32 +107,24 @@ class WalkmanEqView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-
     private val spectrumFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
-
     private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFFFFF")
         style = Paint.Style.FILL
     }
-
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#888888")
         textSize = 8.0f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
-
     private val hiResLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#E5A93C")
         textSize = 8.0f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
-
     private val selectedLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFFFFF")
         textSize = 8.5f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
@@ -163,6 +144,37 @@ class WalkmanEqView @JvmOverloads constructor(
     private val curvePath = Path()
     private val spectrumPath = Path()
     private val spectrumFillPath = Path()
+
+    init {
+        updatePaintsForTheme()
+    }
+
+    private fun updatePaintsForTheme() {
+        if (isLightMode) {
+            gridPaint.color = Color.parseColor("#E5E5EA")
+            gridPaint.strokeWidth = 0.75f * density
+            centerLinePaint.color = Color.parseColor("#C7C7CC")
+            centerLinePaint.strokeWidth = 1.0f * density
+            gridBorderPaint.color = Color.parseColor("#D1D1D6")
+            curvePaint.color = Color.parseColor("#1C1C1E")
+            bypassCurvePaint.color = Color.parseColor("#8E8E93")
+            labelPaint.color = Color.parseColor("#8E8E93")
+            selectedLabelPaint.color = Color.parseColor("#1C1C1E")
+            pointPaint.color = Color.parseColor("#1C1C1E")
+        } else {
+            // ダークモードは100%元の色を保持
+            gridPaint.color = Color.parseColor("#1C1C1C")
+            gridPaint.strokeWidth = 0.75f * density
+            centerLinePaint.color = Color.parseColor("#3C3C3C")
+            centerLinePaint.strokeWidth = 1.0f * density
+            gridBorderPaint.color = Color.parseColor("#2E2E2E")
+            curvePaint.color = Color.parseColor("#FFFFFF")
+            bypassCurvePaint.color = Color.parseColor("#444444")
+            labelPaint.color = Color.parseColor("#888888")
+            selectedLabelPaint.color = Color.parseColor("#FFFFFF")
+            pointPaint.color = Color.parseColor("#FFFFFF")
+        }
+    }
 
     fun setSpectrumLevels(levels: FloatArray) {
         if (!isSpectrumEnabled) return
@@ -213,7 +225,6 @@ class WalkmanEqView @JvmOverloads constructor(
         gridTop = topPadding
         gridBottom = gridTop + gridHeight
 
-        // ★ 10等分 完全均等オクターブグリッド X座標算出
         val stepX = gridWidth / 10f
         for (i in 0..10) {
             labelX[i] = gridLeft + i * stepX
@@ -222,7 +233,6 @@ class WalkmanEqView @JvmOverloads constructor(
             }
         }
 
-        // ★ 32バンド スペクトルX座標 (左端 31.25Hz 〜 右端 40kHz を 1/3オクターブ均等配置)
         for (i in 0 until NUM_SPEC_BANDS) {
             specBandX[i] = gridLeft + (i.toFloat() / (NUM_SPEC_BANDS - 1).toFloat()) * gridWidth
         }
@@ -258,7 +268,6 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (gridWidth <= 0 || gridHeight <= 0) return
 
-        // 60fps ヌルヌル補間計算
         val now = System.currentTimeMillis()
         val dt = if (lastSpectrumDrawTime > 0L) min(0.05f, (now - lastSpectrumDrawTime) / 1000f) else 0.016f
         lastSpectrumDrawTime = now
@@ -273,11 +282,9 @@ class WalkmanEqView @JvmOverloads constructor(
             }
         }
 
-        // ★ ハイレゾ超高域ゾーン (16kHz〜40kHz の第10区画) をゴールド背景ハイライト
         val x16k = labelX[9]
         canvas.drawRect(x16k, gridTop, gridRight, gridBottom, hiResZonePaint)
 
-        // 水平グリッド線
         val numHoriz = 20
         for (i in 0..numHoriz) {
             val y = gridTop + i * (gridHeight / numHoriz)
@@ -288,7 +295,6 @@ class WalkmanEqView @JvmOverloads constructor(
             }
         }
 
-        // ★ 垂直グリッド線 ＆ ラベル (31Hz 〜 40K 完全一致描画)
         val labelY = height.toFloat() - 4f * density
         for (i in bandLabels.indices) {
             val x = labelX[i]
@@ -303,7 +309,6 @@ class WalkmanEqView @JvmOverloads constructor(
 
         canvas.drawRect(gridLeft, gridTop, gridRight, gridBottom, gridBorderPaint)
 
-        // ★ 32バンド スペクトル波形描画 (31Hz 〜 40kHz 完全同期)
         if (isSpectrumEnabled) {
             val n = NUM_SPEC_BANDS
             val xSpec = FloatArray(n)
@@ -369,13 +374,11 @@ class WalkmanEqView @JvmOverloads constructor(
             }
         }
 
-        // カーソルライン
         if (isEditMode && !isDirectBypass && selectedBandIndex in 0..9) {
             val curX = eqBandX[selectedBandIndex]
             canvas.drawLine(curX, gridTop, curX, gridBottom, cursorLinePaint)
         }
 
-        // 10-Band EQ 曲線 (白線)
         curvePath.reset()
         val n = 10
         val xArr = FloatArray(n)
@@ -429,11 +432,11 @@ class WalkmanEqView @JvmOverloads constructor(
                 if (i == selectedBandIndex) {
                     pointPaint.color = Color.parseColor("#E5A93C")
                     canvas.drawCircle(x, y, 5.0f * density, pointPaint)
-                    pointPaint.color = Color.parseColor("#121212")
+                    pointPaint.color = if (isLightMode) Color.WHITE else Color.parseColor("#121212")
                     canvas.drawCircle(x, y, 2.0f * density, pointPaint)
-                    pointPaint.color = Color.WHITE
+                    pointPaint.color = if (isLightMode) Color.parseColor("#1C1C1E") else Color.WHITE
                 } else {
-                    pointPaint.color = Color.WHITE
+                    pointPaint.color = if (isLightMode) Color.parseColor("#1C1C1E") else Color.WHITE
                     canvas.drawCircle(x, y, 3.0f * density, pointPaint)
                 }
             }

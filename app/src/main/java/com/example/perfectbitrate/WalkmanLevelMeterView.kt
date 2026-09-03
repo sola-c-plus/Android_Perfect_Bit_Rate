@@ -1,4 +1,4 @@
-package com.example.perfectbitrate
+﻿package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.Canvas
@@ -18,34 +18,36 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
+    var isLightMode = false
+        set(value) {
+            field = value
+            updatePaintsForTheme()
+            invalidate()
+        }
+
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#888888")
         textSize = 8.0f * density
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val infinityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#888888")
         textSize = 9.5f * density
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#CCCCCC")
         textSize = 7.5f * density
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
 
     private val scaleLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#2E2E2E")
         strokeWidth = 1.0f * density
     }
 
     private val segActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFFFFF")
         style = Paint.Style.FILL
     }
 
@@ -60,7 +62,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     }
 
     private val segInactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#161616")
         style = Paint.Style.FILL
     }
 
@@ -102,6 +103,32 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var barR_Top = 0f
     private var lCenterY = 0f
     private var rCenterY = 0f
+
+    init {
+        updatePaintsForTheme()
+    }
+
+    private fun updatePaintsForTheme() {
+        if (isLightMode) {
+            // ★ ライトモード: 白背景で鮮明に見える黒/チャコールのアクティブバー
+            segActivePaint.color = Color.parseColor("#1C1C1E")
+            segInactivePaint.color = Color.parseColor("#E5E5EA")
+            segPeakPaint.color = Color.parseColor("#D49B28")
+            labelPaint.color = Color.parseColor("#1C1C1E")
+            textPaint.color = Color.parseColor("#636366")
+            infinityPaint.color = Color.parseColor("#636366")
+            scaleLinePaint.color = Color.parseColor("#C7C7CC")
+        } else {
+            // ★ ダークモード: 1ミリも変えず原型のまま100%保持
+            segActivePaint.color = Color.parseColor("#FFFFFF")
+            segInactivePaint.color = Color.parseColor("#161616")
+            segPeakPaint.color = Color.parseColor("#E5A93C")
+            labelPaint.color = Color.parseColor("#CCCCCC")
+            textPaint.color = Color.parseColor("#888888")
+            infinityPaint.color = Color.parseColor("#888888")
+            scaleLinePaint.color = Color.parseColor("#2E2E2E")
+        }
+    }
 
     fun setLevels(dbL: Float, dbR: Float) {
         val safeL = if (dbL.isNaN() || dbL.isInfinite()) -60f else dbL.coerceIn(-60f, 6f)
@@ -244,7 +271,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
         val clipIdx = (0.96f * numSegments).toInt()
 
-        // Lチャンネル描画
         for (i in 0 until numSegments) {
             val paint = when {
                 i == peakIdxL && peakHoldDbL > -48f -> segPeakPaint
@@ -255,7 +281,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
             canvas.drawRoundRect(segRectsL[i], 0.5f * density, 0.5f * density, paint)
         }
 
-        // Rチャンネル描画
         for (i in 0 until numSegments) {
             val paint = when {
                 i == peakIdxR && peakHoldDbR > -48f -> segPeakPaint
@@ -266,7 +291,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
             canvas.drawRoundRect(segRectsR[i], 0.5f * density, 0.5f * density, paint)
         }
 
-        // ★ 完全に -60dB (完全消灯) に下がりきるまで確実にアニメーションを継続
         val isStillDecaying = (currentDbL > targetDbL + 0.1f) ||
                               (currentDbR > targetDbR + 0.1f) ||
                               (peakHoldDbL > targetDbL + 0.1f) ||

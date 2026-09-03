@@ -1,0 +1,406 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/uiDialogRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/bg_bottom_sheet_dap">
+
+    <View
+        android:layout_width="36dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:background="#444444"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="6dp" />
+
+    <!-- タイトルバー -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:layout_marginBottom="6dp">
+
+        <TextView
+            android:id="@+id/uiHeaderTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="UI &amp; SYSTEM SETTINGS"
+            android:textColor="#E5A93C"
+            android:textSize="13.5sp"
+            android:textStyle="bold"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="0.05" />
+
+        <Button
+            android:id="@+id/btnUiDialogClose"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:text="✕"
+            android:textColor="#AAAAAA"
+            android:textSize="12sp"
+            android:background="@drawable/bg_btn_icon"
+            android:padding="0dp" />
+    </LinearLayout>
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="16dp">
+
+            <!-- ★ テーマカラー設定 (Dark / Light / Auto) -->
+            <LinearLayout
+                android:id="@+id/layoutSectionTheme"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="#161616"
+                android:padding="10dp"
+                android:layout_marginBottom="12dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textThemeTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="UI THEME COLOR"
+                        android:textColor="#E5A93C"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:fontFamily="sans-serif-black" />
+
+                    <TextView
+                        android:id="@+id/textThemeSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="ダーク / ライト / 端末設定連動オート"
+                        android:textColor="#888888"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <Spinner
+                    android:id="@+id/dialogSpinnerTheme"
+                    android:layout_width="wrap_content"
+                    android:layout_height="30dp"
+                    android:background="@drawable/bg_spinner_dap"
+                    android:popupBackground="#1A1A1A" />
+            </LinearLayout>
+
+            <!-- ★ バックグラウンド再生保護 -->
+            <LinearLayout
+                android:id="@+id/layoutSectionBattery"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#161616"
+                android:padding="10dp"
+                android:layout_marginBottom="12dp">
+
+                <TextView
+                    android:id="@+id/textBatteryTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="BACKGROUND PROTECTION"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/textBatterySub"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="画面消灯時や別アプリ使用時の再生停止を防ぎます。"
+                    android:textColor="#777777"
+                    android:textSize="9.5sp"
+                    android:layout_marginBottom="8dp" />
+
+                <Button
+                    android:id="@+id/btnBatteryIgnore"
+                    android:layout_width="match_parent"
+                    android:layout_height="34dp"
+                    android:text="🔋 バッテリー使用量を「無制限」に設定"
+                    android:textColor="#000000"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#E5A93C" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/dividerUi1"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1C1C1C"
+                android:layout_marginBottom="12dp" />
+
+            <!-- 0dB Volume Lock -->
+            <LinearLayout
+                android:id="@+id/layoutSectionVolLock"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textVolLockTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0dB VOLUME LOCK"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textVolLockSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="最大音量固定 / 音量UP:次へ / DOWN:前へ"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/dialogSwitchVolLock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/dividerUi2"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1C1C1C"
+                android:layout_marginBottom="12dp" />
+
+            <!-- AD CUT -->
+            <LinearLayout
+                android:id="@+id/layoutSectionAdBlock"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textAdBlockTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="AD CUT (広告自動カット)"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textAdBlockSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="YouTube Music 動画広告の自動スキップ"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/dialogSwitchAdBlock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline"
+                    android:checked="true" />
+            </LinearLayout>
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+    <!-- 下部ミニプレイヤー -->
+    <LinearLayout
+        android:id="@+id/uiDialogPlayerControl"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#161616"
+        android:elevation="12dp">
+
+        <View
+            android:id="@+id/uiPlayerDivider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#262626" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <androidx.cardview.widget.CardView
+                android:id="@+id/uiPlayerCard"
+                android:layout_width="58dp"
+                android:layout_height="58dp"
+                app:cardCornerRadius="6dp"
+                app:cardElevation="0dp"
+                app:cardBackgroundColor="#222222">
+
+                <ImageView
+                    android:id="@+id/dialogImageArtworkUi"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:scaleType="centerCrop"
+                    android:src="@drawable/bg_badge_normal" />
+            </androidx.cardview.widget.CardView>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:layout_marginStart="12dp"
+                android:layout_marginEnd="6dp">
+
+                <TextView
+                    android:id="@+id/dialogTextTrackTitleUi"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="YouTube Music"
+                    android:textColor="#FFFFFF"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:fontFamily="sans-serif-medium" />
+
+                <TextView
+                    android:id="@+id/dialogTextTrackArtistUi"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textColor="#BDBDBD"
+                    android:textSize="12.5sp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:layout_marginTop="1dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="2dp">
+
+                    <TextView
+                        android:id="@+id/dialogTextCurrentTimeUi"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0:00"
+                        android:textColor="#888888"
+                        android:textSize="10.5sp"
+                        android:fontFamily="monospace" />
+
+                    <SeekBar
+                        android:id="@+id/dialogSeekBarUi"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:max="1000"
+                        android:progress="0"
+                        android:progressTint="#E5A93C"
+                        android:thumbTint="#FFFFFF"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp" />
+
+                    <TextView
+                        android:id="@+id/dialogTextTotalTimeUi"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0:00"
+                        android:textColor="#888888"
+                        android:textSize="10.5sp"
+                        android:fontFamily="monospace" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <Button
+                    android:id="@+id/dialogBtnPrevTrackUi"
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
+                    android:text="⏮"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:background="@drawable/bg_btn_walkman_circle_small"
+                    android:padding="0dp"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp" />
+
+                <Button
+                    android:id="@+id/dialogBtnPlayPauseUi"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:text="▶"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_btn_walkman_circle_large"
+                    android:padding="0dp"
+                    android:gravity="center"
+                    android:layout_marginEnd="6dp" />
+
+                <Button
+                    android:id="@+id/dialogBtnNextTrackUi"
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
+                    android:text="⏭"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:background="@drawable/bg_btn_walkman_circle_small"
+                    android:padding="0dp"
+                    android:gravity="center" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
