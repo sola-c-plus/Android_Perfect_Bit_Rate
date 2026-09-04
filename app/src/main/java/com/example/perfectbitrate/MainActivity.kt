@@ -1212,7 +1212,7 @@ class MainActivity : AppCompatActivity() {
 
         devSwitchLrDither.isChecked = isLrIndependentDither
         val idStr = currentEditTargetId.toString()
-        val isMale = idStr.contains("男性") || idStr.contains("MALE", ignoreCase = true) || idStr == "2" || idStr == "1"
+        val isMale = idStr.contains("男性") || idStr.contains("MALE", ignoreCase = true) || idStr == "2"
         val isOff = idStr == "OFF" || idStr == "0"
         val shouldSwOn = !isMale && !isOff
         devSwitchMsSpatial?.isChecked = shouldSwOn
