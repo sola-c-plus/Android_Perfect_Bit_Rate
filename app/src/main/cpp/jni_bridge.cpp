@@ -138,6 +138,20 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientCustomParams
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetMsSpatial(
+        JNIEnv *env, jobject thiz, jboolean enabled) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setMsSpatial(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDynamicSbr(
+        JNIEnv *env, jobject thiz, jboolean enabled) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setDynamicSbr(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
     if (!g_upsampler) g_upsampler = new DspUpsampler();

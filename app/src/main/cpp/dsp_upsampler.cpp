@@ -442,7 +442,6 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
 
     for (size_t i = 0; i < numFrames; ++i) {
         double inL = static_cast<double>(left[i]);
-        
         double hiL = in_hp_b0_ * inL + in_s1_L_;
         in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
         in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
@@ -477,7 +476,6 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         left[i] = static_cast<float>(totalL);
 
         double inR = static_cast<double>(right[i]);
-        
         double hiR = in_hp_b0_ * inR + in_s1_R_;
         in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
         in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
@@ -653,6 +651,14 @@ void DspUpsampler::setTransientCustomParams(bool useGroupDelay, bool useLattice)
     transientRestorer_.configure(transientMode_, static_cast<double>(inSampleRate_ * factor_), customUseGroupDelay_, customUseLattice_);
 }
 
+void DspUpsampler::setMsSpatial(bool enabled) {
+    isMsSpatial_ = enabled;
+}
+
+void DspUpsampler::setDynamicSbr(bool enabled) {
+    isDynamicSbr_ = enabled;
+}
+
 double DspUpsampler::besselI0(double x) {
     double sum = 1.0, term = 1.0, halfX = x * 0.5;
     for (int k = 1; k <= 30; ++k) {
@@ -806,14 +812,14 @@ void DspUpsampler::reset() {
     std::fill(std::begin(errHistL_), std::end(errHistL_), 0.0);
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     std::fill(std::begin(spectrumDb_), std::end(spectrumDb_), -60.0f);
+    prevSideL_ = 0.0f; prevSideR_ = 0.0f;
+    sbrPhaseL_ = 0.0f; sbrPhaseR_ = 0.0f;
     equalizer_.reset();
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
     freqEngine_.reset();
 }
 
-// ★ 定時間長 (常に85ms保持) 高精度 FFT 解析
-// x1でもx8でも低音〜高音のカーブが1ピクセルも狂わず完全に一致する
 void DspUpsampler::executeFftAnalysis() {
     constexpr int N = 2048;
     static float realHi[N], imagHi[N];
@@ -821,17 +827,13 @@ void DspUpsampler::executeFftAnalysis() {
 
     size_t currentPos = specRingPos_.load(std::memory_order_relaxed);
 
-    // 1. フルレート (48kHz/44.1kHz 相当) 2048点 FFT: 中高域 (500Hz 〜 20kHz)
     for (int i = 0; i < N; ++i) {
         int idx = (currentPos + 4096 - N + i) & 4095;
-        // Hanning Window
         float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(PI) * i / (N - 1)));
         realHi[i] = specRingBuf_[idx] * w;
         imagHi[i] = 0.0f;
     }
 
-    // 2. 4:1 デシメーション (12kHz 相当) 1024点 FFT: 低域 (31Hz 〜 500Hz)
-    // 31Hzの波が2.7周期しっかり窓内に収まり、低音の異常な盛り上がりを完全防止
     for (int i = 0; i < N; ++i) {
         int baseIdx = (currentPos + 4096 - 4096 + (i * 2)) & 4095;
         float avg = (specRingBuf_[baseIdx] + specRingBuf_[(baseIdx + 1) & 4095]) * 0.5f;
@@ -840,26 +842,28 @@ void DspUpsampler::executeFftAnalysis() {
         imagLo[i] = 0.0f;
     }
 
+    // ★ 修正: N をラムダ内部で直接扱い、int len を明示宣言
     auto runFft = [](float* r, float* im) {
+        constexpr int FFT_N = 2048;
         int j = 0;
-        for (int i = 0; i < N - 1; ++i) {
+        for (int i = 0; i < FFT_N - 1; ++i) {
             if (i < j) {
                 std::swap(r[i], r[j]);
                 std::swap(im[i], im[j]);
             }
-            int k = N >> 1;
+            int k = FFT_N >> 1;
             while (k <= j) {
                 j -= k;
                 k >>= 1;
             }
             j += k;
         }
-        for (int len = 2; len <= N; len <<= 1) {
+        for (int len = 2; len <= FFT_N; len <<= 1) {
             int half = len >> 1;
             double angle = -2.0 * PI / len;
             float wStepR = static_cast<float>(std::cos(angle));
             float wStepI = static_cast<float>(std::sin(angle));
-            for (int i = 0; i < N; i += len) {
+            for (int i = 0; i < FFT_N; i += len) {
                 float wR = 1.0f, wI = 0.0f;
                 for (int k = 0; k < half; ++k) {
                     float uR = r[i + k], uI = im[i + k];
@@ -887,21 +891,20 @@ void DspUpsampler::executeFftAnalysis() {
         20158.74f, 25398.42f, 32000.00f, 40000.00f
     };
 
-    // ★ 倍率 (factor) に依存せず、常に音源ベースレート (48k / 44.1k) を基準に周波数ビンを計算
     float baseFs = inSampleRate_;
     float binHzHi = baseFs / static_cast<float>(N);
     float binHzLo = (baseFs * 0.5f) / static_cast<float>(N);
     float nyquist = baseFs * 0.5f;
 
+    float highBandEnergySum = 0.0f;
+    int highBandCount = 0;
+
     for (int b = 0; b < 32; ++b) {
         float fc = FREQS[b];
-
-        // 20kHz 超の超高域バンド
         if (fc > nyquist) {
-            // 2x以上のアップサンプリング時のみ、FREQの倍音エネルギーとして自然に点灯
             if (factor_ >= 2 && !isDirectSource_) {
                 float hfGain = 0.35f * (factor_ >= 4 ? 1.0f : 0.7f);
-                float refDb = spectrumDb_[27]; // 16kHzのレベル
+                float refDb = spectrumDb_[27];
                 spectrumDb_[b] = std::clamp(refDb - (b - 27) * 4.5f + (hfGain * 10.0f), -60.0f, 0.0f);
             } else {
                 spectrumDb_[b] = -60.0f;
@@ -915,7 +918,6 @@ void DspUpsampler::executeFftAnalysis() {
         int binCount = 0;
 
         if (b < 12) {
-            // 低域 (31Hz 〜 500Hz): 高解像度デシメーション FFT
             int binStart = std::clamp(static_cast<int>(fLow / binHzLo), 1, N / 2 - 1);
             int binEnd   = std::clamp(static_cast<int>(fHigh / binHzLo), binStart, N / 2 - 1);
             for (int k = binStart; k <= binEnd; ++k) {
@@ -923,7 +925,6 @@ void DspUpsampler::executeFftAnalysis() {
                 binCount++;
             }
         } else {
-            // 中高域 (630Hz 〜 20kHz): フルレート FFT
             int binStart = std::clamp(static_cast<int>(fLow / binHzHi), 1, N / 2 - 1);
             int binEnd   = std::clamp(static_cast<int>(fHigh / binHzHi), binStart, N / 2 - 1);
             for (int k = binStart; k <= binEnd; ++k) {
@@ -933,15 +934,25 @@ void DspUpsampler::executeFftAnalysis() {
         }
 
         float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
-        // 低域の窓関数リークを補正する正規化スケール
         float rms = std::sqrt(meanPower) / (N * 0.22f);
-        if (b < 6) {
-            // 31Hz〜100Hzの超低域DCリークを正確にキャリブレーション
-            rms *= (0.55f + b * 0.07f);
-        }
+        if (b < 6) rms *= (0.55f + b * 0.07f);
 
         float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
+
+        if (b >= 24 && b <= 27) {
+            highBandEnergySum += db;
+            highBandCount++;
+        }
+    }
+
+    if (highBandCount > 0) {
+        float dropSlope = spectrumDb_[27] - spectrumDb_[25];
+        if (dropSlope < -20.0f) {
+            detectedCutoffHz_ = detectedCutoffHz_ * 0.95f + 15500.0f * 0.05f;
+        } else {
+            detectedCutoffHz_ = detectedCutoffHz_ * 0.95f + 20000.0f * 0.05f;
+        }
     }
 }
 
@@ -949,6 +960,51 @@ void DspUpsampler::getSpectrum(float* out32Bands) {
     if (!out32Bands) return;
     executeFftAnalysis();
     std::memcpy(out32Bands, spectrumDb_, sizeof(spectrumDb_));
+}
+
+void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames) {
+    if (!isMsSpatial_ || !left || !right || numFrames == 0) return;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        float l = left[i];
+        float r = right[i];
+        float m = (l + r) * 0.5f;
+        float s = (l - r) * 0.5f;
+
+        float diffL = s - prevSideL_;
+        prevSideL_ = s;
+        float sSpatial = s + diffL * 0.18f;
+
+        left[i] = std::clamp(m + sSpatial, -1.0f, 1.0f);
+        right[i] = std::clamp(m - sSpatial, -1.0f, 1.0f);
+    }
+}
+
+void DspUpsampler::processDynamicSbr(float* left, float* right, size_t numFrames) {
+    if (!isDynamicSbr_ || !left || !right || numFrames == 0) return;
+
+    double outFs = static_cast<double>(inSampleRate_ * (isDirectSource_ ? 1 : factor_));
+    if (outFs < 88200.0) return;
+
+    double shiftFreq = 4000.0;
+    double phaseInc = 2.0 * PI * shiftFreq / outFs;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        float l = left[i];
+        float r = right[i];
+
+        sbrPhaseL_ += static_cast<float>(phaseInc);
+        if (sbrPhaseL_ > 2.0f * PI) sbrPhaseL_ -= 2.0f * PI;
+
+        sbrPhaseR_ += static_cast<float>(phaseInc);
+        if (sbrPhaseR_ > 2.0f * PI) sbrPhaseR_ -= 2.0f * PI;
+
+        float sbrHighL = l * std::sin(sbrPhaseL_) * 0.14f;
+        float sbrHighR = r * std::cos(sbrPhaseR_) * 0.14f;
+
+        left[i] = std::clamp(l + sbrHighL, -1.0f, 1.0f);
+        right[i] = std::clamp(r + sbrHighR, -1.0f, 1.0f);
+    }
 }
 
 size_t DspUpsampler::process(
@@ -981,38 +1037,75 @@ size_t DspUpsampler::process(
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    // [Step 1] 分数比ポリフェーズSincリサンプリング
-    if (is441Base || currentFactor > 1) {
-        double step = (double)numInFrames / (double)numOutFrames;
-        for (size_t i = 0; i < numOutFrames; ++i) {
-            double srcPos = i * step;
-            int idx = (int)srcPos;
-            double frac = srcPos - idx;
-
-            int i0 = std::max(0, idx - 1);
-            int i1 = std::min((int)numInFrames - 1, idx);
-            int i2 = std::min((int)numInFrames - 1, idx + 1);
-            int i3 = std::min((int)numInFrames - 1, idx + 2);
-
-            auto interpolateCubic = [](float y0, float y1, float y2, float y3, double mu) {
-                double a0, a1, a2, a3, mu2;
-                mu2 = mu * mu;
-                a0 = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
-                a1 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-                a2 = -0.5 * y0 + 0.5 * y2;
-                a3 = y1;
-                return (float)(a0 * mu * mu2 + a1 * mu2 + a2 * mu + a3);
-            };
-
-            tempOutL_[i] = interpolateCubic(tempInL_[i0], tempInL_[i1], tempInL_[i2], tempInL_[i3], frac);
-            tempOutR_[i] = interpolateCubic(tempInR_[i0], tempInR_[i1], tempInR_[i2], tempInR_[i3], frac);
+    // =========================================================================
+    // ★ ステップ1: ARM NEON 多段カスケード Sinc FIR の完全直結
+    // =========================================================================
+    if (!isDirectSource_ && isCascadeFir_ && currentFactor > 1) {
+        if (currentFactor == 2) {
+            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+            if (!is441Base) {
+                std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
+                std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
+            } else {
+                double step = (double)(numInFrames * 2) / (double)numOutFrames;
+                for (size_t i = 0; i < numOutFrames; ++i) {
+                    double p = i * step; int idx = (int)p; double f = p - idx;
+                    int i1 = std::min((int)(numInFrames * 2) - 1, idx);
+                    int i2 = std::min((int)(numInFrames * 2) - 1, idx + 1);
+                    tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
+                    tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
+                }
+            }
+        } else if (currentFactor == 4) {
+            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
+            if (!is441Base) {
+                std::memcpy(tempOutL_.data(), stageBuf2_L_.data(), numOutFrames * sizeof(float));
+                std::memcpy(tempOutR_.data(), stageBuf2_R_.data(), numOutFrames * sizeof(float));
+            } else {
+                double step = (double)(numInFrames * 4) / (double)numOutFrames;
+                for (size_t i = 0; i < numOutFrames; ++i) {
+                    double p = i * step; int idx = (int)p; double f = p - idx;
+                    int i1 = std::min((int)(numInFrames * 4) - 1, idx);
+                    int i2 = std::min((int)(numInFrames * 4) - 1, idx + 1);
+                    tempOutL_[i] = static_cast<float>(stageBuf2_L_[i1] * (1.0 - f) + stageBuf2_L_[i2] * f);
+                    tempOutR_[i] = static_cast<float>(stageBuf2_R_[i1] * (1.0 - f) + stageBuf2_R_[i2] * f);
+                }
+            }
+        } else if (currentFactor == 8) {
+            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
+            cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, stageBuf1_L_, stageBuf1_R_);
+            if (!is441Base) {
+                std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
+                std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
+            } else {
+                double step = (double)(numInFrames * 8) / (double)numOutFrames;
+                for (size_t i = 0; i < numOutFrames; ++i) {
+                    double p = i * step; int idx = (int)p; double f = p - idx;
+                    int i1 = std::min((int)(numInFrames * 8) - 1, idx);
+                    int i2 = std::min((int)(numInFrames * 8) - 1, idx + 1);
+                    tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
+                    tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
+                }
+            }
         }
     } else {
-        std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
-        std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
+        if (is441Base) {
+            double step = (double)numInFrames / (double)numOutFrames;
+            for (size_t i = 0; i < numOutFrames; ++i) {
+                double p = i * step; int idx = (int)p; double f = p - idx;
+                int i1 = std::min((int)numInFrames - 1, idx);
+                int i2 = std::min((int)numInFrames - 1, idx + 1);
+                tempOutL_[i] = static_cast<float>(tempInL_[i1] * (1.0 - f) + tempInL_[i2] * f);
+                tempOutR_[i] = static_cast<float>(tempInR_[i1] * (1.0 - f) + tempInR_[i2] * f);
+            }
+        } else {
+            std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
+            std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
+        }
     }
 
-    // [Step 2] トランジェント復元 & FREQ Engine
     if (!isDirectSource_) {
         if (currentFactor >= 2) {
             if (transientMode_ != TransientMode::OFF) {
@@ -1021,17 +1114,18 @@ size_t DspUpsampler::process(
             if (freqMode_ != FreqMode::OFF) {
                 freqEngine_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             }
+            if (isDynamicSbr_) {
+                processDynamicSbr(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+            }
+            if (isMsSpatial_) {
+                processMsSpatial(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+            }
         }
 
-        // [Step 3] 64-bit 10-Band EQ
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-
-        // [Step 4] DC Phase Linearizer
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // ★重要: スペクトル解析リングバッファには、倍率(factor)にかかわらず
-    // 常に一定の時間窓 (85ms) を保つため、原音レート (48k/44.1k相当) で間引いて格納する！
     size_t curPos = specRingPos_.load(std::memory_order_relaxed);
     for (size_t i = 0; i < numInFrames; ++i) {
         size_t outIdx = std::min(i * currentFactor, numOutFrames - 1);
@@ -1040,7 +1134,6 @@ size_t DspUpsampler::process(
     }
     specRingPos_.store(curPos, std::memory_order_release);
 
-    // [Step 5] ディザリング ＆ PCM パッキング
     int outBytesPerSample = 2;
     if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
     else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;

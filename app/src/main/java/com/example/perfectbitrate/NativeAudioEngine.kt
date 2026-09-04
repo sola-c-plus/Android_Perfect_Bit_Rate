@@ -30,6 +30,8 @@ object NativeAudioEngine {
     external fun nativeSetDseeCustomParams(lpcAlgo: Int, gain: Float, extractFreq: Float, useQmf: Boolean)
     external fun nativeSetTransientMode(mode: Int)
     external fun nativeSetTransientCustomParams(useGroupDelay: Boolean, useLattice: Boolean)
+    external fun nativeSetMsSpatial(enabled: Boolean)
+    external fun nativeSetDynamicSbr(enabled: Boolean)
 
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeGetSpectrum(outArray: FloatArray)

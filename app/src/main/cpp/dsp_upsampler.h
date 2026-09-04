@@ -85,7 +85,6 @@ bool operator==(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { 
 template <typename T, typename U, size_t A>
 bool operator!=(const AlignedAllocator<T, A>&, const AlignedAllocator<U, A>&) { return false; }
 
-// ARM NEON SIMD & ダブルバッファリング高速化 FirStage2x
 class FirStage2x {
 public:
     FirStage2x() = default;
@@ -107,7 +106,6 @@ private:
     int writePos_ = 0;
 };
 
-// DC Phase Linearizer
 class DspDcPhaseLinearizer {
 public:
     DspDcPhaseLinearizer();
@@ -126,7 +124,6 @@ private:
     double s1_R_ = 0.0, s2_R_ = 0.0;
 };
 
-// トランジェント復元エンジン
 class DspTransientRestorer {
 public:
     DspTransientRestorer();
@@ -155,7 +152,6 @@ private:
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
 };
 
-// 自作独自アップスケーリング: FREQ Engine
 class DspFreqEngine {
 public:
     DspFreqEngine();
@@ -218,10 +214,16 @@ public:
     void setFreqCustomParams(float gain, float extractFreq);
     FreqMode getFreqMode() const { return freqMode_; }
 
-    // MainActivity 互換 API
     void setTransientMode(TransientMode mode);
     void setTransientCustomParams(bool useGroupDelay, bool useLattice);
     TransientMode getTransientMode() const { return transientMode_; }
+
+    // ★ ステップ2 & 3: M/S空間超解像 ＆ 動的カットオフSBRトグル
+    void setMsSpatial(bool enabled);
+    bool isMsSpatial() const { return isMsSpatial_; }
+
+    void setDynamicSbr(bool enabled);
+    bool isDynamicSbr() const { return isDynamicSbr_; }
 
     size_t process(
         const uint8_t* inPcm,
@@ -240,6 +242,10 @@ private:
     double besselI0(double x);
     void executeFftAnalysis();
 
+    // ステップ2 & 3 内部処理関数
+    void processMsSpatial(float* left, float* right, size_t numFrames);
+    void processDynamicSbr(float* left, float* right, size_t numFrames);
+
     int factor_ = 1;
     float inSampleRate_ = 48000.0f;
     int tapsPerPhase_ = 32;
@@ -249,6 +255,13 @@ private:
     bool isDirectSource_ = false;
     bool isCascadeFir_ = true;
     bool lrIndependentDither_ = true;
+
+    // ★ ステップ2 & 3 フラグとステート
+    bool isMsSpatial_ = false;
+    bool isDynamicSbr_ = false;
+    float prevSideL_ = 0.0f, prevSideR_ = 0.0f;
+    float detectedCutoffHz_ = 16000.0f;
+    float sbrPhaseL_ = 0.0f, sbrPhaseR_ = 0.0f;
 
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::MINIMUM_PHASE_SHARP;
