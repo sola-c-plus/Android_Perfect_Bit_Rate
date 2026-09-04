@@ -763,6 +763,7 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dsp_settings, null)
+        FreqPresetManager.hookDspSettingsDialog(view)
         hookDspSettingsDialog(view)
         dialog.setContentView(view)
 
@@ -1373,6 +1374,7 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
+        FreqPresetManager.hookDevPresetsDialog(view)
         hookDevPresetsDialog(view)
         dialog.setContentView(view)
 
