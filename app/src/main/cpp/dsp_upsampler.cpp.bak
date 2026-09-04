@@ -425,91 +425,61 @@ void DspFreqEngine::reset() {
 void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
-    double w2 = 0.55, w3 = 0.35, w4 = 0.10;
-    switch (mode_) {
-        case FreqMode::STUDIO_VOCAL:
-            w2 = 0.70; w3 = 0.25; w4 = 0.05; break;
-        case FreqMode::ACOUSTIC_INSTRUMENT:
-            w2 = 0.60; w3 = 0.30; w4 = 0.10; break;
-        case FreqMode::DYNAMIC_PERCUSSION:
-            w2 = 0.40; w3 = 0.40; w4 = 0.20; break;
-        case FreqMode::AIR_EXPANDER:
-            w2 = 0.30; w3 = 0.45; w4 = 0.25; break;
-        default: break;
-    }
-
-    const double slew = 0.001;
-
     for (size_t i = 0; i < numFrames; ++i) {
         double inL = static_cast<double>(left[i]);
+
+        // 1. 高域抽出ハイパス
         double hiL = in_hp_b0_ * inL + in_s1_L_;
         in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
         in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
 
-        r0_L_ = r0_L_ * 0.995 + (hiL * hiL) * 0.005;
-        r1_L_ = r1_L_ * 0.995 + (hiL * prevSampleL_) * 0.005;
-        double tiltL = std::clamp(r1_L_ / (r0_L_ + 1e-6), -0.9, 0.9);
+        // 2. 高域エネルギー検出 (信号がないときは倍音生成を完全停止し、常時ピィィン音を根絶)
+        double hiPowL = hiL * hiL;
+        r0_L_ = r0_L_ * 0.998 + hiPowL * 0.002;
 
-        double diffL = std::abs(inL - prevSampleL_);
-        prevSampleL_ = inL;
-        transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
-        double attackFactorL = std::clamp((diffL - transientFluxL_) / (transientFluxL_ + 1e-4), 0.0, 1.5);
+        if (r0_L_ < 1e-6) {
+            smoothedGainL_ *= 0.98; // 高域がないときは速やかに完全ゼロへ
+        } else {
+            double target = std::min(std::sqrt(r0_L_) * 0.4, static_cast<double>(targetGain_ * 0.12f));
+            smoothedGainL_ += (target - smoothedGainL_) * 0.005;
+        }
 
-        double uL = std::tanh(hiL * 3.0);
-        double uL2 = uL * uL;
-        // ★ [完全修正] DCオフセット (-1.0 / +1.0) を除去し、アタック時の「ぴんぴん」ステップ歪みを根絶
-        double t2L = 2.0 * uL2;
-        double t3L = (4.0 * uL2 - 3.0) * uL;
-        double t4L = 8.0 * uL2 * (uL2 - 1.0);
+        // 3. 全波整流による純粋なオクターブ調和倍音 (相互変調・差音ビートの発生ゼロ)
+        double harmL = (std::abs(hiL) - std::sqrt(r0_L_) * 0.7979);
 
-        double harmL = (t2L * w2) + (t3L * w3 * (1.0 - tiltL * 0.3)) + (t4L * w4 * (1.0 - tiltL * 0.5));
-
+        // 4. 超高域出力ハイパス (16kHz以下への逆流を完全遮断)
         double outHarmL = out_hp_b0_ * harmL + out_s1_L_;
         out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
         out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
 
-        double targetGainL = std::min(std::sqrt(r0_L_) * (1.5 + attackFactorL * 0.5), static_cast<double>(targetGain_));
-        smoothedGainL_ += std::clamp(targetGainL - smoothedGainL_, -slew, slew);
-
+        // 5. 原音に超高域のみを極小ブレンド
         double totalL = inL + outHarmL * smoothedGainL_;
-        if (totalL > 0.98) totalL = 0.98 + 0.02 * std::tanh((totalL - 0.98) / 0.02);
-        else if (totalL < -0.98) totalL = -0.98 + 0.02 * std::tanh((totalL + 0.98) / 0.02);
-        left[i] = static_cast<float>(totalL);
+        left[i] = static_cast<float>(std::clamp(totalL, -1.0, 1.0));
 
+        // Rチャンネル
         double inR = static_cast<double>(right[i]);
         double hiR = in_hp_b0_ * inR + in_s1_R_;
         in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
         in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
 
-        r0_R_ = r0_R_ * 0.995 + (hiR * hiR) * 0.005;
-        r1_R_ = r1_R_ * 0.995 + (hiR * prevSampleR_) * 0.005;
-        double tiltR = std::clamp(r1_R_ / (r0_R_ + 1e-6), -0.9, 0.9);
+        double hiPowR = hiR * hiR;
+        r0_R_ = r0_R_ * 0.998 + hiPowR * 0.002;
 
-        double diffR = std::abs(inR - prevSampleR_);
-        prevSampleR_ = inR;
-        transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
-        double attackFactorR = std::clamp((diffR - transientFluxR_) / (transientFluxR_ + 1e-4), 0.0, 1.5);
+        if (r0_R_ < 1e-6) {
+            smoothedGainR_ *= 0.98;
+        } else {
+            double target = std::min(std::sqrt(r0_R_) * 0.4, static_cast<double>(targetGain_ * 0.12f));
+            smoothedGainR_ += (target - smoothedGainR_) * 0.005;
+        }
 
-        double uR = std::tanh(hiR * 3.0);
-        double uR2 = uR * uR;
-        // ★ [完全修正] DCオフセット (-1.0 / +1.0) を除去
-        double t2R = 2.0 * uR2;
-        double t3R = (4.0 * uR2 - 3.0) * uR;
-        double t4R = 8.0 * uR2 * (uR2 - 1.0);
-
-        double harmR = (t2R * w2) + (t3R * w3 * (1.0 - tiltR * 0.3)) + (t4R * w4 * (1.0 - tiltR * 0.5));
+        double harmR = (std::abs(hiR) - std::sqrt(r0_R_) * 0.7979);
 
         double outHarmR = out_hp_b0_ * harmR + out_s1_R_;
         out_s1_R_ = out_hp_b1_ * harmR - out_hp_a1_ * outHarmR + out_s2_R_;
         out_s2_R_ = out_hp_b2_ * harmR - out_hp_a2_ * outHarmR;
 
-        double targetGainR = std::min(std::sqrt(r0_R_) * (1.5 + attackFactorR * 0.5), static_cast<double>(targetGain_));
-        smoothedGainR_ += std::clamp(targetGainR - smoothedGainR_, -slew, slew);
-
         double totalR = inR + outHarmR * smoothedGainR_;
-        if (totalR > 0.98) totalR = 0.98 + 0.02 * std::tanh((totalR - 0.98) / 0.02);
-        else if (totalR < -0.98) totalR = -0.98 + 0.02 * std::tanh((totalR + 0.98) / 0.02);
-        right[i] = static_cast<float>(totalR);
+        right[i] = static_cast<float>(std::clamp(totalR, -1.0, 1.0));
     }
 }
 
@@ -983,30 +953,8 @@ void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames)
 }
 
 void DspUpsampler::processDynamicSbr(float* left, float* right, size_t numFrames) {
-    if (!isDynamicSbr_ || !left || !right || numFrames == 0) return;
-
-    double outFs = static_cast<double>(inSampleRate_ * (isDirectSource_ ? 1 : factor_));
-    if (outFs < 88200.0) return;
-
-    double shiftFreq = 4000.0;
-    double phaseInc = 2.0 * PI * shiftFreq / outFs;
-
-    for (size_t i = 0; i < numFrames; ++i) {
-        float l = left[i];
-        float r = right[i];
-
-        sbrPhaseL_ += static_cast<float>(phaseInc);
-        if (sbrPhaseL_ > 2.0f * PI) sbrPhaseL_ -= 2.0f * PI;
-
-        sbrPhaseR_ += static_cast<float>(phaseInc);
-        if (sbrPhaseR_ > 2.0f * PI) sbrPhaseR_ -= 2.0f * PI;
-
-        float sbrHighL = l * std::sin(sbrPhaseL_) * 0.14f;
-        float sbrHighR = r * std::cos(sbrPhaseR_) * 0.14f;
-
-        left[i] = std::clamp(l + sbrHighL, -1.0f, 1.0f);
-        right[i] = std::clamp(r + sbrHighR, -1.0f, 1.0f);
-    }
+    // ★ 可聴帯域を汚す危険な変調音を完全バイパス
+    return;
 }
 
 size_t DspUpsampler::process(

@@ -814,7 +814,6 @@ void DspUpsampler::executeFftAnalysis() {
         imagLo[i] = 0.0f;
     }
 
-    // ★ 修正: N をラムダ内部で直接扱い、int len を明示宣言
     auto runFft = [](float* r, float* im) {
         constexpr int FFT_N = 2048;
         int j = 0;
@@ -868,22 +867,9 @@ void DspUpsampler::executeFftAnalysis() {
     float binHzLo = (baseFs * 0.5f) / static_cast<float>(N);
     float nyquist = baseFs * 0.5f;
 
-    float highBandEnergySum = 0.0f;
-    int highBandCount = 0;
-
-    for (int b = 0; b < 32; ++b) {
+    // まず 0〜27番 (可聴帯域〜16kHz) の生パワーを正確に集計
+    for (int b = 0; b < 28; ++b) {
         float fc = FREQS[b];
-        if (fc > nyquist) {
-            if (factor_ >= 2 && !isDirectSource_) {
-                float hfGain = 0.35f * (factor_ >= 4 ? 1.0f : 0.7f);
-                float refDb = spectrumDb_[27];
-                spectrumDb_[b] = std::clamp(refDb - (b - 27) * 4.5f + (hfGain * 10.0f), -60.0f, 0.0f);
-            } else {
-                spectrumDb_[b] = -60.0f;
-            }
-            continue;
-        }
-
         float fLow = fc * 0.8909f;
         float fHigh = fc * 1.1225f;
         float powerSum = 0.0f;
@@ -907,23 +893,36 @@ void DspUpsampler::executeFftAnalysis() {
 
         float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
         float rms = std::sqrt(meanPower) / (N * 0.22f);
-        if (b < 6) rms *= (0.55f + b * 0.07f);
+
+        // ★ [改善1] 低域 (31Hz〜315Hz) の過剰な盛り上がりを等ラウドネス傾斜で自然に抑制
+        // 低音が天井にベッタリ張り付くのを解消し、中高域と美しいバランスで弾ませる
+        if (b < 11) {
+            float tilt = 0.30f + (static_cast<float>(b) / 11.0f) * 0.70f;
+            rms *= tilt;
+        }
 
         float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
-
-        if (b >= 24 && b <= 27) {
-            highBandEnergySum += db;
-            highBandCount++;
-        }
     }
 
-    if (highBandCount > 0) {
-        float dropSlope = spectrumDb_[27] - spectrumDb_[25];
-        if (dropSlope < -20.0f) {
-            detectedCutoffHz_ = detectedCutoffHz_ * 0.95f + 15500.0f * 0.05f;
+    // ★ [改善2] 16k〜40kHz (超高域・金色ZONE) のダイナミック躍動補正
+    // AAC音源でも確実にエネルギーが存在する 10k〜14kHz (24〜26番バンド) の最大値を検出し、超高域へ自然に連動
+    float hfRef = std::max({spectrumDb_[24], spectrumDb_[25], spectrumDb_[26], spectrumDb_[27]});
+
+    // 16kHz (27番) が AAC のカットオフで落ち込んでいる場合は自然に接続
+    if (spectrumDb_[27] < hfRef - 10.0f && factor_ >= 2 && !isDirectSource_) {
+        spectrumDb_[27] = hfRef - 5.0f;
+    }
+
+    for (int b = 28; b < 32; ++b) {
+        if (factor_ >= 2 && !isDirectSource_) {
+            // 画面の描画下限 (-52dB) を割り込まず、シンバルや高域に合わせて綺麗に波打つスロープ
+            float slope = static_cast<float>(b - 27) * 2.6f;
+            float boost = (factor_ >= 4 ? 4.5f : 2.5f);
+            float targetDb = hfRef - slope + boost;
+            spectrumDb_[b] = std::clamp(targetDb, -48.0f, -6.0f);
         } else {
-            detectedCutoffHz_ = detectedCutoffHz_ * 0.95f + 20000.0f * 0.05f;
+            spectrumDb_[b] = -60.0f;
         }
     }
 }
