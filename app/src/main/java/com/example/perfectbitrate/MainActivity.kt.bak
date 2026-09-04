@@ -189,7 +189,36 @@ class MainActivity : AppCompatActivity() {
                 (dialogView.findViewById<android.view.View>(R.id.devSwitchLrDither) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useLrDither
                 (dialogView.findViewById<android.view.View>(R.id.devSwitchMsSpatial) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useMsSpatial
                 (dialogView.findViewById<android.view.View>(R.id.devSwitchDynamicSbr) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useDynamicSbr
-            } catch (e: Exception) {
+            
+                  // ★ [完全修正] DSEE/FREQ 親行(LinearLayout)およびスピナーのグレーアウト完全連動
+                  val isDseeActive = (p.id != 0)
+                  val dseeAlpha = if (isDseeActive) 1.0f else 0.35f
+
+                  val lpcView = dialogView.findViewById<android.view.View>(R.id.devSpinnerLpcAlgo)
+                  val gainView = dialogView.findViewById<android.view.View>(R.id.devSpinnerGain)
+                  val freqView = dialogView.findViewById<android.view.View>(R.id.devSpinnerExtractFreq)
+
+                  (lpcView?.parent as? android.view.View)?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
+                  (gainView?.parent as? android.view.View)?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
+                  lpcView?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
+                  gainView?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
+                  freqView?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
+              } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
@@ -1432,6 +1461,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         fun updateUiForProfile(targetId: Int) {
+              (devSpinnerLpcAlgo?.parent as? android.view.View)?.let { it.isEnabled = true; it.alpha = 1.0f }
+              (devSpinnerGain?.parent as? android.view.View)?.let { it.isEnabled = true; it.alpha = 1.0f }
+              devSpinnerLpcAlgo?.let { it.isEnabled = true; it.alpha = 1.0f }
+              devSpinnerGain?.let { it.isEnabled = true; it.alpha = 1.0f }
+              devSpinnerExtractFreq?.let { it.isEnabled = true; it.alpha = 1.0f }
             val p = presetProfiles[targetId] ?: return
             devSpinnerFir.setSelection(p.firType.coerceIn(0, 3))
             devSpinnerTransient.setSelection(p.transientMode.coerceIn(0, 3))
