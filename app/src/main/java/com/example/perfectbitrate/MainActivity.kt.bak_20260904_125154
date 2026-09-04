@@ -68,220 +68,6 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
-    // =========================================================================
-    // ★ [完全リンク] 表・裏スピナー常時同期 ＆ パラメータ自動変化マネージャー
-    // =========================================================================
-    data class FreqPresetDef(
-        val id: Int,                 // 0: OFF, 1: Auto AI, 2: 男性ボーカル, 3: 女性ボーカル, 4: パーカッション, 5: ストリングス
-        val name: String,
-        val firType: Int,           // 0: Linear Sharp, 1: Linear Slow, 2: Min Sharp, 3: Min Slow
-        val transientMode: Int,     // 0: OFF, 1: Natural, 2: Punch, 3: Acoustic
-        val lpcAlgo: Int,           // 0: DSEE AI, 1: K2 LPC, 2: Adaptive Exciter
-        val gain: Float,
-        val extractFreq: Float,
-        val useQmf: Boolean,
-        val useGroupDelay: Boolean,
-        val useLattice: Boolean,
-        val useLrDither: Boolean,
-        val useMsSpatial: Boolean,
-        val useDynamicSbr: Boolean
-    )
-
-    private val PRESET_NAMES = listOf("OFF", "Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
-
-    private val PRESET_DEFS = listOf(
-        // 0: OFF (全DSP停止・全スイッチ完全消灯)
-        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 10000f, false, false, false, false, false, false),
-        // 1: Auto AI (全DSPフル点灯・全スイッチON)
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.18f, 10500f, true, true, true, true, true, true),
-        // 2: 男性ボーカル (太い基音と明瞭感。QMF・群遅延・残響超解像ON、格子型とSBRはOFF)
-        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.12f, 10000f, true, true, false, true, true, false),
-        // 3: 女性ボーカル (サ行抑制・定位・残響のみON、格子型とSBRはOFFで声質維持)
-        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.14f, 11500f, true, true, false, true, true, false),
-        // 4: パーカッション (パンチ最大化。アタックを削るQMF・広がるM/S・濁るSBRは全てOFF)
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.22f, 9500f, false, true, true, true, false, false),
-        // 5: ストリングス (弦・打弦、自然倍音K2、撥弦過渡Lattice。空間拡散OFFで楽器の芯を維持)
-        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.18f, 10500f, true, true, true, true, false, true)
-    )
-
-    private var currentPresetIndex = 0 // 0: OFF, 1: Auto AI...
-    private var isPresetSyncing = false
-    private var frontSpinnerWeakRef: java.lang.ref.WeakReference<android.widget.Spinner>? = null
-    private var backSpinnerWeakRef: java.lang.ref.WeakReference<android.widget.Spinner>? = null
-    private var backDialogViewWeakRef: java.lang.ref.WeakReference<android.view.View>? = null
-
-    /**
-     * Native C++ DSP エンジンへ即座に反映
-     */
-    private fun applyPresetToNativeEngine(p: FreqPresetDef) {
-        if (p.id == 0) {
-            NativeAudioEngine.nativeSetFreqMode(0)
-            NativeAudioEngine.nativeSetTransientMode(0)
-            NativeAudioEngine.nativeSetMsSpatial(false)
-            NativeAudioEngine.nativeSetDynamicSbr(false)
-            NativeAudioEngine.nativeSetTransientCustomParams(false, false)
-            NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 10000.0f)
-        } else {
-            NativeAudioEngine.nativeSetFirFilterType(p.firType)
-            NativeAudioEngine.nativeSetTransientMode(p.transientMode)
-            NativeAudioEngine.nativeSetTransientCustomParams(p.useGroupDelay, p.useLattice)
-            NativeAudioEngine.nativeSetFreqMode(p.lpcAlgo)
-            NativeAudioEngine.nativeSetFreqCustomParams(p.gain, p.extractFreq)
-            NativeAudioEngine.nativeSetLrIndependentDither(p.useLrDither)
-            NativeAudioEngine.nativeSetMsSpatial(p.useMsSpatial)
-            NativeAudioEngine.nativeSetDynamicSbr(p.useDynamicSbr)
-        }
-    }
-
-    /**
-     * 裏設定ダイアログの全UI（最上部スピナー・下の各スピナー・スイッチ6種）を強制更新
-     */
-    private fun updateBackTunerUI(dialogView: android.view.View?, p: FreqPresetDef) {
-        if (dialogView == null) return
-        dialogView.post {
-            try {
-                // 1. 最上部 TARGET PRESET スピナー
-                val targetSp = dialogView.findViewById<android.view.View>(R.id.spinnerTargetPreset) as? android.widget.Spinner
-                if (targetSp != null && targetSp.selectedItemPosition != p.id) {
-                    targetSp.setSelection(p.id)
-                }
-
-                // 2. 各スピナー (FIR, Transient, LPC)
-                (dialogView.findViewById<android.view.View>(R.id.devSpinnerFir) as? android.widget.Spinner)?.setSelection(p.firType)
-                (dialogView.findViewById<android.view.View>(R.id.devSpinnerTransient) as? android.widget.Spinner)?.setSelection(p.transientMode)
-                (dialogView.findViewById<android.view.View>(R.id.devSpinnerLpcAlgo) as? android.widget.Spinner)?.setSelection(p.lpcAlgo)
-
-                // Gain
-                (dialogView.findViewById<android.view.View>(R.id.devSpinnerGain) as? android.widget.Spinner)?.let { sp ->
-                    val ad = sp.adapter ?: return@let
-                    var best = 0
-                    var minD = Float.MAX_VALUE
-                    for (i in 0 until ad.count) {
-                        val num = Regex("""\d+(\.\d+)?""").find(ad.getItem(i).toString())?.value?.toFloatOrNull()
-                        if (num != null && kotlin.math.abs(num - p.gain) < minD) {
-                            minD = kotlin.math.abs(num - p.gain)
-                            best = i
-                        }
-                    }
-                    sp.setSelection(best)
-                }
-
-                // Freq
-                (dialogView.findViewById<android.view.View>(R.id.devSpinnerExtractFreq) as? android.widget.Spinner)?.let { sp ->
-                    val ad = sp.adapter ?: return@let
-                    var best = 0
-                    var minD = Float.MAX_VALUE
-                    for (i in 0 until ad.count) {
-                        val cleanStr = ad.getItem(i).toString().replace(",", "")
-                        val num = Regex("""\d+""").find(cleanStr)?.value?.toFloatOrNull()
-                        if (num != null && kotlin.math.abs(num - p.extractFreq) < minD) {
-                            minD = kotlin.math.abs(num - p.extractFreq)
-                            best = i
-                        }
-                    }
-                    sp.setSelection(best)
-                }
-
-                // 3. ★ スイッチ6種 (OFFなら全てfalse完全消灯！各プリセットならメリハリ点灯！)
-                (dialogView.findViewById<android.view.View>(R.id.devSwitchQmf) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useQmf
-                (dialogView.findViewById<android.view.View>(R.id.devSwitchGroupDelay) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useGroupDelay
-                (dialogView.findViewById<android.view.View>(R.id.devSwitchLattice) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useLattice
-                (dialogView.findViewById<android.view.View>(R.id.devSwitchLrDither) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useLrDither
-                (dialogView.findViewById<android.view.View>(R.id.devSwitchMsSpatial) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useMsSpatial
-                (dialogView.findViewById<android.view.View>(R.id.devSwitchDynamicSbr) as? androidx.appcompat.widget.SwitchCompat)?.isChecked = p.useDynamicSbr
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    /**
-     * 表または裏のスピナーが変更されたときの共通同期ハンドラ
-     */
-    private fun onUnifiedPresetSelected(position: Int) {
-        if (isPresetSyncing) return
-        isPresetSyncing = true
-        try {
-            val safePos = position.coerceIn(0, PRESET_DEFS.size - 1)
-            currentPresetIndex = safePos
-            val preset = PRESET_DEFS[safePos]
-
-            // 1. Native DSP へ反映
-            applyPresetToNativeEngine(preset)
-
-            // 2. 表のスピナーの選択位置を同期
-            frontSpinnerWeakRef?.get()?.let { sp ->
-                if (sp.selectedItemPosition != safePos) {
-                    sp.setSelection(safePos)
-                }
-            }
-
-            // 3. 裏のスピナーの選択位置を同期
-            backSpinnerWeakRef?.get()?.let { sp ->
-                if (sp.selectedItemPosition != safePos) {
-                    sp.setSelection(safePos)
-                }
-            }
-
-            // 4. 裏ダイアログの全UI（下の各パラメータ＆スイッチ6種）を自動変化！
-            updateBackTunerUI(backDialogViewWeakRef?.get(), preset)
-        } finally {
-            isPresetSyncing = false
-        }
-    }
-
-    /**
-     * 表設定ダイアログ (dialog_dsp_settings) をフック
-     */
-    private fun hookDspSettingsDialog(dialogView: android.view.View?) {
-        if (dialogView == null) return
-        dialogView.post {
-            val frontSp = dialogView.findViewById<android.view.View>(R.id.dialogSpinnerDsee) as? android.widget.Spinner ?: return@post
-            frontSpinnerWeakRef = java.lang.ref.WeakReference(frontSp)
-
-            // 表スピナーのアダプターを完全共通化
-            val ad = android.widget.ArrayAdapter(dialogView.context, R.layout.item_spinner_dap, PRESET_NAMES)
-            ad.setDropDownViewResource(R.layout.item_spinner_dap)
-            frontSp.adapter = ad
-            frontSp.setSelection(currentPresetIndex)
-
-            frontSp.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p0: android.widget.AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
-                    onUnifiedPresetSelected(pos)
-                }
-                override fun onNothingSelected(p0: android.widget.AdapterView<*>?) {}
-            }
-        }
-    }
-
-    /**
-     * 裏設定ダイアログ (dialog_dev_presets) をフック
-     */
-    private fun hookDevPresetsDialog(dialogView: android.view.View?) {
-        if (dialogView == null) return
-        dialogView.post {
-            val backSp = dialogView.findViewById<android.view.View>(R.id.spinnerTargetPreset) as? android.widget.Spinner ?: return@post
-            backSpinnerWeakRef = java.lang.ref.WeakReference(backSp)
-            backDialogViewWeakRef = java.lang.ref.WeakReference(dialogView)
-
-            // ★ 裏スピナーにも正式に「OFF」を含む完全共通アダプターをセット！
-            val ad = android.widget.ArrayAdapter(dialogView.context, R.layout.item_spinner_dap, PRESET_NAMES)
-            ad.setDropDownViewResource(R.layout.item_spinner_dap)
-            backSp.adapter = ad
-            backSp.setSelection(currentPresetIndex)
-
-            backSp.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p0: android.widget.AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
-                    onUnifiedPresetSelected(pos)
-                }
-                override fun onNothingSelected(p0: android.widget.AdapterView<*>?) {}
-            }
-
-            // 開いた瞬間に、現在の設定値（OFFなら全消灯、Auto AIなら全点灯）で下の全パラメータを強制更新！
-            updateBackTunerUI(dialogView, PRESET_DEFS[currentPresetIndex])
-        }
-    }
-
 
     private lateinit var mainRootLayout: View
     private lateinit var badgeDirect: TextView
@@ -763,7 +549,6 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dsp_settings, null)
-        hookDspSettingsDialog(view)
         dialog.setContentView(view)
 
         val isDark = isDarkThemeActive()
@@ -1373,7 +1158,6 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
-        hookDevPresetsDialog(view)
         dialog.setContentView(view)
 
         dialog.setOnShowListener {
@@ -1390,6 +1174,10 @@ class MainActivity : AppCompatActivity() {
         val devSwitchQmf = view.findViewById<SwitchCompat>(R.id.devSwitchQmf)
         val devSwitchGroupDelay = view.findViewById<SwitchCompat>(R.id.devSwitchGroupDelay)
         val devSwitchLattice = view.findViewById<SwitchCompat>(R.id.devSwitchLattice)
+        val devSwitchMsSpatial = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.devSwitchMsSpatial)
+        val devSwitchDynamicSbr = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.devSwitchDynamicSbr)
+        devSwitchMsSpatial?.setOnCheckedChangeListener { _, isChecked -> NativeAudioEngine.nativeSetMsSpatial(isChecked) }
+        devSwitchDynamicSbr?.setOnCheckedChangeListener { _, isChecked -> NativeAudioEngine.nativeSetDynamicSbr(isChecked) }
         val devSwitchLrDither = view.findViewById<SwitchCompat>(R.id.devSwitchLrDither)
         val btnDevCopyConfig = view.findViewById<Button>(R.id.btnDevCopyConfig)
         val btnDevResetDefault = view.findViewById<Button>(R.id.btnDevResetDefault)
@@ -1423,6 +1211,14 @@ class MainActivity : AppCompatActivity() {
         spinnerTargetPreset.setSelection(targetIds.indexOf(currentEditTargetId).coerceAtLeast(0))
 
         devSwitchLrDither.isChecked = isLrIndependentDither
+        val idStr = currentEditTargetId.toString()
+        val isMale = idStr.contains("男性") || idStr.contains("MALE", ignoreCase = true) || idStr == "2"
+        val isOff = idStr == "OFF" || idStr == "0"
+        val shouldSwOn = !isMale && !isOff
+        devSwitchMsSpatial?.isChecked = shouldSwOn
+        devSwitchDynamicSbr?.isChecked = shouldSwOn
+        NativeAudioEngine.nativeSetMsSpatial(shouldSwOn)
+        NativeAudioEngine.nativeSetDynamicSbr(shouldSwOn)
         devSwitchLrDither.setOnCheckedChangeListener { _, isChecked ->
             isLrIndependentDither = isChecked
             prefs.edit { putBoolean("lr_dither_enabled", isChecked) }
@@ -2064,31 +1860,5 @@ class MainActivity : AppCompatActivity() {
             isServiceBound = false
         }
         geckoSession.close()
-    }
-
-    // ★ FREQ プリセットに応じた適切な M/S空間 ＆ 動的SBR の推奨値
-    private fun getFreqPresetRecommendedSwitches(presetPos: Int): Pair<Boolean, Boolean> {
-        return when (presetPos) {
-            1 -> Pair(true, true)   // Auto AI: 両方ON (動的自律制御)
-            2 -> Pair(false, false) // 男性ボーカル: 両方OFF (センター定位・声の太さ最優先)
-            3 -> Pair(true, true)   // 女性ボーカル: 両方ON (残響と頭声倍音)
-            4 -> Pair(true, true)   // パーカッション: 両方ON (ステレオ感とシンバル抜け)
-            5 -> Pair(true, true)   // ストリングス: 両方ON (ホール残響最大)
-            else -> Pair(false, false) // OFF
-        }
-    }
-
-    private fun applyFreqPresetAndSyncSwitches(presetPos: Int) {
-        val (recMs, recSbr) = getFreqPresetRecommendedSwitches(presetPos)
-        val prefs = getSharedPreferences("bp_prefs", android.content.Context.MODE_PRIVATE)
-        prefs.edit()
-            .putInt("current_freq_preset", presetPos)
-            .putBoolean("dev_ms_spatial", recMs)
-            .putBoolean("dev_dynamic_sbr", recSbr)
-            .apply()
-
-        NativeAudioEngine.nativeSetFreqMode(presetPos)
-        NativeAudioEngine.nativeSetMsSpatial(recMs)
-        NativeAudioEngine.nativeSetDynamicSbr(recSbr)
     }
 }
