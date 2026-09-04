@@ -1174,10 +1174,6 @@ class MainActivity : AppCompatActivity() {
         val devSwitchQmf = view.findViewById<SwitchCompat>(R.id.devSwitchQmf)
         val devSwitchGroupDelay = view.findViewById<SwitchCompat>(R.id.devSwitchGroupDelay)
         val devSwitchLattice = view.findViewById<SwitchCompat>(R.id.devSwitchLattice)
-        val devSwitchMsSpatial = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.devSwitchMsSpatial)
-        val devSwitchDynamicSbr = view.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.devSwitchDynamicSbr)
-        devSwitchMsSpatial?.setOnCheckedChangeListener { _, isChecked -> NativeAudioEngine.nativeSetMsSpatial(isChecked) }
-        devSwitchDynamicSbr?.setOnCheckedChangeListener { _, isChecked -> NativeAudioEngine.nativeSetDynamicSbr(isChecked) }
         val devSwitchLrDither = view.findViewById<SwitchCompat>(R.id.devSwitchLrDither)
         val btnDevCopyConfig = view.findViewById<Button>(R.id.btnDevCopyConfig)
         val btnDevResetDefault = view.findViewById<Button>(R.id.btnDevResetDefault)
@@ -1211,14 +1207,6 @@ class MainActivity : AppCompatActivity() {
         spinnerTargetPreset.setSelection(targetIds.indexOf(currentEditTargetId).coerceAtLeast(0))
 
         devSwitchLrDither.isChecked = isLrIndependentDither
-        val idStr = currentEditTargetId.toString()
-        val isMale = idStr.contains("男性") || idStr.contains("MALE", ignoreCase = true) || idStr == "2" || idStr == "1"
-        val isOff = idStr == "OFF" || idStr == "0"
-        val shouldSwOn = !isMale && !isOff
-        devSwitchMsSpatial?.isChecked = shouldSwOn
-        devSwitchDynamicSbr?.isChecked = shouldSwOn
-        NativeAudioEngine.nativeSetMsSpatial(shouldSwOn)
-        NativeAudioEngine.nativeSetDynamicSbr(shouldSwOn)
         devSwitchLrDither.setOnCheckedChangeListener { _, isChecked ->
             isLrIndependentDither = isChecked
             prefs.edit { putBoolean("lr_dither_enabled", isChecked) }
@@ -1860,5 +1848,31 @@ class MainActivity : AppCompatActivity() {
             isServiceBound = false
         }
         geckoSession.close()
+    }
+
+    // ★ FREQ プリセットに応じた適切な M/S空間 ＆ 動的SBR の推奨値
+    private fun getFreqPresetRecommendedSwitches(presetPos: Int): Pair<Boolean, Boolean> {
+        return when (presetPos) {
+            1 -> Pair(true, true)   // Auto AI: 両方ON (動的自律制御)
+            2 -> Pair(false, false) // 男性ボーカル: 両方OFF (センター定位・声の太さ最優先)
+            3 -> Pair(true, true)   // 女性ボーカル: 両方ON (残響と頭声倍音)
+            4 -> Pair(true, true)   // パーカッション: 両方ON (ステレオ感とシンバル抜け)
+            5 -> Pair(true, true)   // ストリングス: 両方ON (ホール残響最大)
+            else -> Pair(false, false) // OFF
+        }
+    }
+
+    private fun applyFreqPresetAndSyncSwitches(presetPos: Int) {
+        val (recMs, recSbr) = getFreqPresetRecommendedSwitches(presetPos)
+        val prefs = getSharedPreferences("bp_prefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit()
+            .putInt("current_freq_preset", presetPos)
+            .putBoolean("dev_ms_spatial", recMs)
+            .putBoolean("dev_dynamic_sbr", recSbr)
+            .apply()
+
+        NativeAudioEngine.nativeSetFreqMode(presetPos)
+        NativeAudioEngine.nativeSetMsSpatial(recMs)
+        NativeAudioEngine.nativeSetDynamicSbr(recSbr)
     }
 }

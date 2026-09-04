@@ -46,7 +46,6 @@
             android:padding="0dp" />
     </LinearLayout>
 
-    <!-- 対象プリセット選択 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -86,7 +85,6 @@
             android:popupBackground="#1A1A1A" />
     </LinearLayout>
 
-    <!-- 1. FIR フィルター -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -110,7 +108,6 @@
             android:popupBackground="#1A1A1A" />
     </LinearLayout>
 
-    <!-- 2. トランジェント復元 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -134,7 +131,6 @@
             android:popupBackground="#1A1A1A" />
     </LinearLayout>
 
-    <!-- 3. LPC アルゴリズム -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -158,7 +154,6 @@
             android:popupBackground="#1A1A1A" />
     </LinearLayout>
 
-    <!-- 4. 倍音付加ゲイン & 抽出周波数 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -198,7 +193,6 @@
         android:background="#222222"
         android:layout_marginBottom="10dp" />
 
-    <!-- ★ 高度 DSP スイッチ群 (QMF / 群遅延 / 格子型) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -279,7 +273,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="14dp">
+        android:layout_marginBottom="8dp">
 
         <TextView
             android:layout_width="0dp"
@@ -301,7 +295,7 @@
             android:checked="true" />
     </LinearLayout>
 
-        <!-- ★ ステップ2: M/S 空間・残響超解像 -->
+    <!-- ★ ステップ2: M/S 空間・残響超解像 (初期値 ON 点灯) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -338,16 +332,17 @@
             app:thumbTint="@null"
             app:trackTint="@null"
             android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline" />
+            app:track="@drawable/switch_track_walkman_outline"
+            android:checked="true" />
     </LinearLayout>
 
-    <!-- ★ ステップ3: 動的カットオフ検知 ＆ SBR スペクトルコピー -->
+    <!-- ★ ステップ3: 動的カットオフ検知 ＆ SBR (初期値 ON 点灯) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
+        android:layout_marginBottom="14dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -378,10 +373,10 @@
             app:thumbTint="@null"
             app:trackTint="@null"
             android:thumb="@drawable/switch_thumb_white"
-            app:track="@drawable/switch_track_walkman_outline" />
+            app:track="@drawable/switch_track_walkman_outline"
+            android:checked="true" />
     </LinearLayout>
 
-    <!-- ★ 製品(APK)固定用コードコピーボタン -->
     <Button
         android:id="@+id/btnDevCopyConfig"
         android:layout_width="match_parent"

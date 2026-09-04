@@ -92,7 +92,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
     g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(type));
 }
 
-// FREQ Engine API
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(
         JNIEnv *env, jobject thiz, jint mode) {
@@ -108,7 +107,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(
     g_upsampler->setFreqCustomParams(gain, extractFreq);
 }
 
-// DSEE 互換 API
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeMode(
         JNIEnv *env, jobject thiz, jint mode) {
@@ -121,7 +119,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeCustomParams(
     Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(env, thiz, gain, extractFreq);
 }
 
-// ★ MainActivity から参照される Transient API の完全復元
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
         JNIEnv *env, jobject thiz, jint mode) {
@@ -144,11 +141,23 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetMsSpatial(
     g_upsampler->setMsSpatial(enabled == JNI_TRUE);
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetMsSpatial(
+        JNIEnv *env, jobject thiz) {
+    return (g_upsampler && g_upsampler->isMsSpatial()) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDynamicSbr(
         JNIEnv *env, jobject thiz, jboolean enabled) {
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDynamicSbr(enabled == JNI_TRUE);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetDynamicSbr(
+        JNIEnv *env, jobject thiz) {
+    return (g_upsampler && g_upsampler->isDynamicSbr()) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

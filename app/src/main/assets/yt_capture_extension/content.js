@@ -54,7 +54,6 @@ const SMART_INVERT_CSS = `
     }
 
     /* 2. 画像・動画・キャンバス・背景画像「のみ」を再反転 (本来のフルカラーを100%維持) */
-    /* ※ 親コンテナ(div, panel, yt-img-shadow等)には絶対に指定しないことで二重反転・UI白飛びを完全根絶 */
     img,
     video,
     canvas,
