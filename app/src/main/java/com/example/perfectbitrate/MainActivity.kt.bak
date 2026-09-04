@@ -194,10 +194,19 @@ class MainActivity : AppCompatActivity() {
                   val isDseeActive = (p.id != 0)
                   val dseeAlpha = if (isDseeActive) 1.0f else 0.35f
 
+                  val transView = dialogView.findViewById<android.view.View>(R.id.devSpinnerTransient)
                   val lpcView = dialogView.findViewById<android.view.View>(R.id.devSpinnerLpcAlgo)
                   val gainView = dialogView.findViewById<android.view.View>(R.id.devSpinnerGain)
                   val freqView = dialogView.findViewById<android.view.View>(R.id.devSpinnerExtractFreq)
 
+                  (transView?.parent as? android.view.View)?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
+                  transView?.let {
+                      it.isEnabled = isDseeActive
+                      it.alpha = dseeAlpha
+                  }
                   (lpcView?.parent as? android.view.View)?.let {
                       it.isEnabled = isDseeActive
                       it.alpha = dseeAlpha
