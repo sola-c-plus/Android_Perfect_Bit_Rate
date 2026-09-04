@@ -39,10 +39,10 @@ const itagMap = {
     '251': { name: 'Opus 160kbps (48k)', rate: 48000 },
     '250': { name: 'Opus 70kbps (48k)', rate: 48000 },
     '249': { name: 'Opus 50kbps (48k)', rate: 48000 },
-    '140': { name: 'AAC 128kbps (44.1k)', rate: 44100 },
-    '141': { name: 'AAC 256kbps (44.1k)', rate: 44100 },
-    '256': { name: 'AAC 256kbps (HQ 44.1k)', rate: 44100 },
-    '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 44100 }
+    '140': { name: 'AAC 128kbps (44.1k)', rate: 48000 },
+    '141': { name: 'AAC 256kbps (44.1k)', rate: 48000 },
+    '256': { name: 'AAC 256kbps (HQ 44.1k)', rate: 48000 },
+    '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 48000 }
 };
 
 // ★ 正確なスマート反転: コンテナ(panelやdiv)を巻き込まず、メディア要素そのものだけをピンポイント再反転
@@ -200,7 +200,7 @@ function scanStreamCodec() {
                     break;
                 } else if (url.includes('mime=audio%2Fmp4') || url.includes('mime=audio/mp4')) {
                     detectedName = 'AAC (MP4 44.1k)';
-                    detectedRate = 44100;
+                    detectedRate = 48000;
                     break;
                 }
             }

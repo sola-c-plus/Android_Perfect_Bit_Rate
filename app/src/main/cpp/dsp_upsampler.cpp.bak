@@ -915,19 +915,15 @@ void DspUpsampler::executeFftAnalysis() {
 
     for (int b = 28; b < 32; ++b) {
         if (factor_ >= 2 && !isDirectSource_) {
-            if (isFreqActive) {
-                // 【FREQ ON時】16kHzのピークから緩やかに減衰 (-2.4dB/バンド) し、金色ZONE全体が優雅に波打つ
-                float slope = static_cast<float>(b - 27) * 2.4f;
-                float targetDb = spectrumDb_[27] - slope + 3.5f;
-                spectrumDb_[b] = std::clamp(targetDb, -48.0f, -6.0f);
-            } else {
-                // 【FREQ OFF時】控えめなロールオフ (-3.8dB/バンド) で品よく波打つ (V字跳ね上がりゼロ)
-                float slope = static_cast<float>(b - 27) * 3.8f;
-                float targetDb = spectrumDb_[27] - slope;
-                spectrumDb_[b] = std::clamp(targetDb, -52.0f, -6.0f);
-            }
+            // ★ [完全修正] 16kHzから超高域へ向けて常に右肩下がりに減衰 (-3.0dB/バンド)
+            // 余計な加算ゲインを全廃し、どのプリセットでも不自然な盛り上がり (V字跳ね上がり) を物理的にゼロ化
+            float decayPerBand = isFreqActive ? 3.0f : 4.5f;
+            float slope = static_cast<float>(b - 27) * decayPerBand;
+            float targetDb = spectrumDb_[27] - slope;
+
+            // ★ 下限クランプを -60.0dB まで解放し、40k が岩盤で停止する問題を完全解消 (40kまで生き生きと動く)
+            spectrumDb_[b] = std::clamp(targetDb, -60.0f, 0.0f);
         } else {
-            // 1x Direct 時は底辺へ
             spectrumDb_[b] = -60.0f;
         }
     }
