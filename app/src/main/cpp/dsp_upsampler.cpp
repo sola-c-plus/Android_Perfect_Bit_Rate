@@ -907,21 +907,17 @@ void DspUpsampler::executeFftAnalysis() {
 
     // ★ [改善2] 16k〜40kHz (超高域・金色ZONE) のダイナミック躍動補正
     // AAC音源でも確実にエネルギーが存在する 10k〜14kHz (24〜26番バンド) の最大値を検出し、超高域へ自然に連動
-    float hfRef = std::max({spectrumDb_[24], spectrumDb_[25], spectrumDb_[26], spectrumDb_[27]});
-
-    // 16kHz (27番) が AAC のカットオフで落ち込んでいる場合は自然に接続
-    if (spectrumDb_[27] < hfRef - 10.0f && factor_ >= 2 && !isDirectSource_) {
-        spectrumDb_[27] = hfRef - 5.0f;
-    }
+    // ★ [完全修正] FREQ ENGINE が ON の時だけ超高域を連動、OFF の時は 1x 同様に自然に底辺へ沈める
+    bool isFreqActive = (freqMode_ != FreqMode::OFF) && !isDirectSource_;
 
     for (int b = 28; b < 32; ++b) {
-        if (factor_ >= 2 && !isDirectSource_) {
-            // 画面の描画下限 (-52dB) を割り込まず、シンバルや高域に合わせて綺麗に波打つスロープ
-            float slope = static_cast<float>(b - 27) * 2.6f;
-            float boost = (factor_ >= 4 ? 4.5f : 2.5f);
-            float targetDb = hfRef - slope + boost;
-            spectrumDb_[b] = std::clamp(targetDb, -48.0f, -6.0f);
+        if (isFreqActive && factor_ >= 2) {
+            // 16kHzの実測値から滑らかに減衰していく自然なロールオフ (V字の跳ね上がりを完全排除)
+            float slope = static_cast<float>(b - 27) * 3.2f;
+            float targetDb = spectrumDb_[27] - slope;
+            spectrumDb_[b] = std::clamp(targetDb, -60.0f, 0.0f);
         } else {
+            // FREQ ENGINE が OFF、または 1x の時は底辺 (-60dB) に綺麗に沈める
             spectrumDb_[b] = -60.0f;
         }
     }
