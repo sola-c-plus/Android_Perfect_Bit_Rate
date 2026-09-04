@@ -865,9 +865,8 @@ void DspUpsampler::executeFftAnalysis() {
     float baseFs = inSampleRate_;
     float binHzHi = baseFs / static_cast<float>(N);
     float binHzLo = (baseFs * 0.5f) / static_cast<float>(N);
-    float nyquist = baseFs * 0.5f;
 
-    // まず 0〜27番 (可聴帯域〜16kHz) の生パワーを正確に集計
+    // 0〜27番 (可聴帯域〜16kHz) の集計
     for (int b = 0; b < 28; ++b) {
         float fc = FREQS[b];
         float fLow = fc * 0.8909f;
@@ -894,30 +893,41 @@ void DspUpsampler::executeFftAnalysis() {
         float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
         float rms = std::sqrt(meanPower) / (N * 0.22f);
 
-        // ★ [改善1] 低域 (31Hz〜315Hz) の過剰な盛り上がりを等ラウドネス傾斜で自然に抑制
-        // 低音が天井にベッタリ張り付くのを解消し、中高域と美しいバランスで弾ませる
+        // 低域 (31Hz〜315Hz) の過剰な盛り上がりを等ラウドネス傾斜で自然に抑制
         if (b < 11) {
             float tilt = 0.30f + (static_cast<float>(b) / 11.0f) * 0.70f;
             rms *= tilt;
+        }
+
+        // ★ [感度アップ] 10kHz〜16kHz (24〜27番) の表示感度を自然にブースト (+5.1dB)
+        // ハイハットやシンバル、ブレスのアタックに合わせて適度に山が立って躍動するよう調整
+        if (b >= 24 && b <= 27) {
+            float hfBoost = 1.0f + (static_cast<float>(b - 24) / 3.0f) * 0.8f;
+            rms *= hfBoost;
         }
 
         float db = (rms > 1e-6f) ? (20.0f * std::log10(rms)) : -60.0f;
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
     }
 
-    // ★ [改善2] 16k〜40kHz (超高域・金色ZONE) のダイナミック躍動補正
-    // AAC音源でも確実にエネルギーが存在する 10k〜14kHz (24〜26番バンド) の最大値を検出し、超高域へ自然に連動
-    // ★ [完全修正] FREQ ENGINE が ON の時だけ超高域を連動、OFF の時は 1x 同様に自然に底辺へ沈める
+    // ★ [完全修正] 超高域 (28〜31番: 20k〜40kHz 金色ZONE) の表示感度オプティマイズ
     bool isFreqActive = (freqMode_ != FreqMode::OFF) && !isDirectSource_;
 
     for (int b = 28; b < 32; ++b) {
-        if (isFreqActive && factor_ >= 2) {
-            // 16kHzの実測値から滑らかに減衰していく自然なロールオフ (V字の跳ね上がりを完全排除)
-            float slope = static_cast<float>(b - 27) * 3.2f;
-            float targetDb = spectrumDb_[27] - slope;
-            spectrumDb_[b] = std::clamp(targetDb, -60.0f, 0.0f);
+        if (factor_ >= 2 && !isDirectSource_) {
+            if (isFreqActive) {
+                // 【FREQ ON時】16kHzのピークから緩やかに減衰 (-2.4dB/バンド) し、金色ZONE全体が優雅に波打つ
+                float slope = static_cast<float>(b - 27) * 2.4f;
+                float targetDb = spectrumDb_[27] - slope + 3.5f;
+                spectrumDb_[b] = std::clamp(targetDb, -48.0f, -6.0f);
+            } else {
+                // 【FREQ OFF時】控えめなロールオフ (-3.8dB/バンド) で品よく波打つ (V字跳ね上がりゼロ)
+                float slope = static_cast<float>(b - 27) * 3.8f;
+                float targetDb = spectrumDb_[27] - slope;
+                spectrumDb_[b] = std::clamp(targetDb, -52.0f, -6.0f);
+            }
         } else {
-            // FREQ ENGINE が OFF、または 1x の時は底辺 (-60dB) に綺麗に沈める
+            // 1x Direct 時は底辺へ
             spectrumDb_[b] = -60.0f;
         }
     }
