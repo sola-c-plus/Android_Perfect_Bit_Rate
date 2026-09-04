@@ -325,7 +325,7 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         prevSampleL_ = inL;
 
         double gdL = useGroupDelay_ ? (deltaL * 0.15) : 0.0;
-        double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.3) + gdL;
+        double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.18) + gdL;
         left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
 
         double inR = static_cast<double>(right[i]);
@@ -349,7 +349,7 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         prevSampleR_ = inR;
 
         double gdR = useGroupDelay_ ? (deltaR * 0.15) : 0.0;
-        double outR = inR + (deltaR * attackGain_ * transientRatioR * 0.3) + gdR;
+        double outR = inR + (deltaR * attackGain_ * transientRatioR * 0.18) + gdR;
         right[i] = static_cast<float>(std::clamp(outR, -1.0, 1.0));
     }
 }
@@ -455,11 +455,12 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         transientFluxL_ = transientFluxL_ * 0.98 + diffL * 0.02;
         double attackFactorL = std::clamp((diffL - transientFluxL_) / (transientFluxL_ + 1e-4), 0.0, 1.5);
 
-        double uL = std::tanh(hiL * 3.5);
+        double uL = std::tanh(hiL * 3.0);
         double uL2 = uL * uL;
-        double t2L = 2.0 * uL2 - 1.0;
+        // ★ [完全修正] DCオフセット (-1.0 / +1.0) を除去し、アタック時の「ぴんぴん」ステップ歪みを根絶
+        double t2L = 2.0 * uL2;
         double t3L = (4.0 * uL2 - 3.0) * uL;
-        double t4L = 8.0 * uL2 * (uL2 - 1.0) + 1.0;
+        double t4L = 8.0 * uL2 * (uL2 - 1.0);
 
         double harmL = (t2L * w2) + (t3L * w3 * (1.0 - tiltL * 0.3)) + (t4L * w4 * (1.0 - tiltL * 0.5));
 
@@ -467,7 +468,7 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
         out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
 
-        double targetGainL = std::min(std::sqrt(r0_L_) * (3.0 + attackFactorL), static_cast<double>(targetGain_));
+        double targetGainL = std::min(std::sqrt(r0_L_) * (1.5 + attackFactorL * 0.5), static_cast<double>(targetGain_));
         smoothedGainL_ += std::clamp(targetGainL - smoothedGainL_, -slew, slew);
 
         double totalL = inL + outHarmL * smoothedGainL_;
@@ -489,11 +490,12 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         transientFluxR_ = transientFluxR_ * 0.98 + diffR * 0.02;
         double attackFactorR = std::clamp((diffR - transientFluxR_) / (transientFluxR_ + 1e-4), 0.0, 1.5);
 
-        double uR = std::tanh(hiR * 3.5);
+        double uR = std::tanh(hiR * 3.0);
         double uR2 = uR * uR;
-        double t2R = 2.0 * uR2 - 1.0;
+        // ★ [完全修正] DCオフセット (-1.0 / +1.0) を除去
+        double t2R = 2.0 * uR2;
         double t3R = (4.0 * uR2 - 3.0) * uR;
-        double t4R = 8.0 * uR2 * (uR2 - 1.0) + 1.0;
+        double t4R = 8.0 * uR2 * (uR2 - 1.0);
 
         double harmR = (t2R * w2) + (t3R * w3 * (1.0 - tiltR * 0.3)) + (t4R * w4 * (1.0 - tiltR * 0.5));
 
@@ -501,7 +503,7 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         out_s1_R_ = out_hp_b1_ * harmR - out_hp_a1_ * outHarmR + out_s2_R_;
         out_s2_R_ = out_hp_b2_ * harmR - out_hp_a2_ * outHarmR;
 
-        double targetGainR = std::min(std::sqrt(r0_R_) * (3.0 + attackFactorR), static_cast<double>(targetGain_));
+        double targetGainR = std::min(std::sqrt(r0_R_) * (1.5 + attackFactorR * 0.5), static_cast<double>(targetGain_));
         smoothedGainR_ += std::clamp(targetGainR - smoothedGainR_, -slew, slew);
 
         double totalR = inR + outHarmR * smoothedGainR_;

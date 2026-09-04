@@ -1040,51 +1040,105 @@ size_t DspUpsampler::process(
     // =========================================================================
     // ★ ステップ1: ARM NEON 多段カスケード Sinc FIR の完全直結
     // =========================================================================
-    if (!isDirectSource_ && isCascadeFir_ && currentFactor > 1) {
-        if (currentFactor == 2) {
-            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+    if (!isDirectSource_ && currentFactor > 1) {
+        if (isCascadeFir_) {
+            // -------------------------------------------------------------
+            // 多段カスケード FIR (3段 2x 接続: 255 -> 63 -> 39 taps)
+            // -------------------------------------------------------------
+            if (currentFactor == 2) {
+                cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+                if (!is441Base) {
+                    std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
+                    std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
+                } else {
+                    double step = (double)(numInFrames * 2) / (double)numOutFrames;
+                    for (size_t i = 0; i < numOutFrames; ++i) {
+                        double p = i * step; int idx = (int)p; double f = p - idx;
+                        int i1 = std::min((int)(numInFrames * 2) - 1, idx);
+                        int i2 = std::min((int)(numInFrames * 2) - 1, idx + 1);
+                        tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
+                        tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
+                    }
+                }
+            } else if (currentFactor == 4) {
+                cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+                cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
+                if (!is441Base) {
+                    std::memcpy(tempOutL_.data(), stageBuf2_L_.data(), numOutFrames * sizeof(float));
+                    std::memcpy(tempOutR_.data(), stageBuf2_R_.data(), numOutFrames * sizeof(float));
+                } else {
+                    double step = (double)(numInFrames * 4) / (double)numOutFrames;
+                    for (size_t i = 0; i < numOutFrames; ++i) {
+                        double p = i * step; int idx = (int)p; double f = p - idx;
+                        int i1 = std::min((int)(numInFrames * 4) - 1, idx);
+                        int i2 = std::min((int)(numInFrames * 4) - 1, idx + 1);
+                        tempOutL_[i] = static_cast<float>(stageBuf2_L_[i1] * (1.0 - f) + stageBuf2_L_[i2] * f);
+                        tempOutR_[i] = static_cast<float>(stageBuf2_R_[i1] * (1.0 - f) + stageBuf2_R_[i2] * f);
+                    }
+                }
+            } else if (currentFactor == 8) {
+                cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
+                cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
+                cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, stageBuf1_L_, stageBuf1_R_);
+                if (!is441Base) {
+                    std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
+                    std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
+                } else {
+                    double step = (double)(numInFrames * 8) / (double)numOutFrames;
+                    for (size_t i = 0; i < numOutFrames; ++i) {
+                        double p = i * step; int idx = (int)p; double f = p - idx;
+                        int i1 = std::min((int)(numInFrames * 8) - 1, idx);
+                        int i2 = std::min((int)(numInFrames * 8) - 1, idx + 1);
+                        tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
+                        tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
+                    }
+                }
+            }
+        } else {
+            // -------------------------------------------------------------
+            // ★ [完全修正] Cascade FIR OFF時: 標準ポリフェーズSinc FIR補間 (Single-stage)
+            // -------------------------------------------------------------
+            size_t factorFrames = numInFrames * currentFactor;
+            stageBuf1_L_.resize(factorFrames);
+            stageBuf1_R_.resize(factorFrames);
+
+            const int tpp = tapsPerPhase_;
+            const int hLen = historyLen_;
+
+            for (size_t n = 0; n < numInFrames; ++n) {
+                historyL_[historyWritePos_] = tempInL_[n];
+                historyR_[historyWritePos_] = tempInR_[n];
+
+                for (int p = 0; p < currentFactor; ++p) {
+                    const float* coeff = polyCoeffs_[p].data();
+                    float sumL = 0.0f;
+                    float sumR = 0.0f;
+
+                    for (int k = 0; k < tpp; ++k) {
+                        int hIdx = historyWritePos_ - k;
+                        if (hIdx < 0) hIdx += hLen;
+                        sumL += coeff[k] * historyL_[hIdx];
+                        sumR += coeff[k] * historyR_[hIdx];
+                    }
+
+                    size_t outIdx = n * currentFactor + p;
+                    stageBuf1_L_[outIdx] = sumL;
+                    stageBuf1_R_[outIdx] = sumR;
+                }
+
+                historyWritePos_++;
+                if (historyWritePos_ >= hLen) historyWritePos_ = 0;
+            }
+
             if (!is441Base) {
                 std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
                 std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
             } else {
-                double step = (double)(numInFrames * 2) / (double)numOutFrames;
+                double step = (double)factorFrames / (double)numOutFrames;
                 for (size_t i = 0; i < numOutFrames; ++i) {
                     double p = i * step; int idx = (int)p; double f = p - idx;
-                    int i1 = std::min((int)(numInFrames * 2) - 1, idx);
-                    int i2 = std::min((int)(numInFrames * 2) - 1, idx + 1);
-                    tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
-                    tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
-                }
-            }
-        } else if (currentFactor == 4) {
-            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
-            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
-            if (!is441Base) {
-                std::memcpy(tempOutL_.data(), stageBuf2_L_.data(), numOutFrames * sizeof(float));
-                std::memcpy(tempOutR_.data(), stageBuf2_R_.data(), numOutFrames * sizeof(float));
-            } else {
-                double step = (double)(numInFrames * 4) / (double)numOutFrames;
-                for (size_t i = 0; i < numOutFrames; ++i) {
-                    double p = i * step; int idx = (int)p; double f = p - idx;
-                    int i1 = std::min((int)(numInFrames * 4) - 1, idx);
-                    int i2 = std::min((int)(numInFrames * 4) - 1, idx + 1);
-                    tempOutL_[i] = static_cast<float>(stageBuf2_L_[i1] * (1.0 - f) + stageBuf2_L_[i2] * f);
-                    tempOutR_[i] = static_cast<float>(stageBuf2_R_[i1] * (1.0 - f) + stageBuf2_R_[i2] * f);
-                }
-            }
-        } else if (currentFactor == 8) {
-            cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
-            cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
-            cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, stageBuf1_L_, stageBuf1_R_);
-            if (!is441Base) {
-                std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
-                std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
-            } else {
-                double step = (double)(numInFrames * 8) / (double)numOutFrames;
-                for (size_t i = 0; i < numOutFrames; ++i) {
-                    double p = i * step; int idx = (int)p; double f = p - idx;
-                    int i1 = std::min((int)(numInFrames * 8) - 1, idx);
-                    int i2 = std::min((int)(numInFrames * 8) - 1, idx + 1);
+                    int i1 = std::min((int)factorFrames - 1, idx);
+                    int i2 = std::min((int)factorFrames - 1, idx + 1);
                     tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
                     tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
                 }
