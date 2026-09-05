@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity() {
 
         private val PRESET_DEFS = arrayOf(
         FreqPresetDef(0, "OFF", 0, 0, 0, 0.08f, 10000.0f, false, false, false, false, false, false),
-        FreqPresetDef(1, "Auto AI", 2, 3, 0, 0.22f, 8000.0f, true, true, false, true, true, true),
+        FreqPresetDef(1, "Auto AI", 2, 3, 1, 0.26f, 7200.0f, true, true, false, true, true, true),
         FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.26f, 6200.0f, true, true, false, true, true, true),
         FreqPresetDef(3, "女性ボーカル", 2, 3, 1, 0.28f, 6800.0f, true, true, false, true, true, true),
         FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.20f, 9500.0f, false, true, true, true, true, true),
