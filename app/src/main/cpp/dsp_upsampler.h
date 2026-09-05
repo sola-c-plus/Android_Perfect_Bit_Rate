@@ -165,25 +165,22 @@ private:
     bool isBypass_ = false;
     float targetGain_ = 0.26f;
 
-    // 抽出ハイパスフィルター
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;
     double in_s1_L_ = 0.0, in_s2_L_ = 0.0;
     double in_s1_R_ = 0.0, in_s2_R_ = 0.0;
 
-    // 出力ハイパスフィルター
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
-    // シルキースムージングフィルター
     double silk_lp_b0_ = 1.0, silk_lp_b1_ = 0.0, silk_lp_b2_ = 0.0;
     double silk_lp_a1_ = 0.0, silk_lp_a2_ = 0.0;
     double silk_s1_L_ = 0.0, silk_s2_L_ = 0.0;
     double silk_s1_R_ = 0.0, silk_s2_R_ = 0.0;
 
-    // ★ 口腔フォルマント検出用バンドパス (3.2kHz BPF: ブレス・息継ぎの検出)
+    // 口腔フォルマント検出用バンドパス (3.2kHz BPF)
     double formant_bp_b0_ = 0.0, formant_bp_b1_ = 0.0, formant_bp_b2_ = 0.0;
     double formant_bp_a1_ = 0.0, formant_bp_a2_ = 0.0;
     double formant_s1_L_ = 0.0, formant_s2_L_ = 0.0;
@@ -193,21 +190,13 @@ private:
     double oddRatio_ = 0.30;
     double modeGainScale_ = 1.25;
 
-    double r0_L_ = 1e-4;
-    double r0_R_ = 1e-4;
-    double smoothedGainL_ = 0.0;
-    double smoothedGainR_ = 0.0;
+    double r0_L_ = 1e-4, r0_R_ = 1e-4;
+    double smoothedGainL_ = 0.0, smoothedGainR_ = 0.0;
 
-    // Auto AI リアルタイム過渡フラックス解析
     double prevPowL_ = 0.0, prevPowR_ = 0.0;
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
 
-    // ★ ノイズフロア追従ステート (Minimum Statistics Tracking)
     double noiseFloorL_ = 1e-5, noiseFloorR_ = 1e-5;
-
-    // ★ マイクロ・トランジェント解像度向上ステート (Temporal De-blurring)
-    double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
-    double prevDeltaL_ = 0.0, prevDeltaR_ = 0.0;
 };
 
 class DspUpsampler {
