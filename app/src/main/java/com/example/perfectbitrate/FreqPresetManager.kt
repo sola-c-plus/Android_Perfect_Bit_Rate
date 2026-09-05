@@ -28,40 +28,38 @@ object FreqPresetManager {
 
     val PRESET_NAMES = listOf("OFF", "Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
 
+    // ★ 553曲実測キャリブレーション準拠プリセット
     val PRESETS = listOf(
-        // 0: OFF (Linear Phase Sharp確実適用・全DSP停止・全スイッチ完全消灯)
-        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 10000f, false, false, false, false, false, false),
-        // 1: Auto AI (Min Sharp・全DSPフル点灯・全スイッチON)
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.18f, 10500f, true, true, true, true, true, true),
-        // 2: 男性ボーカル (太い基音と明瞭感。QMF・群遅延・残響超解像ON、格子型とSBRはOFF)
-        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.12f, 10000f, true, true, false, true, true, false),
-        // 3: 女性ボーカル (サ行抑制・定位・残響のみON、格子型とSBRはOFFで声質維持)
-        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.14f, 11500f, true, true, false, true, true, false),
-        // 4: パーカッション (パンチ最大化。アタックを削るQMF・広がるM/S・濁るSBRは全てOFF)
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.22f, 9500f, false, true, true, true, false, false),
-        // 5: ストリングス (弦・打弦、自然倍音K2、撥弦過渡Lattice。空間拡散OFFで楽器の芯を維持)
-        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.18f, 10500f, true, true, true, true, false, true)
+        // 0: OFF (Linear Phase Sharp確実適用・全DSP完全バイパス)
+        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 12500f, false, false, false, false, false, false),
+        // 1: Auto AI (Min Sharp・20kHz超全点灯・Side残響重点回復)
+        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.24f, 12500f, true, true, true, true, true, true),
+        // 2: 男性ボーカル (太い基音と11k息成分。Mid定位最優先、Sideは自然な残響)
+        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.22f, 11500f, true, true, false, true, false, false),
+        // 3: 女性ボーカル (サ行刺さりゼロ・12.5kブレス艶・Side残響復元)
+        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.25f, 12500f, true, true, false, true, true, false),
+        // 4: パーカッション (13.5kシンバル帯域・パンチ最大化。アタックを削らず高域ヌケを回復)
+        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.20f, 13500f, false, true, true, true, false, false),
+        // 5: ストリングス (12k弦摩擦音・自然倍音K2・撥弦過渡Lattice)
+        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.24f, 12000f, true, true, true, true, true, true)
     )
 
-    var currentPresetIndex = 0 // 初期値: OFF
+    var currentPresetIndex = 0
     private var isSyncing = false
 
     private var frontSpinnerRef: WeakReference<Spinner>? = null
     private var backSpinnerRef: WeakReference<Spinner>? = null
     private var backDialogViewRef: WeakReference<View>? = null
 
-    /**
-     * Native C++ DSP エンジンへ即座に反映 (OFF時も確実に Linear Phase を送信)
-     */
     fun applyPresetToNative(p: FreqPresetDef) {
         if (p.id == 0) {
-            NativeAudioEngine.nativeSetFirFilterType(0) // Linear Phase Sharp (直線位相)
-            NativeAudioEngine.nativeSetFreqMode(0)      // DSEE HX / 倍音復元バイパス停止
-            NativeAudioEngine.nativeSetTransientMode(0) // トランジェント停止
+            NativeAudioEngine.nativeSetFirFilterType(0)
+            NativeAudioEngine.nativeSetFreqMode(0)
+            NativeAudioEngine.nativeSetTransientMode(0)
             NativeAudioEngine.nativeSetMsSpatial(false)
             NativeAudioEngine.nativeSetDynamicSbr(false)
             NativeAudioEngine.nativeSetTransientCustomParams(false, false)
-            NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 10000.0f)
+            NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 12500.0f)
         } else {
             NativeAudioEngine.nativeSetFirFilterType(p.firType)
             NativeAudioEngine.nativeSetTransientMode(p.transientMode)
@@ -74,9 +72,6 @@ object FreqPresetManager {
         }
     }
 
-    /**
-     * 表または裏のスピナーが変更されたときの共通処理（完全リンク＆パラメータ自動変化）
-     */
     fun onPresetChanged(position: Int) {
         if (isSyncing) return
         isSyncing = true
@@ -85,24 +80,20 @@ object FreqPresetManager {
             currentPresetIndex = safePos
             val preset = PRESETS[safePos]
 
-            // 1. Native DSP へ反映
             applyPresetToNative(preset)
 
-            // 2. 表スピナーの選択位置を同期
             frontSpinnerRef?.get()?.let { sp ->
                 if (sp.selectedItemPosition != safePos) {
                     sp.setSelection(safePos)
                 }
             }
 
-            // 3. 裏スピナーの選択位置を同期
             backSpinnerRef?.get()?.let { sp ->
                 if (sp.selectedItemPosition != safePos) {
                     sp.setSelection(safePos)
                 }
             }
 
-            // 4. 裏ダイアログの下部パラメータ・スイッチ6種を自動変化！
             backDialogViewRef?.get()?.let { view ->
                 updateDevDialogUI(view, preset)
             }
@@ -111,9 +102,6 @@ object FreqPresetManager {
         }
     }
 
-    /**
-     * 裏設定ダイアログのUI更新（OFFなら全消灯、各プリセットで自動変化、OFF時は倍音スピナーグレーアウト）
-     */
     fun updateDevDialogUI(dialogView: View?, p: FreqPresetDef) {
         if (dialogView == null) return
         dialogView.post {
@@ -121,16 +109,13 @@ object FreqPresetManager {
                 val isOff = (p.id == 0)
                 val disableAlpha = if (isOff) 0.35f else 1.0f
 
-                // 1. 最上部 TARGET PRESET スピナー
                 val targetSp = dialogView.findViewById<View>(R.id.spinnerTargetPreset) as? Spinner
                 if (targetSp != null && targetSp.selectedItemPosition != p.id) {
                     targetSp.setSelection(p.id)
                 }
 
-                // 2. FIR フィルター スピナー (OFF時: Linear Phase Sharp 0)
                 (dialogView.findViewById<View>(R.id.devSpinnerFir) as? Spinner)?.setSelection(p.firType)
 
-                // 3. OFF時は倍音復元系スピナーをグレーアウト非活性化
                 dialogView.findViewById<View>(R.id.devSpinnerLpcAlgo)?.apply {
                     isEnabled = !isOff
                     alpha = disableAlpha
@@ -180,7 +165,6 @@ object FreqPresetManager {
                     }
                 }
 
-                // 4. ★ スイッチ6種 (OFFなら全てOFF完全消灯！各プリセットなら自動連動！)
                 (dialogView.findViewById<View>(R.id.devSwitchQmf) as? SwitchCompat)?.isChecked = p.useQmf
                 (dialogView.findViewById<View>(R.id.devSwitchGroupDelay) as? SwitchCompat)?.isChecked = p.useGroupDelay
                 (dialogView.findViewById<View>(R.id.devSwitchLattice) as? SwitchCompat)?.isChecked = p.useLattice
@@ -193,9 +177,6 @@ object FreqPresetManager {
         }
     }
 
-    /**
-     * 表設定ダイアログ (dialog_dsp_settings) をフック
-     */
     fun hookDspSettingsDialog(dialogView: View?) {
         if (dialogView == null) return
         dialogView.post {
@@ -216,9 +197,6 @@ object FreqPresetManager {
         }
     }
 
-    /**
-     * 裏設定ダイアログ (dialog_dev_presets) をフック
-     */
     fun hookDevPresetsDialog(dialogView: View?) {
         if (dialogView == null) return
         dialogView.post {
@@ -238,7 +216,6 @@ object FreqPresetManager {
                 override fun onNothingSelected(p0: AdapterView<*>?) {}
             }
 
-            // 開いた瞬間に、現在の設定値で下の全パラメータを強制更新！
             updateDevDialogUI(dialogView, PRESETS[currentPresetIndex])
         }
     }

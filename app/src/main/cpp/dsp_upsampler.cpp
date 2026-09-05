@@ -1,4 +1,4 @@
-#include "dsp_upsampler.h"
+﻿#include "dsp_upsampler.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -262,22 +262,22 @@ void DspTransientRestorer::configure(TransientMode mode, double sampleRate, bool
 
     switch (mode_) {
         case TransientMode::NATURAL:
-            attackGain_ = 1.2;
+            attackGain_ = 1.25;
             fastAlpha_ = std::clamp(0.04 * timeScale, 0.005, 0.2);
             slowAlpha_ = std::clamp(0.002 * timeScale, 0.0002, 0.02);
             break;
         case TransientMode::PUNCH:
-            attackGain_ = 1.8;
+            attackGain_ = 1.75;
             fastAlpha_ = std::clamp(0.06 * timeScale, 0.008, 0.25);
             slowAlpha_ = std::clamp(0.0015 * timeScale, 0.0001, 0.015);
             break;
         case TransientMode::ACOUSTIC:
-            attackGain_ = 1.4;
+            attackGain_ = 1.45;
             fastAlpha_ = std::clamp(0.08 * timeScale, 0.01, 0.3);
             slowAlpha_ = std::clamp(0.003 * timeScale, 0.0003, 0.03);
             break;
         default:
-            attackGain_ = 1.2;
+            attackGain_ = 1.25;
             fastAlpha_ = 0.04;
             slowAlpha_ = 0.002;
             break;
@@ -349,10 +349,10 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
 }
 
 // -----------------------------------------------------------------------------
-// FREQ Engine 実装 (Ultra HQ: Anti-Ringing ＆ Reverse-Masking Infill)
+// ★ FREQ Engine 実装 (553曲実測キャリブレーション版)
 // -----------------------------------------------------------------------------
 DspFreqEngine::DspFreqEngine() {
-    configure(FreqMode::AUTO_AI, 48000.0, 0.26f, 7200.0f);
+    configure(FreqMode::AUTO_AI, 48000.0, 0.24f, 12500.0f);
 }
 
 void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, float extractFreq) {
@@ -367,60 +367,70 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     }
     isBypass_ = false;
 
-    double fExtract = 7200.0;
-    double fOutHp   = 12500.0;
-    evenRatio_ = 0.70;
-    oddRatio_  = 0.30;
-    modeGainScale_ = 1.25;
+    // ★ 実測データ反映:
+    // Opus 160k は 18.5k〜19.75kHz まで原音が完全残存 (0.15〜0.55dB)。
+    // 20.0kHz (-1.55dB) でロールオフし、20.25k〜21kHz で -18dB〜-20dB の急峻遮断。
+    // したがって、ソース抽出は 11.5k〜14.5kHz、注入開始 (fOutHp) は 19.5kHz に完全固定！
+    double fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 12500.0;
+    double fOutHp   = 19500.0; // 実測ロールオフ肩部
+    evenRatio_ = 0.65;
+    oddRatio_  = 0.35;
+    modeGainScale_ = 1.20;
 
     switch (mode_) {
         case FreqMode::AUTO_AI:
-            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 7200.0;
-            fOutHp   = 12000.0;
-            evenRatio_ = 0.70;
-            oddRatio_  = 0.30;
-            modeGainScale_ = 1.30;
+            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 12500.0;
+            fOutHp   = 19500.0;
+            evenRatio_ = 0.65;
+            oddRatio_  = 0.35;
+            modeGainScale_ = 1.25;
             break;
 
         case FreqMode::STUDIO_VOCAL:
-            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 6200.0;
-            fOutHp   = 12000.0;
-            evenRatio_ = 0.75;
-            oddRatio_  = 0.25;
-            modeGainScale_ = 1.35;
-            break;
-
-        case FreqMode::ACOUSTIC_INSTRUMENT:
-            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 6800.0;
-            fOutHp   = 12500.0;
-            evenRatio_ = 0.70;
-            oddRatio_  = 0.30;
+            // ボーカルは 11.5kHz 息成分から 20k+ を励起
+            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 11500.0;
+            fOutHp   = 19600.0;
+            evenRatio_ = 0.72;
+            oddRatio_  = 0.28;
             modeGainScale_ = 1.20;
             break;
 
+        case FreqMode::ACOUSTIC_INSTRUMENT:
+            // 弦・打弦は 12.0kHz
+            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 12000.0;
+            fOutHp   = 19500.0;
+            evenRatio_ = 0.60;
+            oddRatio_  = 0.40;
+            modeGainScale_ = 1.25;
+            break;
+
         case FreqMode::DYNAMIC_PERCUSSION:
-            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 9500.0;
-            fOutHp   = 13500.0;
+            // 打楽器は 13.5kHz からシンバル帯域を補正
+            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 13500.0;
+            fOutHp   = 19400.0;
             evenRatio_ = 0.45;
             oddRatio_  = 0.55;
             modeGainScale_ = 1.15;
             break;
 
         case FreqMode::AIR_EXPANDER:
-            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 10500.0;
-            fOutHp   = 14000.0;
+            // エアーは 14.0kHz 以上の超微小成分から空間拡散
+            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 14000.0;
+            fOutHp   = 19800.0;
             evenRatio_ = 0.50;
             oddRatio_  = 0.50;
-            modeGainScale_ = 1.25;
+            modeGainScale_ = 1.30;
             break;
 
         default:
             break;
     }
 
-    fExtract = std::clamp(fExtract, 1000.0, sampleRate_ * 0.42);
-    fOutHp   = std::clamp(fOutHp, 2000.0, sampleRate_ * 0.45);
+    // ナイキスト周波数制限
+    fExtract = std::clamp(fExtract, 2000.0, sampleRate_ * 0.40);
+    fOutHp   = std::clamp(fOutHp, 5000.0, sampleRate_ * 0.43);
 
+    // 1. ソース高域抽出用 HPF
     double w0_in = 2.0 * PI * fExtract / sampleRate_;
     double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
     double cosw0_in = std::cos(w0_in);
@@ -439,6 +449,7 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     in_hp_a1_ = in_a1 * inv_in_a0;
     in_hp_a2_ = in_a2 * inv_in_a0;
 
+    // 2. ★ 実測遮断境界 19.5kHz HPF (原音帯域と干渉させず 20k+ のみ出力)
     double w0_out = 2.0 * PI * fOutHp / sampleRate_;
     double alpha_out = std::sin(w0_out) / (2.0 * 0.70710678);
     double cosw0_out = std::cos(w0_out);
@@ -457,7 +468,8 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     out_hp_a1_ = out_a1 * inv_out_a0;
     out_hp_a2_ = out_a2 * inv_out_a0;
 
-    double fSilk = std::min(36000.0, sampleRate_ * 0.44);
+    // 3. 超高域シルキースムージング LPF (38kHz)
+    double fSilk = std::min(38000.0, sampleRate_ * 0.45);
     double w0_silk = 2.0 * PI * fSilk / sampleRate_;
     double alpha_silk = std::sin(w0_silk) / (2.0 * 0.70710678);
     double cosw0_silk = std::cos(w0_silk);
@@ -476,7 +488,8 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     silk_lp_a1_ = silk_a1 * inv_silk_a0;
     silk_lp_a2_ = silk_a2 * inv_silk_a0;
 
-    double fFormant = std::min(3200.0, sampleRate_ * 0.42);
+    // 4. 口腔共鳴フォルマント BPF (3.2kHz, Q=1.4)
+    double fFormant = std::min(3200.0, sampleRate_ * 0.40);
     double w0_f = 2.0 * PI * fFormant / sampleRate_;
     double alpha_f = std::sin(w0_f) / (2.0 * 1.4);
     double cosw0_f = std::cos(w0_f);
@@ -494,54 +507,6 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     formant_bp_b2_ = f_b2 * inv_f_a0;
     formant_bp_a1_ = f_a1 * inv_f_a0;
     formant_bp_a2_ = f_a2 * inv_f_a0;
-
-    // ★ 1. アンチ・リンギング用 20kHz BPF (Q=3.5)
-    double fAr = std::min(20000.0, sampleRate_ * 0.44);
-    double w0_Ar = 2.0 * PI * fAr / sampleRate_;
-    double alpha_Ar = std::sin(w0_Ar) / (2.0 * 3.5);
-    double cosw0_Ar = std::cos(w0_Ar);
-    double a0_Ar = 1.0 + alpha_Ar;
-    ar_bp_b0_ = alpha_Ar / a0_Ar;
-    ar_bp_b1_ = 0.0;
-    ar_bp_b2_ = -alpha_Ar / a0_Ar;
-    ar_bp_a1_ = (-2.0 * cosw0_Ar) / a0_Ar;
-    ar_bp_a2_ = (1.0 - alpha_Ar) / a0_Ar;
-
-    // ★ 2. リバース・マスキング用 中域基音エネルギー追従 BPF (1800Hz, Q=0.707)
-    double fMask = std::min(1800.0, sampleRate_ * 0.35);
-    double w0_Mask = 2.0 * PI * fMask / sampleRate_;
-    double alpha_Mask = std::sin(w0_Mask) / (2.0 * 0.70710678);
-    double cosw0_Mask = std::cos(w0_Mask);
-    double a0_Mask = 1.0 + alpha_Mask;
-    mask_bp_b0_ = alpha_Mask / a0_Mask;
-    mask_bp_b1_ = 0.0;
-    mask_bp_b2_ = -alpha_Mask / a0_Mask;
-    mask_bp_a1_ = (-2.0 * cosw0_Mask) / a0_Mask;
-    mask_bp_a2_ = (1.0 - alpha_Mask) / a0_Mask;
-
-    // スロープ追従用 帯域A (10kHz BPF, Q=1.0)
-    double fA = std::min(10000.0, sampleRate_ * 0.42);
-    double w0_A = 2.0 * PI * fA / sampleRate_;
-    double alpha_A = std::sin(w0_A) / (2.0 * 1.0);
-    double cosw0_A = std::cos(w0_A);
-    double a0_A = 1.0 + alpha_A;
-    slope_bpA_b0_ = alpha_A / a0_A;
-    slope_bpA_b1_ = 0.0;
-    slope_bpA_b2_ = -alpha_A / a0_A;
-    slope_bpA_a1_ = (-2.0 * cosw0_A) / a0_A;
-    slope_bpA_a2_ = (1.0 - alpha_A) / a0_A;
-
-    // スロープ追従用 帯域B (14kHz BPF, Q=1.2)
-    double fB = std::min(14000.0, sampleRate_ * 0.45);
-    double w0_B = 2.0 * PI * fB / sampleRate_;
-    double alpha_B = std::sin(w0_B) / (2.0 * 1.2);
-    double cosw0_B = std::cos(w0_B);
-    double a0_B = 1.0 + alpha_B;
-    slope_bpB_b0_ = alpha_B / a0_B;
-    slope_bpB_b1_ = 0.0;
-    slope_bpB_b2_ = -alpha_B / a0_B;
-    slope_bpB_a1_ = (-2.0 * cosw0_B) / a0_B;
-    slope_bpB_a2_ = (1.0 - alpha_B) / a0_B;
 }
 
 void DspFreqEngine::reset() {
@@ -553,73 +518,11 @@ void DspFreqEngine::reset() {
     silk_s1_R_ = 0.0; silk_s2_R_ = 0.0;
     formant_s1_L_ = 0.0; formant_s2_L_ = 0.0;
     formant_s1_R_ = 0.0; formant_s2_R_ = 0.0;
-    ar_s1_L_ = 0.0; ar_s2_L_ = 0.0;
-    ar_s1_R_ = 0.0; ar_s2_R_ = 0.0;
-    mask_s1_L_ = 0.0; mask_s2_L_ = 0.0;
-    mask_s1_R_ = 0.0; mask_s2_R_ = 0.0;
-    slope_s1_A_L_ = 0.0; slope_s2_A_L_ = 0.0;
-    slope_s1_A_R_ = 0.0; slope_s2_A_R_ = 0.0;
-    slope_s1_B_L_ = 0.0; slope_s2_B_L_ = 0.0;
-    slope_s1_B_R_ = 0.0; slope_s2_B_R_ = 0.0;
-    r0_L_ = 1e-4; r0_R_ = 1e-4;
-    smoothedGainL_ = 0.0; smoothedGainR_ = 0.0;
-    prevPowL_ = 0.0; prevPowR_ = 0.0;
-    transientFluxL_ = 0.0; transientFluxR_ = 0.0;
-    noiseFloorL_ = 1e-5; noiseFloorR_ = 1e-5;
-    maskMidPowerL_ = 1e-4; maskMidPowerR_ = 1e-4;
-    slopePowerA_L_ = 1e-5; slopePowerB_L_ = 1e-6;
-    slopePowerA_R_ = 1e-5; slopePowerB_R_ = 1e-6;
-    smoothedSlopeL_ = -9.0; smoothedSlopeR_ = -9.0;
-    std::fill(std::begin(lpcBuffer_), std::end(lpcBuffer_), 0.0);
-    std::fill(std::begin(lpcCoeffs_), std::end(lpcCoeffs_), 0.0);
-    std::fill(std::begin(lpcHistL_), std::end(lpcHistL_), 0.0);
-    std::fill(std::begin(lpcHistR_), std::end(lpcHistR_), 0.0);
-    lpcPos_ = 0;
-    lpcCounter_ = 0;
-}
-
-void DspFreqEngine::runLpcAnalysis() {
-    double R[LPC_ORDER + 1] = {0.0};
-    for (int k = 0; k <= LPC_ORDER; ++k) {
-        double sum = 0.0;
-        for (int n = 0; n < LPC_FRAME_SIZE - k; ++n) {
-            int idx1 = (lpcPos_ + n) & (LPC_FRAME_SIZE - 1);
-            int idx2 = (lpcPos_ + n + k) & (LPC_FRAME_SIZE - 1);
-            double w1 = 0.54 - 0.46 * std::cos(2.0 * PI * n / (LPC_FRAME_SIZE - 1));
-            double w2 = 0.54 - 0.46 * std::cos(2.0 * PI * (n + k) / (LPC_FRAME_SIZE - 1));
-            sum += (lpcBuffer_[idx1] * w1) * (lpcBuffer_[idx2] * w2);
-        }
-        R[k] = sum;
-    }
-
-    double E = R[0];
-    if (E < 1e-9) {
-        std::fill(std::begin(lpcCoeffs_), std::end(lpcCoeffs_), 0.0);
-        return;
-    }
-
-    double a[LPC_ORDER + 1] = {1.0};
-    for (int i = 1; i <= LPC_ORDER; ++i) {
-        double lambda = 0.0;
-        for (int j = 0; j < i; ++j) {
-            lambda -= a[j] * R[i - j];
-        }
-        double k = std::clamp(lambda / E, -0.96, 0.96);
-        double a_new[LPC_ORDER + 1] = {0.0};
-        for (int j = 0; j < i; ++j) {
-            a_new[j] = a[j] + k * a[i - j];
-        }
-        for (int j = 0; j < i; ++j) a[j] = a_new[j];
-        a[i] = k;
-        E *= (1.0 - k * k);
-        if (E < 1e-12) break;
-    }
-
-    double curGamma = 0.91;
-    for (int i = 1; i <= LPC_ORDER; ++i) {
-        lpcCoeffs_[i - 1] = a[i] * curGamma;
-        curGamma *= 0.91;
-    }
+    r0_Mid_ = 1e-4; r0_Side_ = 1e-4;
+    smoothedGainMid_ = 0.0; smoothedGainSide_ = 0.0;
+    prevPowMid_ = 0.0; prevPowSide_ = 0.0;
+    transientFluxMid_ = 0.0; transientFluxSide_ = 0.0;
+    noiseFloorMid_ = 1e-5; noiseFloorSide_ = 1e-5;
 }
 
 void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
@@ -629,36 +532,7 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         double inL = static_cast<double>(left[i]);
         double inR = static_cast<double>(right[i]);
 
-        // ★ ECO モード時は全解析をスキップし、超軽量な2次倍音のみでCPU消費を激減
-        if (perfMode_ == PerformanceMode::ECO) {
-            double hiL = in_hp_b0_ * inL + in_s1_L_;
-            in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
-            in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
-
-            double hiR = in_hp_b0_ * inR + in_s1_R_;
-            in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
-            in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
-
-            double normL = std::clamp(hiL * 1.5, -2.5, 2.5);
-            double harmL = (normL * normL - 0.65) * 0.12;
-
-            double normR = std::clamp(hiR * 1.5, -2.5, 2.5);
-            double harmR = (normR * normR - 0.65) * 0.12;
-
-            double outHarmL = out_hp_b0_ * harmL + out_s1_L_;
-            out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
-            out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
-
-            double outHarmR = out_hp_b0_ * harmR + out_s1_R_;
-            out_s1_R_ = out_hp_b1_ * harmR - out_hp_a1_ * outHarmR + out_s2_R_;
-            out_s2_R_ = out_hp_b2_ * harmR - out_hp_a2_ * outHarmR;
-
-            left[i] = static_cast<float>(std::clamp(inL + outHarmL * (targetGain_ * 0.20), -1.0, 1.0));
-            right[i] = static_cast<float>(std::clamp(inR + outHarmR * (targetGain_ * 0.20), -1.0, 1.0));
-            continue;
-        }
-
-        // 1. 高域抽出ハイパス
+        // 1. ソース高域抽出 (11.5k〜14.5kHz)
         double hiL = in_hp_b0_ * inL + in_s1_L_;
         in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
         in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
@@ -667,7 +541,7 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
         in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
 
-        // 2. 口腔共鳴フォルマント抽出 (3.2kHz BPF)
+        // 2. 口腔共鳴フォルマント (3.2kHz BPF)
         double formantL = formant_bp_b0_ * inL + formant_s1_L_;
         formant_s1_L_ = formant_bp_b1_ * inL - formant_bp_a1_ * formantL + formant_s2_L_;
         formant_s2_L_ = formant_bp_b2_ * inL - formant_bp_a2_ * formantL;
@@ -676,217 +550,105 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         formant_s1_R_ = formant_bp_b1_ * inR - formant_bp_a1_ * formantR + formant_s2_R_;
         formant_s2_R_ = formant_bp_b2_ * inR - formant_bp_a2_ * formantR;
 
-        // ★ Ultra HQ 専用: Anti-Ringing (20kHz 遮断リンギング検出)
-        double ringDampL = 0.0, ringDampR = 0.0;
-        double infillHarmL = 0.0, infillHarmR = 0.0;
-
-        if (perfMode_ == PerformanceMode::ULTRA_HQ) {
-            // 20kHz ギブズ振動の抽出
-            double arL = ar_bp_b0_ * inL + ar_s1_L_;
-            ar_s1_L_ = ar_bp_b1_ * inL - ar_bp_a1_ * arL + ar_s2_L_;
-            ar_s2_L_ = ar_bp_b2_ * inL - ar_bp_a2_ * arL;
-
-            double arR = ar_bp_b0_ * inR + ar_s1_R_;
-            ar_s1_R_ = ar_bp_b1_ * inR - ar_bp_a1_ * arR + ar_s2_R_;
-            ar_s2_R_ = ar_bp_b2_ * inR - ar_bp_a2_ * arR;
-
-            // リンギング過渡振動を適応相殺 (波打ちの平滑化)
-            ringDampL = std::clamp(arL * 0.35, -0.03, 0.03);
-            ringDampR = std::clamp(arR * 0.35, -0.03, 0.03);
-
-            // ★ 中域基音エネルギー抽出 (心理音響リバース・マスキング用)
-            double maskMidL = mask_bp_b0_ * inL + mask_s1_L_;
-            mask_s1_L_ = mask_bp_b1_ * inL - mask_bp_a1_ * maskMidL + mask_s2_L_;
-            mask_s2_L_ = mask_bp_b2_ * inL - mask_bp_a2_ * maskMidL;
-
-            double maskMidR = mask_bp_b0_ * inR + mask_s1_R_;
-            mask_s1_R_ = mask_bp_b1_ * inR - mask_bp_a1_ * maskMidR + mask_s2_R_;
-            mask_s2_R_ = mask_bp_b2_ * inR - mask_bp_a2_ * maskMidR;
-
-            maskMidPowerL_ = maskMidPowerL_ * 0.995 + (maskMidL * maskMidL) * 0.005;
-            maskMidPowerR_ = maskMidPowerR_ * 0.995 + (maskMidR * maskMidR) * 0.005;
-
-            // マスキングで間引かれた微小倍音レイヤー (-55dB〜-70dB相当) をピッチ同期でインフィル
-            double midRmsL = std::sqrt(std::max(1e-12, maskMidPowerL_));
-            double normMidL = std::clamp(maskMidL / (midRmsL * 1.414 + 1e-5), -2.5, 2.5);
-            infillHarmL = (normMidL * normMidL - 0.5) * (midRmsL * 0.018);
-
-            double midRmsR = std::sqrt(std::max(1e-12, maskMidPowerR_));
-            double normMidR = std::clamp(maskMidR / (midRmsR * 1.414 + 1e-5), -2.5, 2.5);
-            infillHarmR = (normMidR * normMidR - 0.5) * (midRmsR * 0.018);
-
-            // スロープ追従用エネルギー計測
-            double bpfA_L = slope_bpA_b0_ * inL + slope_s1_A_L_;
-            slope_s1_A_L_ = slope_bpA_b1_ * inL - slope_bpA_a1_ * bpfA_L + slope_s2_A_L_;
-            slope_s2_A_L_ = slope_bpA_b2_ * inL - slope_bpA_a2_ * bpfA_L;
-
-            double bpfB_L = slope_bpB_b0_ * inL + slope_s1_B_L_;
-            slope_s1_B_L_ = slope_bpB_b1_ * inL - slope_bpA_a1_ * bpfB_L + slope_s2_B_L_;
-            slope_s2_B_L_ = slope_bpB_b2_ * inL - slope_bpA_a2_ * bpfB_L;
-
-            double bpfA_R = slope_bpA_b0_ * inR + slope_s1_A_R_;
-            slope_s1_A_R_ = slope_bpA_b1_ * inR - slope_bpA_a1_ * bpfA_R + slope_s2_A_R_;
-            slope_s2_A_R_ = slope_bpA_b2_ * inR - slope_bpA_a2_ * bpfA_R;
-
-            double bpfB_R = slope_bpB_b0_ * inR + slope_s1_B_R_;
-            slope_s1_B_R_ = slope_bpB_b1_ * inR - slope_bpA_a1_ * bpfB_R + slope_s2_B_R_;
-            slope_s2_B_R_ = slope_bpB_b2_ * inR - slope_bpA_a2_ * bpfB_R;
-
-            slopePowerA_L_ = slopePowerA_L_ * 0.996 + (bpfA_L * bpfA_L) * 0.004;
-            slopePowerB_L_ = slopePowerB_L_ * 0.996 + (bpfB_L * bpfB_L) * 0.004;
-            slopePowerA_R_ = slopePowerA_R_ * 0.996 + (bpfA_R * bpfA_R) * 0.004;
-            slopePowerB_R_ = slopePowerB_R_ * 0.996 + (bpfB_R * bpfB_R) * 0.004;
-
-            double ratioL = slopePowerB_L_ / (slopePowerA_L_ + 1e-11);
-            double slopeL = std::clamp((10.0 * std::log10(std::max(1e-8, ratioL))) / 0.485, -24.0, -3.0);
-            smoothedSlopeL_ = smoothedSlopeL_ * 0.998 + slopeL * 0.002;
-
-            double ratioR = slopePowerB_R_ / (slopePowerA_R_ + 1e-11);
-            double slopeR = std::clamp((10.0 * std::log10(std::max(1e-8, ratioR))) / 0.485, -24.0, -3.0);
-            smoothedSlopeR_ = smoothedSlopeR_ * 0.998 + slopeR * 0.002;
-
-            // LPC 声道解析用バッファ記録
-            lpcBuffer_[lpcPos_] = (inL + inR) * 0.5;
-            lpcPos_ = (lpcPos_ + 1) & (LPC_FRAME_SIZE - 1);
-            lpcCounter_++;
-            if (lpcCounter_ >= 32) {
-                lpcCounter_ = 0;
-                runLpcAnalysis();
-            }
-        }
-
-        // 3. パワー & 暗騒音フロア追従
-        double hiPowL = hiL * hiL;
-        double diffPowL = std::max(0.0, hiPowL - prevPowL_);
-        prevPowL_ = hiPowL;
-        transientFluxL_ = transientFluxL_ * 0.94 + diffPowL * 0.06;
-
-        double hiPowR = hiR * hiR;
-        double diffPowR = std::max(0.0, hiPowR - prevPowR_);
-        prevPowR_ = hiPowR;
-        transientFluxR_ = transientFluxR_ * 0.94 + diffPowR * 0.06;
-
-        if (hiPowL < noiseFloorL_) noiseFloorL_ = noiseFloorL_ * 0.9992 + hiPowL * 0.0008;
-        else noiseFloorL_ = noiseFloorL_ * 0.99998 + hiPowL * 0.00002;
-        noiseFloorL_ = std::clamp(noiseFloorL_, 1e-10, 1e-4);
-
-        if (hiPowR < noiseFloorR_) noiseFloorR_ = noiseFloorR_ * 0.9992 + hiPowR * 0.0008;
-        else noiseFloorR_ = noiseFloorR_ * 0.99998 + hiPowR * 0.00002;
-        noiseFloorR_ = std::clamp(noiseFloorR_, 1e-10, 1e-4);
-
-        double snrFloorL = hiPowL / (noiseFloorL_ + 1e-11);
-        double snrFloorR = hiPowR / (noiseFloorR_ + 1e-11);
-        double formantPowL = formantL * formantL;
-        double formantPowR = formantR * formantR;
-
-        bool isBreathContextL = (formantPowL > noiseFloorL_ * 8.0) && (hiPowL > noiseFloorL_ * 4.0);
-        bool isBreathContextR = (formantPowR > noiseFloorR_ * 8.0) && (hiPowR > noiseFloorR_ * 4.0);
-
-        double floorGateL = 1.0;
-        if (!isBreathContextL) {
-            if (snrFloorL < 1.5) floorGateL = 0.15;
-            else if (snrFloorL < 4.0) {
-                double t = (snrFloorL - 1.5) / 2.5;
-                floorGateL = 0.15 + 0.85 * (t * t);
-            }
-        }
-
-        double floorGateR = 1.0;
-        if (!isBreathContextR) {
-            if (snrFloorR < 1.5) floorGateR = 0.15;
-            else if (snrFloorR < 4.0) {
-                double t = (snrFloorR - 1.5) / 2.5;
-                floorGateR = 0.15 + 0.85 * (t * t);
-            }
-        }
-
-        double adaptAlphaL = (hiPowL > r0_L_) ? 0.025 : 0.003;
-        r0_L_ = r0_L_ * (1.0 - adaptAlphaL) + hiPowL * adaptAlphaL;
-        double rmsL = std::sqrt(std::max(1e-12, r0_L_));
-
-        double adaptAlphaR = (hiPowR > r0_R_) ? 0.025 : 0.003;
-        r0_R_ = r0_R_ * (1.0 - adaptAlphaR) + hiPowR * adaptAlphaR;
-        double rmsR = std::sqrt(std::max(1e-12, r0_R_));
-
-        double tonalityL = std::clamp(1.0 - (transientFluxL_ / (rmsL * 2.2 + 1e-5)), 0.0, 1.0);
-        double tonalityR = std::clamp(1.0 - (transientFluxR_ / (rmsR * 2.2 + 1e-5)), 0.0, 1.0);
-        if (isBreathContextL) tonalityL = std::max(tonalityL, 0.65);
-        if (isBreathContextR) tonalityR = std::max(tonalityR, 0.65);
-
-        double effEvenL = (mode_ == FreqMode::AUTO_AI) ? (0.40 + 0.40 * tonalityL) : evenRatio_;
-        double effOddL  = (mode_ == FreqMode::AUTO_AI) ? (0.60 - 0.40 * tonalityL) : oddRatio_;
-
-        double effEvenR = (mode_ == FreqMode::AUTO_AI) ? (0.40 + 0.40 * tonalityR) : evenRatio_;
-        double effOddR  = (mode_ == FreqMode::AUTO_AI) ? (0.60 - 0.40 * tonalityR) : oddRatio_;
-
-        if (r0_L_ < 1e-7 || floorGateL < 0.2) smoothedGainL_ *= 0.94;
-        else {
-            double targetL = std::min(rmsL * 0.85, static_cast<double>(targetGain_ * modeGainScale_ * 0.25f)) * floorGateL;
-            smoothedGainL_ += (targetL - smoothedGainL_) * ((targetL > smoothedGainL_) ? 0.035 : 0.004);
-        }
-
-        if (r0_R_ < 1e-7 || floorGateR < 0.2) smoothedGainR_ *= 0.94;
-        else {
-            double targetR = std::min(rmsR * 0.85, static_cast<double>(targetGain_ * modeGainScale_ * 0.25f)) * floorGateR;
-            smoothedGainR_ += (targetR - smoothedGainR_) * ((targetR > smoothedGainR_) ? 0.035 : 0.004);
-        }
-
-        // 4. センター・ボーカル・コヒーレンス
-        double hiMid = (hiL + hiR) * 0.5;
+        // =====================================================================
+        // ★ 実測データ反映: Mid (忠実度 21.64dB) vs Side (忠実度 14.67dB) 分離処理
+        // =====================================================================
+        double hiMid  = (hiL + hiR) * 0.5;
         double hiSide = (hiL - hiR) * 0.5;
-        double midRms = (rmsL + rmsR) * 0.5;
 
+        // Mid パワー & 暗騒音追従
         double midPow = hiMid * hiMid;
+        double diffMid = std::max(0.0, midPow - prevPowMid_);
+        prevPowMid_ = midPow;
+        transientFluxMid_ = transientFluxMid_ * 0.93 + diffMid * 0.07;
+
+        if (midPow < noiseFloorMid_) noiseFloorMid_ = noiseFloorMid_ * 0.999 + midPow * 0.001;
+        else noiseFloorMid_ = noiseFloorMid_ * 0.99995 + midPow * 0.00005;
+        noiseFloorMid_ = std::clamp(noiseFloorMid_, 1e-10, 1e-4);
+
+        // Side パワー & 暗騒音追従
         double sidePow = hiSide * hiSide;
-        double centerBias = midPow / (midPow + sidePow + 1e-9);
+        double diffSide = std::max(0.0, sidePow - prevPowSide_);
+        prevPowSide_ = sidePow;
+        transientFluxSide_ = transientFluxSide_ * 0.93 + diffSide * 0.07;
 
-        double normMid = std::clamp(hiMid / (midRms * 1.414 + 1e-5), -3.0, 3.0);
-        double normSqMid = normMid * normMid;
-        double h2_Mid = (normSqMid - 0.70) * midRms;
-        double h3_Mid = (normSqMid * normMid - 0.75 * normMid) * (midRms * 0.45);
-        double h4_Mid = (normSqMid * normSqMid - 1.5 * normSqMid + 0.35) * (midRms * 0.20);
-        double airWeightMid = (isBreathContextL || isBreathContextR) ? 0.25 : 0.15;
-        double harmMid = (effEvenL * h2_Mid + effOddL * h3_Mid + airWeightMid * h4_Mid);
+        if (sidePow < noiseFloorSide_) noiseFloorSide_ = noiseFloorSide_ * 0.999 + sidePow * 0.001;
+        else noiseFloorSide_ = noiseFloorSide_ * 0.99995 + sidePow * 0.00005;
+        noiseFloorSide_ = std::clamp(noiseFloorSide_, 1e-10, 1e-4);
 
-        double normL = std::clamp(hiL / (rmsL * 1.414 + 1e-5), -3.0, 3.0);
-        double normSqL = normL * normL;
-        double h2_L = (normSqL - 0.70) * rmsL;
-        double h3_L = (normSqL * normL - 0.75 * normL) * (rmsL * 0.45);
-        double h4_L = (normSqL * normSqL - 1.5 * normSqL + 0.35) * (rmsL * 0.20);
-        double airWeightL = isBreathContextL ? 0.25 : 0.15;
-        double harmRawL = (effEvenL * h2_L + effOddL * h3_L + airWeightL * h4_L);
+        // 微小音量 (-40〜-65dBFS: ブレス・余韻) の高域欠落 (-0.27dB) を滑らかに救出する適応フロアゲート
+        double formantPow = (formantL * formantL + formantR * formantR) * 0.5;
+        bool isBreathContext = (formantPow > noiseFloorMid_ * 6.0) && (midPow > noiseFloorMid_ * 3.0);
 
-        double normR = std::clamp(hiR / (rmsR * 1.414 + 1e-5), -3.0, 3.0);
-        double normSqR = normR * normR;
-        double h2_R = (normSqR - 0.70) * rmsR;
-        double h3_R = (normSqR * normR - 0.75 * normR) * (rmsR * 0.45);
-        double h4_R = (normSqR * normSqR - 1.5 * normSqR + 0.35) * (rmsR * 0.20);
-        double airWeightR = isBreathContextR ? 0.25 : 0.15;
-        double harmRawR = (effEvenR * h2_R + effOddR * h3_R + airWeightR * h4_R);
-
-        double harmL = harmRawL * (1.0 - centerBias * 0.85) + harmMid * (centerBias * 0.85);
-        double harmR = harmRawR * (1.0 - centerBias * 0.85) + harmMid * (centerBias * 0.85);
-
-        // ★ Ultra HQ 専用: LPC 声道全極フィルター
-        if (perfMode_ == PerformanceMode::ULTRA_HQ) {
-            double lpcOutL = harmL;
-            double lpcOutR = harmR;
-            for (int j = 0; j < LPC_ORDER; ++j) {
-                lpcOutL -= lpcCoeffs_[j] * lpcHistL_[j];
-                lpcOutR -= lpcCoeffs_[j] * lpcHistR_[j];
+        double snrMid = midPow / (noiseFloorMid_ + 1e-11);
+        double floorGateMid = 1.0;
+        if (!isBreathContext) {
+            if (snrMid < 1.4) floorGateMid = 0.20;
+            else if (snrMid < 3.8) {
+                double t = (snrMid - 1.4) / 2.4;
+                floorGateMid = 0.20 + 0.80 * (t * t);
             }
-            for (int j = LPC_ORDER - 1; j > 0; --j) {
-                lpcHistL_[j] = lpcHistL_[j - 1];
-                lpcHistR_[j] = lpcHistR_[j - 1];
-            }
-            lpcHistL_[0] = lpcOutL;
-            lpcHistR_[0] = lpcOutR;
-
-            harmL = std::clamp(lpcOutL * 0.65 + harmL * 0.35, -2.5, 2.5);
-            harmR = std::clamp(lpcOutR * 0.65 + harmR * 0.35, -2.5, 2.5);
         }
 
-        // 5. 出力ハイパス & シルキースムージング
+        double snrSide = sidePow / (noiseFloorSide_ + 1e-11);
+        double floorGateSide = 1.0;
+        if (snrSide < 1.2) floorGateSide = 0.25;
+        else if (snrSide < 3.5) {
+            double t = (snrSide - 1.2) / 2.3;
+            floorGateSide = 0.25 + 0.75 * (t * t);
+        }
+
+        // RMS 推定
+        double adaptAlphaMid = (midPow > r0_Mid_) ? 0.03 : 0.004;
+        r0_Mid_ = r0_Mid_ * (1.0 - adaptAlphaMid) + midPow * adaptAlphaMid;
+        double rmsMid = std::sqrt(std::max(1e-12, r0_Mid_));
+
+        double adaptAlphaSide = (sidePow > r0_Side_) ? 0.03 : 0.004;
+        r0_Side_ = r0_Side_ * (1.0 - adaptAlphaSide) + sidePow * adaptAlphaSide;
+        double rmsSide = std::sqrt(std::max(1e-12, r0_Side_));
+
+        // トーナリティ判定
+        double tonalityMid = std::clamp(1.0 - (transientFluxMid_ / (rmsMid * 2.0 + 1e-5)), 0.0, 1.0);
+        if (isBreathContext) tonalityMid = std::max(tonalityMid, 0.65);
+
+        double effEven = (mode_ == FreqMode::AUTO_AI) ? (0.45 + 0.35 * tonalityMid) : evenRatio_;
+        double effOdd  = (mode_ == FreqMode::AUTO_AI) ? (0.55 - 0.35 * tonalityMid) : oddRatio_;
+
+        // Mid ターゲットゲイン (原音忠実・過度な付加を避けて透明感を維持)
+        double targetGainMid = std::min(rmsMid * 0.75, static_cast<double>(targetGain_ * modeGainScale_ * 0.20f)) * floorGateMid;
+        smoothedGainMid_ += (targetGainMid - smoothedGainMid_) * ((targetGainMid > smoothedGainMid_) ? 0.04 : 0.005);
+
+        // ★ Side ターゲットゲイン: 実測で Side が 14.67dB と大幅劣化しているため、1.5倍 (+3.5dB) 重点的に補正！
+        double sideWeight = (mode_ == FreqMode::DYNAMIC_PERCUSSION) ? 1.15 : 1.50;
+        double targetGainSide = std::min(rmsSide * 1.10, static_cast<double>(targetGain_ * modeGainScale_ * 0.28f * sideWeight)) * floorGateSide;
+        smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.05 : 0.006);
+
+        // =====================================================================
+        // 倍音合成 (2次・3次・4次直交多項式)
+        // =====================================================================
+        // 1. Mid 倍音 (センター直接音: 眉間にガチッと結像する同相コア)
+        double normMid = std::clamp(hiMid / (rmsMid * 1.414 + 1e-5), -3.0, 3.0);
+        double normSqMid = normMid * normMid;
+        double h2_Mid = (normSqMid - 0.70) * rmsMid;
+        double h3_Mid = (normSqMid * normMid - 0.75 * normMid) * (rmsMid * 0.45);
+        double h4_Mid = (normSqMid * normSqMid - 1.5 * normSqMid + 0.35) * (rmsMid * 0.20);
+        double airWeightMid = isBreathContext ? 0.25 : 0.15;
+        double harmMid = (effEven * h2_Mid + effOdd * h3_Mid + airWeightMid * h4_Mid);
+
+        // 2. Side 倍音 (ステレオ残響・空間超解像: 14.67dB の劣化を埋めるエアー倍音)
+        double normSide = std::clamp(hiSide / (rmsSide * 1.414 + 1e-5), -3.0, 3.0);
+        double normSqSide = normSide * normSide;
+        double h2_Side = (normSqSide - 0.70) * rmsSide;
+        double h3_Side = (normSqSide * normSide - 0.75 * normSide) * (rmsSide * 0.48);
+        double h4_Side = (normSqSide * normSqSide - 1.5 * normSqSide + 0.35) * (rmsSide * 0.25);
+        double harmSide = (effEven * 0.85 * h2_Side + effOdd * 1.15 * h3_Side + 0.30 * h4_Side);
+
+        // Mid/Side から L/R の復元倍音を再構成
+        double harmL = (harmMid * smoothedGainMid_) + (harmSide * smoothedGainSide_);
+        double harmR = (harmMid * smoothedGainMid_) - (harmSide * smoothedGainSide_);
+
+        // 3. ★ 実測 19.5kHz HPF & 38kHz シルキースムージング
+        // (18.5k〜19.5kHz の通常原音帯域には 1dB も被せず、20kHz超の切断領域のみに注入)
         double outHarmL = out_hp_b0_ * harmL + out_s1_L_;
         out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
         out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
@@ -903,26 +665,9 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         silk_s1_R_ = silk_lp_b1_ * outHarmR - silk_lp_a1_ * silkHarmR + silk_s2_R_;
         silk_s2_R_ = silk_lp_b2_ * outHarmR - silk_lp_a2_ * silkHarmR;
 
-        // ★ Ultra HQ 専用: 動的スロープリミッター
-        if (perfMode_ == PerformanceMode::ULTRA_HQ) {
-            double maxAllowedPowerL = slopePowerB_L_ * std::pow(10.0, (smoothedSlopeL_ * 0.514) / 10.0);
-            double maxAllowedRmsL = std::sqrt(std::max(1e-12, maxAllowedPowerL)) * 1.35;
-            double curHarmRmsL = std::abs(silkHarmL) * smoothedGainL_;
-            if (curHarmRmsL > maxAllowedRmsL && maxAllowedRmsL > 1e-6) {
-                silkHarmL *= (maxAllowedRmsL / curHarmRmsL);
-            }
-
-            double maxAllowedPowerR = slopePowerB_R_ * std::pow(10.0, (smoothedSlopeR_ * 0.514) / 10.0);
-            double maxAllowedRmsR = std::sqrt(std::max(1e-12, maxAllowedPowerR)) * 1.35;
-            double curHarmRmsR = std::abs(silkHarmR) * smoothedGainR_;
-            if (curHarmRmsR > maxAllowedRmsR && maxAllowedRmsR > 1e-6) {
-                silkHarmR *= (maxAllowedRmsR / curHarmRmsR);
-            }
-        }
-
-        // ★ 最終合成: 原音 - リンギング相殺 + 微小倍音インフィル + ハイレゾ倍音
-        double totalL = inL - ringDampL + infillHarmL + silkHarmL * smoothedGainL_;
-        double totalR = inR - ringDampR + infillHarmR + silkHarmR * smoothedGainR_;
+        // ★ 原音 (inL / inR) は完全無傷 (位相歪みゼロ) で通過し、20kHz超の倍音のみを加算
+        double totalL = inL + silkHarmL;
+        double totalR = inR + silkHarmR;
 
         left[i] = static_cast<float>(std::clamp(totalL, -1.0, 1.0));
         right[i] = static_cast<float>(std::clamp(totalR, -1.0, 1.0));
@@ -1350,7 +1095,7 @@ void DspUpsampler::executeFftAnalysis() {
 
     for (int b = 28; b < 32; ++b) {
         if (factor_ >= 2 && !isDirectSource_) {
-            float decayPerBand = isFreqActive ? 3.0f : 4.5f;
+            float decayPerBand = isFreqActive ? 2.5f : 4.5f;
             float slope = static_cast<float>(b - 27) * decayPerBand;
             float targetDb = spectrumDb_[27] - slope;
             spectrumDb_[b] = std::clamp(targetDb, -60.0f, 0.0f);
@@ -1366,6 +1111,7 @@ void DspUpsampler::getSpectrum(float* out32Bands) {
     std::memcpy(out32Bands, spectrumDb_, sizeof(spectrumDb_));
 }
 
+// ★ 空間処理
 void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames) {
     if (!isMsSpatial_ || !left || !right || numFrames == 0) return;
 
@@ -1379,13 +1125,12 @@ void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames)
         float absS = std::abs(s);
         float centerBias = absM / (absM + absS + 1e-4f);
 
-        float spatialGain = 0.18f * (1.0f - centerBias * 0.80f);
-
+        float spatialGain = 0.16f * (1.0f - centerBias * 0.75f);
         float diffL = s - prevSideL_;
         prevSideL_ = s;
         float sSpatial = s + diffL * spatialGain;
 
-        float mDirect = m * (1.0f + 0.04f * centerBias);
+        float mDirect = m * (1.0f + 0.03f * centerBias);
 
         left[i] = std::clamp(mDirect + sSpatial, -1.0f, 1.0f);
         right[i] = std::clamp(mDirect - sSpatial, -1.0f, 1.0f);

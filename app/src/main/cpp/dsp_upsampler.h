@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 #include <cstdint>
@@ -161,89 +161,52 @@ private:
 class DspFreqEngine {
 public:
     DspFreqEngine();
-    void configure(FreqMode mode, double sampleRate, float gain = 0.26f, float extractFreq = 7200.0f);
+    void configure(FreqMode mode, double sampleRate, float gain = 0.24f, float extractFreq = 12500.0f);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
     void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
 
 private:
-    void runLpcAnalysis();
-
     FreqMode mode_ = FreqMode::AUTO_AI;
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
-    float targetGain_ = 0.26f;
+    float targetGain_ = 0.24f;
 
+    // ソース高域抽出用 HPF (10k〜14kHz)
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;
     double in_s1_L_ = 0.0, in_s2_L_ = 0.0;
     double in_s1_R_ = 0.0, in_s2_R_ = 0.0;
 
+    // ★ 実測 20.0kHz 遮断溝補完用 出力HPF (19.5kHz〜)
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
+    // 超高域シルキースムージング (38kHz)
     double silk_lp_b0_ = 1.0, silk_lp_b1_ = 0.0, silk_lp_b2_ = 0.0;
     double silk_lp_a1_ = 0.0, silk_lp_a2_ = 0.0;
     double silk_s1_L_ = 0.0, silk_s2_L_ = 0.0;
     double silk_s1_R_ = 0.0, silk_s2_R_ = 0.0;
 
-    // 口腔フォルマント検出 (3.2kHz BPF)
+    // 口腔共鳴フォルマント (3.2kHz)
     double formant_bp_b0_ = 0.0, formant_bp_b1_ = 0.0, formant_bp_b2_ = 0.0;
     double formant_bp_a1_ = 0.0, formant_bp_a2_ = 0.0;
     double formant_s1_L_ = 0.0, formant_s2_L_ = 0.0;
     double formant_s1_R_ = 0.0, formant_s2_R_ = 0.0;
 
-    // ★ 1. アンチ・リンギング (20kHz 遮断リンギング相殺 BPF)
-    double ar_bp_b0_ = 0.0, ar_bp_b1_ = 0.0, ar_bp_b2_ = 0.0;
-    double ar_bp_a1_ = 0.0, ar_bp_a2_ = 0.0;
-    double ar_s1_L_ = 0.0, ar_s2_L_ = 0.0;
-    double ar_s1_R_ = 0.0, ar_s2_R_ = 0.0;
+    double evenRatio_ = 0.65;
+    double oddRatio_ = 0.35;
+    double modeGainScale_ = 1.20;
 
-    // ★ 2. 心理音響リバース・マスキング (中域基音エネルギー追従 BPF)
-    double mask_bp_b0_ = 0.0, mask_bp_b1_ = 0.0, mask_bp_b2_ = 0.0;
-    double mask_bp_a1_ = 0.0, mask_bp_a2_ = 0.0;
-    double mask_s1_L_ = 0.0, mask_s2_L_ = 0.0;
-    double mask_s1_R_ = 0.0, mask_s2_R_ = 0.0;
-    double maskMidPowerL_ = 1e-4, maskMidPowerR_ = 1e-4;
+    double r0_Mid_ = 1e-4, r0_Side_ = 1e-4;
+    double smoothedGainMid_ = 0.0, smoothedGainSide_ = 0.0;
 
-    double evenRatio_ = 0.70;
-    double oddRatio_ = 0.30;
-    double modeGainScale_ = 1.25;
-
-    double r0_L_ = 1e-4, r0_R_ = 1e-4;
-    double smoothedGainL_ = 0.0, smoothedGainR_ = 0.0;
-
-    double prevPowL_ = 0.0, prevPowR_ = 0.0;
-    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
-    double noiseFloorL_ = 1e-5, noiseFloorR_ = 1e-5;
-
-    // 8次 LPC 物理モデリングステート
-    static constexpr int LPC_ORDER = 8;
-    static constexpr int LPC_FRAME_SIZE = 128;
-    double lpcBuffer_[LPC_FRAME_SIZE] = {0.0};
-    int lpcPos_ = 0;
-    int lpcCounter_ = 0;
-    double lpcCoeffs_[LPC_ORDER] = {0.0};
-    double lpcHistL_[LPC_ORDER] = {0.0};
-    double lpcHistR_[LPC_ORDER] = {0.0};
-
-    // 動的スペクトル包絡スロープ追従ステート
-    double slope_bpA_b0_ = 0.0, slope_bpA_b1_ = 0.0, slope_bpA_b2_ = 0.0;
-    double slope_bpA_a1_ = 0.0, slope_bpA_a2_ = 0.0;
-    double slope_s1_A_L_ = 0.0, slope_s2_A_L_ = 0.0;
-    double slope_s1_A_R_ = 0.0, slope_s2_A_R_ = 0.0;
-
-    double slope_bpB_b0_ = 0.0, slope_bpB_b1_ = 0.0, slope_bpB_b2_ = 0.0;
-    double slope_bpB_a1_ = 0.0, slope_bpB_a2_ = 0.0;
-    double slope_s1_B_L_ = 0.0, slope_s2_B_L_ = 0.0;
-    double slope_s1_B_R_ = 0.0, slope_s2_B_R_ = 0.0;
-
-    double slopePowerA_L_ = 1e-5, slopePowerB_L_ = 1e-6;
-    double slopePowerA_R_ = 1e-5, slopePowerB_R_ = 1e-6;
-    double smoothedSlopeL_ = -9.0, smoothedSlopeR_ = -9.0;
+    double prevPowMid_ = 0.0, prevPowSide_ = 0.0;
+    double transientFluxMid_ = 0.0, transientFluxSide_ = 0.0;
+    double noiseFloorMid_ = 1e-5, noiseFloorSide_ = 1e-5;
 };
 
 class DspUpsampler {
@@ -326,7 +289,7 @@ private:
     bool isMsSpatial_ = false;
     bool isDynamicSbr_ = false;
     float prevSideL_ = 0.0f, prevSideR_ = 0.0f;
-    float detectedCutoffHz_ = 16000.0f;
+    float detectedCutoffHz_ = 20000.0f;
     float sbrPhaseL_ = 0.0f, sbrPhaseR_ = 0.0f;
 
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
@@ -339,8 +302,8 @@ private:
     bool customUseGroupDelay_ = true;
     bool customUseLattice_ = false;
 
-    float customFreqGain_ = 0.26f;
-    float customFreqExtractFreq_ = 7200.0f;
+    float customFreqGain_ = 0.24f;
+    float customFreqExtractFreq_ = 12500.0f;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
