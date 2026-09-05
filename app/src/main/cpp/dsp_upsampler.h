@@ -167,6 +167,8 @@ public:
     void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
 
 private:
+    void runLpcAnalysis();
+
     FreqMode mode_ = FreqMode::AUTO_AI;
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     double sampleRate_ = 48000.0;
@@ -203,6 +205,31 @@ private:
     double prevPowL_ = 0.0, prevPowR_ = 0.0;
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
     double noiseFloorL_ = 1e-5, noiseFloorR_ = 1e-5;
+
+    // ★ 1. 物理音響LPC (8次 Levinson-Durbin) 分析ステート
+    static constexpr int LPC_ORDER = 8;
+    static constexpr int LPC_FRAME_SIZE = 128;
+    double lpcBuffer_[LPC_FRAME_SIZE] = {0.0};
+    int lpcPos_ = 0;
+    int lpcCounter_ = 0;
+    double lpcCoeffs_[LPC_ORDER] = {0.0};
+    double lpcHistL_[LPC_ORDER] = {0.0};
+    double lpcHistR_[LPC_ORDER] = {0.0};
+
+    // ★ 3. 動的スペクトル包絡スロープ自動追従ステート
+    double slope_bpA_b0_ = 0.0, slope_bpA_b1_ = 0.0, slope_bpA_b2_ = 0.0;
+    double slope_bpA_a1_ = 0.0, slope_bpA_a2_ = 0.0;
+    double slope_s1_A_L_ = 0.0, slope_s2_A_L_ = 0.0;
+    double slope_s1_A_R_ = 0.0, slope_s2_A_R_ = 0.0;
+
+    double slope_bpB_b0_ = 0.0, slope_bpB_b1_ = 0.0, slope_bpB_b2_ = 0.0;
+    double slope_bpB_a1_ = 0.0, slope_bpB_a2_ = 0.0;
+    double slope_s1_B_L_ = 0.0, slope_s2_B_L_ = 0.0;
+    double slope_s1_B_R_ = 0.0, slope_s2_B_R_ = 0.0;
+
+    double slopePowerA_L_ = 1e-5, slopePowerB_L_ = 1e-6;
+    double slopePowerA_R_ = 1e-5, slopePowerB_R_ = 1e-6;
+    double smoothedSlopeL_ = -9.0, smoothedSlopeR_ = -9.0;
 };
 
 class DspUpsampler {
