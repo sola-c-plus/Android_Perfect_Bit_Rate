@@ -15,6 +15,12 @@
 #define USE_ARM_NEON 0
 #endif
 
+enum class PerformanceMode : int {
+    ECO = 0,
+    STANDARD = 1,
+    ULTRA_HQ = 2
+};
+
 enum class DitherMode : int {
     NONE = 0,
     TPDF = 1,
@@ -158,9 +164,11 @@ public:
     void configure(FreqMode mode, double sampleRate, float gain = 0.26f, float extractFreq = 7200.0f);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
+    void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
 
 private:
     FreqMode mode_ = FreqMode::AUTO_AI;
+    PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
     float targetGain_ = 0.26f;
@@ -180,7 +188,6 @@ private:
     double silk_s1_L_ = 0.0, silk_s2_L_ = 0.0;
     double silk_s1_R_ = 0.0, silk_s2_R_ = 0.0;
 
-    // 口腔フォルマント検出用バンドパス (3.2kHz BPF)
     double formant_bp_b0_ = 0.0, formant_bp_b1_ = 0.0, formant_bp_b2_ = 0.0;
     double formant_bp_a1_ = 0.0, formant_bp_a2_ = 0.0;
     double formant_s1_L_ = 0.0, formant_s2_L_ = 0.0;
@@ -195,7 +202,6 @@ private:
 
     double prevPowL_ = 0.0, prevPowR_ = 0.0;
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
-
     double noiseFloorL_ = 1e-5, noiseFloorR_ = 1e-5;
 };
 
@@ -229,6 +235,12 @@ public:
     void setFreqMode(FreqMode mode);
     void setFreqCustomParams(float gain, float extractFreq);
     FreqMode getFreqMode() const { return freqMode_; }
+
+    void setPerformanceMode(PerformanceMode mode) {
+        perfMode_ = mode;
+        freqEngine_.setPerformanceMode(mode);
+    }
+    PerformanceMode getPerformanceMode() const { return perfMode_; }
 
     void setTransientMode(TransientMode mode);
     void setTransientCustomParams(bool useGroupDelay, bool useLattice);
@@ -276,6 +288,7 @@ private:
     float detectedCutoffHz_ = 16000.0f;
     float sbrPhaseL_ = 0.0f, sbrPhaseR_ = 0.0f;
 
+    PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     DitherMode ditherMode_ = DitherMode::TPDF;
     FirFilterType filterType_ = FirFilterType::MINIMUM_PHASE_SHARP;
     DcPhaseType dcPhaseType_ = DcPhaseType::A_STD;

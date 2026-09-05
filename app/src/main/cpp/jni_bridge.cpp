@@ -1,4 +1,4 @@
-﻿#include <jni.h>
+#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
@@ -90,6 +90,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
     g_currentDcPhaseType = type;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(type));
+}
+
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetPerformanceMode(
+        JNIEnv *env, jobject thiz, jint mode) {
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setPerformanceMode(static_cast<PerformanceMode>(mode));
 }
 
 JNIEXPORT void JNICALL

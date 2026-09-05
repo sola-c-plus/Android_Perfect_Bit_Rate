@@ -379,6 +379,11 @@ class MainActivity : AppCompatActivity() {
     private val themeOptions = arrayOf("Dark (ダーク)", "Light (ライト)", "Auto (端末の設定に連動)")
     private val themeValues = arrayOf("dark", "light", "auto")
 
+        private var currentPerfMode = 1
+    private val perfModeOptions = arrayOf("Eco (省電力)", "普通 (標準)", "超高音質 (フルスペック)")
+    private val perfModeValues = arrayOf(0, 1, 2)
+    private var isPerfModeSyncing = false
+
     private var currentBitMode = "16bit"
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
@@ -523,6 +528,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.upsampleFactor = if (isDirectSource) 1 else upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
 
+                        NativeAudioEngine.nativeSetPerformanceMode(currentPerfMode)
             NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             NativeAudioEngine.nativeSetCascadeFir(isCascadeFir)
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
@@ -615,6 +621,7 @@ class MainActivity : AppCompatActivity() {
         currentThemeMode = prefs.getString("ui_theme_mode", "dark") ?: "dark"
         isVolLockOn = false
         currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
+                currentPerfMode = prefs.getInt("selected_perf_mode", 1)
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
@@ -833,6 +840,8 @@ class MainActivity : AppCompatActivity() {
         val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
+                val spinnerPerfMode = view.findViewById<Spinner>(R.id.dialogSpinnerPerfMode)
+        val layoutSectionPerfMode = view.findViewById<View>(R.id.layoutSectionPerfMode)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
 
@@ -855,6 +864,11 @@ class MainActivity : AppCompatActivity() {
             view.findViewById<TextView>(R.id.textDitherSub)?.setTextColor(Color.parseColor("#636366"))
             view.findViewById<TextView>(R.id.textDcPhaseTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
             view.findViewById<TextView>(R.id.textDcPhaseSub)?.setTextColor(Color.parseColor("#636366"))
+                        view.findViewById<TextView>(R.id.textPerfModeTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+            view.findViewById<TextView>(R.id.textPerfModeSub)?.setTextColor(Color.parseColor("#636366"))
+            view.findViewById<View>(R.id.dividerDspPerf)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+            spinnerPerfMode?.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+            spinnerPerfMode?.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
             view.findViewById<TextView>(R.id.textDseeTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
             view.findViewById<TextView>(R.id.textDseeSub)?.setTextColor(Color.parseColor("#636366"))
             view.findViewById<TextView>(R.id.textUpsampleTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
@@ -1001,6 +1015,8 @@ class MainActivity : AppCompatActivity() {
             layoutSectionEq.alpha = dspAlpha
             layoutSectionDither.alpha = dspAlpha
             layoutSectionDcPhase.alpha = dspAlpha
+                        layoutSectionPerfMode?.alpha = dspAlpha
+            spinnerPerfMode?.isEnabled = dspEnabled
             layoutSectionUpsample.alpha = dspAlpha
 
             spinnerDither.isEnabled = dspEnabled
@@ -1181,6 +1197,24 @@ class MainActivity : AppCompatActivity() {
                     currentDseeMode = selectedMode
                     prefs.edit { putInt("selected_dsee_mode", selectedMode) }
                     applyPresetToDsp(selectedMode)
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+                        // ★ PERFORMANCE PROFILE スピナー設定 (FREQ 内部設定のみを切り替え)
+        val perfAdapter = ArrayAdapter(this, spinnerLayout, perfModeOptions)
+        perfAdapter.setDropDownViewResource(spinnerLayout)
+        spinnerPerfMode?.adapter = perfAdapter
+        spinnerPerfMode?.setSelection(currentPerfMode.coerceIn(0, 2))
+
+        spinnerPerfMode?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                if (currentPerfMode != position) {
+                    currentPerfMode = position
+                    prefs.edit { putInt("selected_perf_mode", position) }
+                    // 純粋に FREQ エンジンの内部処理精度のみを切り替え (サンプリング等には一切干渉しない)
+                    NativeAudioEngine.nativeSetPerformanceMode(position)
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}

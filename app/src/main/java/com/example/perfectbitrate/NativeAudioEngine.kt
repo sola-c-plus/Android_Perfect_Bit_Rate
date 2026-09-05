@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import java.nio.ByteBuffer
 
@@ -21,6 +21,7 @@ object NativeAudioEngine {
     external fun nativeSetFirFilterType(type: Int)
     external fun nativeSetDcPhaseType(type: Int)
 
+    external fun nativeSetPerformanceMode(mode: Int)
     external fun nativeSetFreqMode(mode: Int)
     external fun nativeSetFreqCustomParams(gain: Float, extractFreq: Float)
 
