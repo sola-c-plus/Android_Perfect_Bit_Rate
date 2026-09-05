@@ -112,6 +112,36 @@ private:
     int writePos_ = 0;
 };
 
+// ★ ULTRA_HQ専用: Opus MDCTプリエコー（先行リンギング）逆算消去クラス
+class DspAntiPreecho {
+public:
+    DspAntiPreecho();
+    void configure(double sampleRate);
+    void reset();
+    void processStereo(float* left, float* right, size_t numFrames);
+
+private:
+    double sampleRate_ = 48000.0;
+    size_t lookaheadFrames_ = 168; // 約 3.5ms 先読み
+    std::vector<float> ringBufL_;
+    std::vector<float> ringBufR_;
+    size_t writePos_ = 0;
+    size_t readPos_ = 0;
+    bool isBufferPrimed_ = false;
+};
+
+// ★ ULTRA_HQ専用: 微小信号エルミート量子化段差スムーザー
+class DspBitContinuity {
+public:
+    DspBitContinuity() = default;
+    void reset();
+    void processStereo(float* left, float* right, size_t numFrames);
+
+private:
+    float prevL_ = 0.0f, prev2L_ = 0.0f;
+    float prevR_ = 0.0f, prev2R_ = 0.0f;
+};
+
 class DspDcPhaseLinearizer {
 public:
     DspDcPhaseLinearizer();
@@ -144,7 +174,7 @@ private:
     bool useGroupDelay_ = false;
     bool useLattice_ = false;
 
-    double attackGain_ = 1.2;
+    double attackGain_ = 1.05;
     double fastAlpha_ = 0.04;
     double slowAlpha_ = 0.002;
 
@@ -161,7 +191,7 @@ private:
 class DspFreqEngine {
 public:
     DspFreqEngine();
-    void configure(FreqMode mode, double sampleRate, float gain = 0.24f, float extractFreq = 12500.0f);
+    void configure(FreqMode mode, double sampleRate, float gain = 0.22f, float extractFreq = 13000.0f);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
     void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
@@ -171,27 +201,23 @@ private:
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
-    float targetGain_ = 0.24f;
+    float targetGain_ = 0.22f;
 
-    // ソース高域抽出用 HPF (10k〜14kHz)
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;
     double in_s1_L_ = 0.0, in_s2_L_ = 0.0;
     double in_s1_R_ = 0.0, in_s2_R_ = 0.0;
 
-    // ★ 実測 20.0kHz 遮断溝補完用 出力HPF (19.5kHz〜)
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
-    // 超高域シルキースムージング (38kHz)
     double silk_lp_b0_ = 1.0, silk_lp_b1_ = 0.0, silk_lp_b2_ = 0.0;
     double silk_lp_a1_ = 0.0, silk_lp_a2_ = 0.0;
     double silk_s1_L_ = 0.0, silk_s2_L_ = 0.0;
     double silk_s1_R_ = 0.0, silk_s2_R_ = 0.0;
 
-    // 口腔共鳴フォルマント (3.2kHz)
     double formant_bp_b0_ = 0.0, formant_bp_b1_ = 0.0, formant_bp_b2_ = 0.0;
     double formant_bp_a1_ = 0.0, formant_bp_a2_ = 0.0;
     double formant_s1_L_ = 0.0, formant_s2_L_ = 0.0;
@@ -199,7 +225,7 @@ private:
 
     double evenRatio_ = 0.65;
     double oddRatio_ = 0.35;
-    double modeGainScale_ = 1.20;
+    double modeGainScale_ = 1.15;
 
     double r0_Mid_ = 1e-4, r0_Side_ = 1e-4;
     double smoothedGainMid_ = 0.0, smoothedGainSide_ = 0.0;
@@ -302,8 +328,8 @@ private:
     bool customUseGroupDelay_ = true;
     bool customUseLattice_ = false;
 
-    float customFreqGain_ = 0.24f;
-    float customFreqExtractFreq_ = 12500.0f;
+    float customFreqGain_ = 0.22f;
+    float customFreqExtractFreq_ = 13000.0f;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
@@ -312,6 +338,10 @@ private:
     DspDcPhaseLinearizer dcPhaseLinearizer_;
     DspTransientRestorer transientRestorer_;
     DspFreqEngine freqEngine_;
+
+    // ★ ULTRA_HQ専用モジュール
+    DspAntiPreecho antiPreecho_;
+    DspBitContinuity bitContinuity_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;

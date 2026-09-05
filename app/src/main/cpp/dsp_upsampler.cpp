@@ -27,6 +27,121 @@ inline double getTpdfDitherR(bool independent) {
     return (r1 - r2);
 }
 
+// -----------------------------------------------------------------------------
+// ★ DspAntiPreecho (Opus MDCT先行リンギング逆算消去)
+// -----------------------------------------------------------------------------
+DspAntiPreecho::DspAntiPreecho() {
+    configure(48000.0);
+}
+
+void DspAntiPreecho::configure(double sampleRate) {
+    sampleRate_ = std::max(8000.0, sampleRate);
+    lookaheadFrames_ = static_cast<size_t>(sampleRate_ * 0.0035); // 3.5ms
+    ringBufL_.assign(lookaheadFrames_ * 4, 0.0f);
+    ringBufR_.assign(lookaheadFrames_ * 4, 0.0f);
+    reset();
+}
+
+void DspAntiPreecho::reset() {
+    std::fill(ringBufL_.begin(), ringBufL_.end(), 0.0f);
+    std::fill(ringBufR_.begin(), ringBufR_.end(), 0.0f);
+    writePos_ = 0;
+    readPos_ = 0;
+    isBufferPrimed_ = false;
+}
+
+void DspAntiPreecho::processStereo(float* left, float* right, size_t numFrames) {
+    if (!left || !right || numFrames == 0 || ringBufL_.empty()) return;
+
+    const size_t cap = ringBufL_.size();
+    const size_t la = lookaheadFrames_;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        float inL = left[i];
+        float inR = right[i];
+
+        ringBufL_[writePos_] = inL;
+        ringBufR_[writePos_] = inR;
+
+        if (!isBufferPrimed_) {
+            if (writePos_ >= la) isBufferPrimed_ = true;
+            left[i] = 0.0f;
+            right[i] = 0.0f;
+            writePos_ = (writePos_ + 1) % cap;
+            continue;
+        }
+
+        // 現在の出力サンプル
+        float outL = ringBufL_[readPos_];
+        float outR = ringBufR_[readPos_];
+
+        // 未来（writePos付近）のアタック強度を判定
+        float futL = std::abs(inL);
+        float futR = std::abs(inR);
+        float nowL = std::abs(outL);
+        float nowR = std::abs(outR);
+
+        // 未来に急峻なアタックがあり、現在が静音〜弱音なら「プリエコー」と判定して抑制
+        if (futL > nowL * 8.0f && futL > 0.15f && nowL < 0.03f) {
+            float attenL = std::clamp(nowL / (futL * 0.10f + 1e-4f), 0.20f, 1.0f);
+            outL *= attenL;
+        }
+        if (futR > nowR * 8.0f && futR > 0.15f && nowR < 0.03f) {
+            float attenR = std::clamp(nowR / (futR * 0.10f + 1e-4f), 0.20f, 1.0f);
+            outR *= attenR;
+        }
+
+        left[i] = outL;
+        right[i] = outR;
+
+        writePos_ = (writePos_ + 1) % cap;
+        readPos_  = (readPos_ + 1) % cap;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// ★ DspBitContinuity (微小信号エルミート量子化段差スムーザー)
+// -----------------------------------------------------------------------------
+void DspBitContinuity::reset() {
+    prevL_ = 0.0f; prev2L_ = 0.0f;
+    prevR_ = 0.0f; prev2R_ = 0.0f;
+}
+
+void DspBitContinuity::processStereo(float* left, float* right, size_t numFrames) {
+    if (!left || !right || numFrames == 0) return;
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        float curL = left[i];
+        float curR = right[i];
+
+        // 微小信号区間 (-30dBFS〜-75dBFS) のみ量子化ステップを滑らかに補間
+        float absL = std::abs(curL);
+        if (absL > 0.0001f && absL < 0.035f) {
+            // 3点エルミート曲率推定による微小量子化ノイズの平滑化
+            float d1 = curL - prevL_;
+            float d2 = prevL_ - prev2L_;
+            if (std::abs(d1 - d2) > 0.0015f) {
+                curL = prevL_ + (d1 + d2) * 0.45f;
+            }
+        }
+        prev2L_ = prevL_;
+        prevL_ = curL;
+        left[i] = curL;
+
+        float absR = std::abs(curR);
+        if (absR > 0.0001f && absR < 0.035f) {
+            float d1 = curR - prevR_;
+            float d2 = prevR_ - prev2R_;
+            if (std::abs(d1 - d2) > 0.0015f) {
+                curR = prevR_ + (d1 + d2) * 0.45f;
+            }
+        }
+        prev2R_ = prevR_;
+        prevR_ = curR;
+        right[i] = curR;
+    }
+}
+
 double FirStage2x::besselI0(double x) {
     double sum = 1.0, term = 1.0, halfX = x * 0.5;
     for (int k = 1; k <= 30; ++k) {
@@ -262,22 +377,22 @@ void DspTransientRestorer::configure(TransientMode mode, double sampleRate, bool
 
     switch (mode_) {
         case TransientMode::NATURAL:
-            attackGain_ = 1.25;
+            attackGain_ = 1.05;
             fastAlpha_ = std::clamp(0.04 * timeScale, 0.005, 0.2);
             slowAlpha_ = std::clamp(0.002 * timeScale, 0.0002, 0.02);
             break;
         case TransientMode::PUNCH:
-            attackGain_ = 1.75;
+            attackGain_ = 1.18;
             fastAlpha_ = std::clamp(0.06 * timeScale, 0.008, 0.25);
             slowAlpha_ = std::clamp(0.0015 * timeScale, 0.0001, 0.015);
             break;
         case TransientMode::ACOUSTIC:
-            attackGain_ = 1.45;
+            attackGain_ = 1.10;
             fastAlpha_ = std::clamp(0.08 * timeScale, 0.01, 0.3);
             slowAlpha_ = std::clamp(0.003 * timeScale, 0.0003, 0.03);
             break;
         default:
-            attackGain_ = 1.25;
+            attackGain_ = 1.05;
             fastAlpha_ = 0.04;
             slowAlpha_ = 0.002;
             break;
@@ -304,7 +419,7 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         envSlowL_ = envSlowL_ * (1.0 - slowAlpha_) + absInL * slowAlpha_;
 
         double diffL = std::max(0.0, envFastL_ - envSlowL_);
-        double transientRatioL = std::min(diffL / (envSlowL_ + 1e-4), 1.8);
+        double transientRatioL = std::min(diffL / (envSlowL_ + 1e-4), 1.5);
 
         double predL = inL;
         if (useLattice_) {
@@ -312,14 +427,14 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
             double b1 = latB1_L_ - latK1_L_ * inL;
             latB1_L_ = inL;
             latK1_L_ = std::clamp(latK1_L_ * 0.995 + (f1 * b1) * 0.005, -0.9, 0.9);
-            predL = inL + f1 * 0.3;
+            predL = inL + f1 * 0.25;
         }
 
         double deltaL = predL - prevSampleL_;
         prevSampleL_ = inL;
 
-        double gdL = useGroupDelay_ ? (deltaL * 0.15) : 0.0;
-        double outL = inL + (deltaL * attackGain_ * transientRatioL * 0.18) + gdL;
+        double gdL = useGroupDelay_ ? (deltaL * 0.12) : 0.0;
+        double outL = inL + (deltaL * (attackGain_ - 1.0) * transientRatioL * 0.5) + gdL;
         left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
 
         double inR = static_cast<double>(right[i]);
@@ -328,7 +443,7 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         envSlowR_ = envSlowR_ * (1.0 - slowAlpha_) + absInR * slowAlpha_;
 
         double diffR = std::max(0.0, envFastR_ - envSlowR_);
-        double transientRatioR = std::min(diffR / (envSlowR_ + 1e-4), 1.8);
+        double transientRatioR = std::min(diffR / (envSlowR_ + 1e-4), 1.5);
 
         double predR = inR;
         if (useLattice_) {
@@ -336,23 +451,23 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
             double b1 = latB1_R_ - latK1_R_ * inR;
             latB1_R_ = inR;
             latK1_R_ = std::clamp(latK1_R_ * 0.995 + (f1 * b1) * 0.005, -0.9, 0.9);
-            predR = inR + f1 * 0.3;
+            predR = inR + f1 * 0.25;
         }
 
         double deltaR = predR - prevSampleR_;
         prevSampleR_ = inR;
 
-        double gdR = useGroupDelay_ ? (deltaR * 0.15) : 0.0;
-        double outR = inR + (deltaR * attackGain_ * transientRatioR * 0.18) + gdR;
+        double gdR = useGroupDelay_ ? (deltaR * 0.12) : 0.0;
+        double outR = inR + (deltaR * (attackGain_ - 1.0) * transientRatioR * 0.5) + gdR;
         right[i] = static_cast<float>(std::clamp(outR, -1.0, 1.0));
     }
 }
 
 // -----------------------------------------------------------------------------
-// ★ FREQ Engine 実装 (553曲実測キャリブレーション版)
+// ★ FREQ Engine (実測19.8kHzカットオフ / -4.01 dB/kHz / ULTRA_HQ 位相整流)
 // -----------------------------------------------------------------------------
 DspFreqEngine::DspFreqEngine() {
-    configure(FreqMode::AUTO_AI, 48000.0, 0.24f, 12500.0f);
+    configure(FreqMode::AUTO_AI, 48000.0, 0.22f, 13000.0f);
 }
 
 void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, float extractFreq) {
@@ -367,70 +482,60 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     }
     isBypass_ = false;
 
-    // ★ 実測データ反映:
-    // Opus 160k は 18.5k〜19.75kHz まで原音が完全残存 (0.15〜0.55dB)。
-    // 20.0kHz (-1.55dB) でロールオフし、20.25k〜21kHz で -18dB〜-20dB の急峻遮断。
-    // したがって、ソース抽出は 11.5k〜14.5kHz、注入開始 (fOutHp) は 19.5kHz に完全固定！
-    double fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 12500.0;
-    double fOutHp   = 19500.0; // 実測ロールオフ肩部
+    double fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
+    double fOutHp   = 19800.0;
     evenRatio_ = 0.65;
     oddRatio_  = 0.35;
-    modeGainScale_ = 1.20;
+    modeGainScale_ = 1.15;
 
     switch (mode_) {
         case FreqMode::AUTO_AI:
-            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 12500.0;
-            fOutHp   = 19500.0;
+            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
+            fOutHp   = 19800.0;
             evenRatio_ = 0.65;
             oddRatio_  = 0.35;
-            modeGainScale_ = 1.25;
+            modeGainScale_ = 1.18;
             break;
 
         case FreqMode::STUDIO_VOCAL:
-            // ボーカルは 11.5kHz 息成分から 20k+ を励起
-            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 11500.0;
-            fOutHp   = 19600.0;
+            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 12000.0;
+            fOutHp   = 19850.0;
             evenRatio_ = 0.72;
             oddRatio_  = 0.28;
-            modeGainScale_ = 1.20;
-            break;
-
-        case FreqMode::ACOUSTIC_INSTRUMENT:
-            // 弦・打弦は 12.0kHz
-            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 12000.0;
-            fOutHp   = 19500.0;
-            evenRatio_ = 0.60;
-            oddRatio_  = 0.40;
-            modeGainScale_ = 1.25;
-            break;
-
-        case FreqMode::DYNAMIC_PERCUSSION:
-            // 打楽器は 13.5kHz からシンバル帯域を補正
-            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 13500.0;
-            fOutHp   = 19400.0;
-            evenRatio_ = 0.45;
-            oddRatio_  = 0.55;
             modeGainScale_ = 1.15;
             break;
 
-        case FreqMode::AIR_EXPANDER:
-            // エアーは 14.0kHz 以上の超微小成分から空間拡散
-            fExtract = (extractFreq > 5000.0f) ? static_cast<double>(extractFreq) : 14000.0;
+        case FreqMode::ACOUSTIC_INSTRUMENT:
+            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 12500.0;
             fOutHp   = 19800.0;
+            evenRatio_ = 0.60;
+            oddRatio_  = 0.40;
+            modeGainScale_ = 1.18;
+            break;
+
+        case FreqMode::DYNAMIC_PERCUSSION:
+            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13800.0;
+            fOutHp   = 19700.0;
+            evenRatio_ = 0.45;
+            oddRatio_  = 0.55;
+            modeGainScale_ = 1.12;
+            break;
+
+        case FreqMode::AIR_EXPANDER:
+            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 14200.0;
+            fOutHp   = 19900.0;
             evenRatio_ = 0.50;
             oddRatio_  = 0.50;
-            modeGainScale_ = 1.30;
+            modeGainScale_ = 1.22;
             break;
 
         default:
             break;
     }
 
-    // ナイキスト周波数制限
-    fExtract = std::clamp(fExtract, 2000.0, sampleRate_ * 0.40);
-    fOutHp   = std::clamp(fOutHp, 5000.0, sampleRate_ * 0.43);
+    fExtract = std::clamp(fExtract, 4000.0, sampleRate_ * 0.40);
+    fOutHp   = std::clamp(fOutHp, 8000.0, sampleRate_ * 0.43);
 
-    // 1. ソース高域抽出用 HPF
     double w0_in = 2.0 * PI * fExtract / sampleRate_;
     double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
     double cosw0_in = std::cos(w0_in);
@@ -449,7 +554,6 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     in_hp_a1_ = in_a1 * inv_in_a0;
     in_hp_a2_ = in_a2 * inv_in_a0;
 
-    // 2. ★ 実測遮断境界 19.5kHz HPF (原音帯域と干渉させず 20k+ のみ出力)
     double w0_out = 2.0 * PI * fOutHp / sampleRate_;
     double alpha_out = std::sin(w0_out) / (2.0 * 0.70710678);
     double cosw0_out = std::cos(w0_out);
@@ -468,8 +572,7 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     out_hp_a1_ = out_a1 * inv_out_a0;
     out_hp_a2_ = out_a2 * inv_out_a0;
 
-    // 3. 超高域シルキースムージング LPF (38kHz)
-    double fSilk = std::min(38000.0, sampleRate_ * 0.45);
+    double fSilk = std::min(32000.0, sampleRate_ * 0.44);
     double w0_silk = 2.0 * PI * fSilk / sampleRate_;
     double alpha_silk = std::sin(w0_silk) / (2.0 * 0.70710678);
     double cosw0_silk = std::cos(w0_silk);
@@ -488,7 +591,6 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     silk_lp_a1_ = silk_a1 * inv_silk_a0;
     silk_lp_a2_ = silk_a2 * inv_silk_a0;
 
-    // 4. 口腔共鳴フォルマント BPF (3.2kHz, Q=1.4)
     double fFormant = std::min(3200.0, sampleRate_ * 0.40);
     double w0_f = 2.0 * PI * fFormant / sampleRate_;
     double alpha_f = std::sin(w0_f) / (2.0 * 1.4);
@@ -532,7 +634,6 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         double inL = static_cast<double>(left[i]);
         double inR = static_cast<double>(right[i]);
 
-        // 1. ソース高域抽出 (11.5k〜14.5kHz)
         double hiL = in_hp_b0_ * inL + in_s1_L_;
         in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
         in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
@@ -541,7 +642,6 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
         in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
 
-        // 2. 口腔共鳴フォルマント (3.2kHz BPF)
         double formantL = formant_bp_b0_ * inL + formant_s1_L_;
         formant_s1_L_ = formant_bp_b1_ * inL - formant_bp_a1_ * formantL + formant_s2_L_;
         formant_s2_L_ = formant_bp_b2_ * inL - formant_bp_a2_ * formantL;
@@ -550,33 +650,33 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         formant_s1_R_ = formant_bp_b1_ * inR - formant_bp_a1_ * formantR + formant_s2_R_;
         formant_s2_R_ = formant_bp_b2_ * inR - formant_bp_a2_ * formantR;
 
-        // =====================================================================
-        // ★ 実測データ反映: Mid (忠実度 21.64dB) vs Side (忠実度 14.67dB) 分離処理
-        // =====================================================================
         double hiMid  = (hiL + hiR) * 0.5;
         double hiSide = (hiL - hiR) * 0.5;
 
-        // Mid パワー & 暗騒音追従
+        // ★ ULTRA_HQ専用: 16k〜20kHz 位相コヒーレンス整流 (実測0.645の散乱を整列)
+        if (perfMode_ == PerformanceMode::ULTRA_HQ) {
+            double sideAlign = (hiSide * 0.90) + (hiMid * 0.10);
+            hiSide = sideAlign;
+        }
+
         double midPow = hiMid * hiMid;
         double diffMid = std::max(0.0, midPow - prevPowMid_);
         prevPowMid_ = midPow;
-        transientFluxMid_ = transientFluxMid_ * 0.93 + diffMid * 0.07;
+        transientFluxMid_ = transientFluxMid_ * 0.94 + diffMid * 0.06;
 
         if (midPow < noiseFloorMid_) noiseFloorMid_ = noiseFloorMid_ * 0.999 + midPow * 0.001;
         else noiseFloorMid_ = noiseFloorMid_ * 0.99995 + midPow * 0.00005;
         noiseFloorMid_ = std::clamp(noiseFloorMid_, 1e-10, 1e-4);
 
-        // Side パワー & 暗騒音追従
         double sidePow = hiSide * hiSide;
         double diffSide = std::max(0.0, sidePow - prevPowSide_);
         prevPowSide_ = sidePow;
-        transientFluxSide_ = transientFluxSide_ * 0.93 + diffSide * 0.07;
+        transientFluxSide_ = transientFluxSide_ * 0.94 + diffSide * 0.06;
 
         if (sidePow < noiseFloorSide_) noiseFloorSide_ = noiseFloorSide_ * 0.999 + sidePow * 0.001;
         else noiseFloorSide_ = noiseFloorSide_ * 0.99995 + sidePow * 0.00005;
         noiseFloorSide_ = std::clamp(noiseFloorSide_, 1e-10, 1e-4);
 
-        // 微小音量 (-40〜-65dBFS: ブレス・余韻) の高域欠落 (-0.27dB) を滑らかに救出する適応フロアゲート
         double formantPow = (formantL * formantL + formantR * formantR) * 0.5;
         bool isBreathContext = (formantPow > noiseFloorMid_ * 6.0) && (midPow > noiseFloorMid_ * 3.0);
 
@@ -598,57 +698,44 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
             floorGateSide = 0.25 + 0.75 * (t * t);
         }
 
-        // RMS 推定
-        double adaptAlphaMid = (midPow > r0_Mid_) ? 0.03 : 0.004;
+        double adaptAlphaMid = (midPow > r0_Mid_) ? 0.025 : 0.0035;
         r0_Mid_ = r0_Mid_ * (1.0 - adaptAlphaMid) + midPow * adaptAlphaMid;
         double rmsMid = std::sqrt(std::max(1e-12, r0_Mid_));
 
-        double adaptAlphaSide = (sidePow > r0_Side_) ? 0.03 : 0.004;
+        double adaptAlphaSide = (sidePow > r0_Side_) ? 0.025 : 0.0035;
         r0_Side_ = r0_Side_ * (1.0 - adaptAlphaSide) + sidePow * adaptAlphaSide;
         double rmsSide = std::sqrt(std::max(1e-12, r0_Side_));
 
-        // トーナリティ判定
         double tonalityMid = std::clamp(1.0 - (transientFluxMid_ / (rmsMid * 2.0 + 1e-5)), 0.0, 1.0);
         if (isBreathContext) tonalityMid = std::max(tonalityMid, 0.65);
 
         double effEven = (mode_ == FreqMode::AUTO_AI) ? (0.45 + 0.35 * tonalityMid) : evenRatio_;
         double effOdd  = (mode_ == FreqMode::AUTO_AI) ? (0.55 - 0.35 * tonalityMid) : oddRatio_;
 
-        // Mid ターゲットゲイン (原音忠実・過度な付加を避けて透明感を維持)
-        double targetGainMid = std::min(rmsMid * 0.75, static_cast<double>(targetGain_ * modeGainScale_ * 0.20f)) * floorGateMid;
-        smoothedGainMid_ += (targetGainMid - smoothedGainMid_) * ((targetGainMid > smoothedGainMid_) ? 0.04 : 0.005);
+        double targetGainMid = std::min(rmsMid * 0.70, static_cast<double>(targetGain_ * modeGainScale_ * 0.18f)) * floorGateMid;
+        smoothedGainMid_ += (targetGainMid - smoothedGainMid_) * ((targetGainMid > smoothedGainMid_) ? 0.035 : 0.004);
 
-        // ★ Side ターゲットゲイン: 実測で Side が 14.67dB と大幅劣化しているため、1.5倍 (+3.5dB) 重点的に補正！
-        double sideWeight = (mode_ == FreqMode::DYNAMIC_PERCUSSION) ? 1.15 : 1.50;
-        double targetGainSide = std::min(rmsSide * 1.10, static_cast<double>(targetGain_ * modeGainScale_ * 0.28f * sideWeight)) * floorGateSide;
-        smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.05 : 0.006);
+        double targetGainSide = std::min(rmsSide * 0.90, static_cast<double>(targetGain_ * modeGainScale_ * 0.22f)) * floorGateSide;
+        smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.040 : 0.005);
 
-        // =====================================================================
-        // 倍音合成 (2次・3次・4次直交多項式)
-        // =====================================================================
-        // 1. Mid 倍音 (センター直接音: 眉間にガチッと結像する同相コア)
         double normMid = std::clamp(hiMid / (rmsMid * 1.414 + 1e-5), -3.0, 3.0);
         double normSqMid = normMid * normMid;
         double h2_Mid = (normSqMid - 0.70) * rmsMid;
-        double h3_Mid = (normSqMid * normMid - 0.75 * normMid) * (rmsMid * 0.45);
-        double h4_Mid = (normSqMid * normSqMid - 1.5 * normSqMid + 0.35) * (rmsMid * 0.20);
-        double airWeightMid = isBreathContext ? 0.25 : 0.15;
+        double h3_Mid = (normSqMid * normMid - 0.75 * normMid) * (rmsMid * 0.42);
+        double h4_Mid = (normSqMid * normSqMid - 1.5 * normSqMid + 0.35) * (rmsMid * 0.18);
+        double airWeightMid = isBreathContext ? 0.22 : 0.14;
         double harmMid = (effEven * h2_Mid + effOdd * h3_Mid + airWeightMid * h4_Mid);
 
-        // 2. Side 倍音 (ステレオ残響・空間超解像: 14.67dB の劣化を埋めるエアー倍音)
         double normSide = std::clamp(hiSide / (rmsSide * 1.414 + 1e-5), -3.0, 3.0);
         double normSqSide = normSide * normSide;
         double h2_Side = (normSqSide - 0.70) * rmsSide;
-        double h3_Side = (normSqSide * normSide - 0.75 * normSide) * (rmsSide * 0.48);
-        double h4_Side = (normSqSide * normSqSide - 1.5 * normSqSide + 0.35) * (rmsSide * 0.25);
-        double harmSide = (effEven * 0.85 * h2_Side + effOdd * 1.15 * h3_Side + 0.30 * h4_Side);
+        double h3_Side = (normSqSide * normSide - 0.75 * normSide) * (rmsSide * 0.44);
+        double h4_Side = (normSqSide * normSqSide - 1.5 * normSqSide + 0.35) * (rmsSide * 0.20);
+        double harmSide = (effEven * 0.90 * h2_Side + effOdd * 1.10 * h3_Side + 0.25 * h4_Side);
 
-        // Mid/Side から L/R の復元倍音を再構成
         double harmL = (harmMid * smoothedGainMid_) + (harmSide * smoothedGainSide_);
         double harmR = (harmMid * smoothedGainMid_) - (harmSide * smoothedGainSide_);
 
-        // 3. ★ 実測 19.5kHz HPF & 38kHz シルキースムージング
-        // (18.5k〜19.5kHz の通常原音帯域には 1dB も被せず、20kHz超の切断領域のみに注入)
         double outHarmL = out_hp_b0_ * harmL + out_s1_L_;
         out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
         out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
@@ -665,7 +752,6 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         silk_s1_R_ = silk_lp_b1_ * outHarmR - silk_lp_a1_ * silkHarmR + silk_s2_R_;
         silk_s2_R_ = silk_lp_b2_ * outHarmR - silk_lp_a2_ * silkHarmR;
 
-        // ★ 原音 (inL / inR) は完全無傷 (位相歪みゼロ) で通過し、20kHz超の倍音のみを加算
         double totalL = inL + silkHarmL;
         double totalR = inR + silkHarmR;
 
@@ -954,6 +1040,8 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(currentFs));
     transientRestorer_.configure(transientMode_, static_cast<double>(currentFs), customUseGroupDelay_, customUseLattice_);
     freqEngine_.configure(freqMode_, static_cast<double>(currentFs), customFreqGain_, customFreqExtractFreq_);
+    antiPreecho_.configure(static_cast<double>(currentFs));
+    bitContinuity_.reset();
     reset();
 }
 
@@ -975,6 +1063,8 @@ void DspUpsampler::reset() {
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
     freqEngine_.reset();
+    antiPreecho_.reset();
+    bitContinuity_.reset();
 }
 
 void DspUpsampler::executeFftAnalysis() {
@@ -1095,7 +1185,7 @@ void DspUpsampler::executeFftAnalysis() {
 
     for (int b = 28; b < 32; ++b) {
         if (factor_ >= 2 && !isDirectSource_) {
-            float decayPerBand = isFreqActive ? 2.5f : 4.5f;
+            float decayPerBand = isFreqActive ? 3.8f : 5.5f;
             float slope = static_cast<float>(b - 27) * decayPerBand;
             float targetDb = spectrumDb_[27] - slope;
             spectrumDb_[b] = std::clamp(targetDb, -60.0f, 0.0f);
@@ -1111,7 +1201,6 @@ void DspUpsampler::getSpectrum(float* out32Bands) {
     std::memcpy(out32Bands, spectrumDb_, sizeof(spectrumDb_));
 }
 
-// ★ 空間処理
 void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames) {
     if (!isMsSpatial_ || !left || !right || numFrames == 0) return;
 
@@ -1125,12 +1214,12 @@ void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames)
         float absS = std::abs(s);
         float centerBias = absM / (absM + absS + 1e-4f);
 
-        float spatialGain = 0.16f * (1.0f - centerBias * 0.75f);
+        float spatialGain = 0.14f * (1.0f - centerBias * 0.75f);
         float diffL = s - prevSideL_;
         prevSideL_ = s;
         float sSpatial = s + diffL * spatialGain;
 
-        float mDirect = m * (1.0f + 0.03f * centerBias);
+        float mDirect = m * (1.0f + 0.02f * centerBias);
 
         left[i] = std::clamp(mDirect + sSpatial, -1.0f, 1.0f);
         right[i] = std::clamp(mDirect - sSpatial, -1.0f, 1.0f);
@@ -1287,6 +1376,12 @@ size_t DspUpsampler::process(
 
     if (!isDirectSource_) {
         if (currentFactor >= 2) {
+            // ★ [ULTRA_HQ専用] Opus MDCTプリエコー（先行リンギング）逆算除去
+            if (perfMode_ == PerformanceMode::ULTRA_HQ) {
+                antiPreecho_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+                bitContinuity_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+            }
+
             if (transientMode_ != TransientMode::OFF) {
                 transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
             }

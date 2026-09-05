@@ -92,12 +92,12 @@ class MainActivity : AppCompatActivity() {
 
     // ★ 553曲実測データ準拠の調律プリセット
     private val PRESET_DEFS = arrayOf(
-        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 12500.0f, false, false, false, false, false, false),
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.24f, 12500.0f, true, true, true, true, true, true),
-        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.22f, 11500.0f, true, true, false, true, false, false),
-        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.25f, 12500.0f, true, true, false, true, true, false),
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.20f, 13500.0f, false, true, true, true, false, false),
-        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.24f, 12000.0f, true, true, true, true, true, true)
+        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 13000.0f, false, false, false, false, false, false),
+        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.22f, 13000.0f, true, true, true, true, true, true),
+        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.20f, 12000.0f, true, true, false, true, false, false),
+        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.22f, 12500.0f, true, true, false, true, true, false),
+        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.18f, 13800.0f, false, true, true, true, false, false),
+        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.22f, 12500.0f, true, true, true, true, true, true)
     )
 
     private var currentPresetIndex = 0

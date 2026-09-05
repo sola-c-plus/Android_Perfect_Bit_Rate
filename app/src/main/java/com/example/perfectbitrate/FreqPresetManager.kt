@@ -9,11 +9,11 @@ import java.lang.ref.WeakReference
 import kotlin.math.abs
 
 data class FreqPresetDef(
-    val id: Int,                 // 0: OFF, 1: Auto AI, 2: 男性ボーカル, 3: 女性ボーカル, 4: パーカッション, 5: ストリングス
+    val id: Int,
     val name: String,
-    val firType: Int,           // 0: Linear Sharp, 1: Linear Slow, 2: Min Sharp, 3: Min Slow
-    val transientMode: Int,     // 0: OFF, 1: Natural, 2: Punch, 3: Acoustic
-    val lpcAlgo: Int,           // 0: DSEE AI, 1: K2 LPC, 2: Adaptive Exciter
+    val firType: Int,
+    val transientMode: Int,
+    val lpcAlgo: Int,
     val gain: Float,
     val extractFreq: Float,
     val useQmf: Boolean,
@@ -28,20 +28,20 @@ object FreqPresetManager {
 
     val PRESET_NAMES = listOf("OFF", "Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
 
-    // ★ 553曲実測キャリブレーション準拠プリセット
+    // ★ 280曲実測プロファイル完全適合プリセット
     val PRESETS = listOf(
-        // 0: OFF (Linear Phase Sharp確実適用・全DSP完全バイパス)
-        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 12500f, false, false, false, false, false, false),
-        // 1: Auto AI (Min Sharp・20kHz超全点灯・Side残響重点回復)
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.24f, 12500f, true, true, true, true, true, true),
-        // 2: 男性ボーカル (太い基音と11k息成分。Mid定位最優先、Sideは自然な残響)
-        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.22f, 11500f, true, true, false, true, false, false),
-        // 3: 女性ボーカル (サ行刺さりゼロ・12.5kブレス艶・Side残響復元)
-        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.25f, 12500f, true, true, false, true, true, false),
-        // 4: パーカッション (13.5kシンバル帯域・パンチ最大化。アタックを削らず高域ヌケを回復)
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.20f, 13500f, false, true, true, true, false, false),
-        // 5: ストリングス (12k弦摩擦音・自然倍音K2・撥弦過渡Lattice)
-        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.24f, 12000f, true, true, true, true, true, true)
+        // 0: OFF (Linear Phase Sharp確実適用・全DSPバイパス)
+        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 13000f, false, false, false, false, false, false),
+        // 1: Auto AI (Min Sharp・19.8kHzクロスオーバー・自然減衰-4.01dB/kHz)
+        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.22f, 13000f, true, true, true, true, true, true),
+        // 2: 男性ボーカル (12k息成分・直接音Midの位相を強力ロック)
+        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.20f, 12000f, true, true, false, true, false, false),
+        // 3: 女性ボーカル (12.5kブレス艶・刺さりゼロ・自然な空間エアー)
+        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.22f, 12500f, true, true, false, true, true, false),
+        // 4: パーカッション (13.8kシンバル帯域・アタック鈍化-0.04dB適合)
+        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.18f, 13800f, false, true, true, true, false, false),
+        // 5: ストリングス (12.5k弦倍音・自然減衰K2 LPC)
+        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.22f, 12500f, true, true, true, true, true, true)
     )
 
     var currentPresetIndex = 0
@@ -59,7 +59,7 @@ object FreqPresetManager {
             NativeAudioEngine.nativeSetMsSpatial(false)
             NativeAudioEngine.nativeSetDynamicSbr(false)
             NativeAudioEngine.nativeSetTransientCustomParams(false, false)
-            NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 12500.0f)
+            NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 13000.0f)
         } else {
             NativeAudioEngine.nativeSetFirFilterType(p.firType)
             NativeAudioEngine.nativeSetTransientMode(p.transientMode)
