@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -89,13 +89,13 @@ class MainActivity : AppCompatActivity() {
 
     private val PRESET_NAMES = listOf("OFF", "Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
 
-    private val PRESET_DEFS = arrayOf(
+        private val PRESET_DEFS = arrayOf(
         FreqPresetDef(0, "OFF", 0, 0, 0, 0.08f, 10000.0f, false, false, false, false, false, false),
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.16f, 10500.0f, true, true, false, true, true, true),
-        FreqPresetDef(2, "男性ボーカル", 3, 1, 0, 0.12f, 9500.0f, true, true, false, true, false, false),
-        FreqPresetDef(3, "女性ボーカル", 0, 3, 1, 0.16f, 10500.0f, true, true, true, true, true, true),
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.20f, 10000.0f, false, true, true, true, false, true),
-        FreqPresetDef(5, "ストリングス", 1, 3, 1, 0.16f, 11000.0f, true, true, false, true, true, true)
+        FreqPresetDef(1, "Auto AI", 2, 3, 0, 0.22f, 8000.0f, true, true, false, true, true, true),
+        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.26f, 6200.0f, true, true, false, true, true, true),
+        FreqPresetDef(3, "女性ボーカル", 2, 3, 1, 0.28f, 6800.0f, true, true, false, true, true, true),
+        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.20f, 9500.0f, false, true, true, true, true, true),
+        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.24f, 7500.0f, true, true, false, true, true, true)
     )
 
     private var currentPresetIndex = 0 // 0: OFF, 1: Auto AI...

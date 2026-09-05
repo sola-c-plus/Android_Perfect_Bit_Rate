@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <vector>
 #include <cstdint>
@@ -155,7 +155,7 @@ private:
 class DspFreqEngine {
 public:
     DspFreqEngine();
-    void configure(FreqMode mode, double sampleRate, float gain = 0.22f, float extractFreq = 10500.0f);
+    void configure(FreqMode mode, double sampleRate, float gain = 0.25f, float extractFreq = 8200.0f);
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
 
@@ -163,24 +163,36 @@ private:
     FreqMode mode_ = FreqMode::AUTO_AI;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
-    float targetGain_ = 0.22f;
+    float targetGain_ = 0.25f;
 
+    // 抽出ハイパスフィルター (Biquad)
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;
     double in_s1_L_ = 0.0, in_s2_L_ = 0.0;
     double in_s1_R_ = 0.0, in_s2_R_ = 0.0;
 
+    // 出力ハイパスフィルター (Biquad)
     double out_hp_b0_ = 1.0, out_hp_b1_ = -2.0, out_hp_b2_ = 1.0;
     double out_hp_a1_ = 0.0, out_hp_a2_ = 0.0;
     double out_s1_L_ = 0.0, out_s2_L_ = 0.0;
     double out_s1_R_ = 0.0, out_s2_R_ = 0.0;
 
-    double r0_L_ = 1e-4, r1_L_ = 0.0;
-    double r0_R_ = 1e-4, r1_R_ = 0.0;
-    double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
+    // シルキースムージングフィルター (Biquad LPF)
+    double silk_lp_b0_ = 1.0, silk_lp_b1_ = 0.0, silk_lp_b2_ = 0.0;
+    double silk_lp_a1_ = 0.0, silk_lp_a2_ = 0.0;
+    double silk_s1_L_ = 0.0, silk_s2_L_ = 0.0;
+    double silk_s1_R_ = 0.0, silk_s2_R_ = 0.0;
 
-    double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
-    double smoothedGainL_ = 0.0, smoothedGainR_ = 0.0;
+    // 倍音調合比率・スケーリング
+    double evenRatio_ = 0.70;
+    double oddRatio_ = 0.30;
+    double modeGainScale_ = 1.25;
+
+    // パワー・ダイナミクス追従
+    double r0_L_ = 1e-4;
+    double r0_R_ = 1e-4;
+    double smoothedGainL_ = 0.0;
+    double smoothedGainR_ = 0.0;
 };
 
 class DspUpsampler {
@@ -218,7 +230,6 @@ public:
     void setTransientCustomParams(bool useGroupDelay, bool useLattice);
     TransientMode getTransientMode() const { return transientMode_; }
 
-    // ★ ステップ2 & 3: M/S空間超解像 ＆ 動的カットオフSBRトグル
     void setMsSpatial(bool enabled);
     bool isMsSpatial() const { return isMsSpatial_; }
 
@@ -242,7 +253,6 @@ private:
     double besselI0(double x);
     void executeFftAnalysis();
 
-    // ステップ2 & 3 内部処理関数
     void processMsSpatial(float* left, float* right, size_t numFrames);
     void processDynamicSbr(float* left, float* right, size_t numFrames);
 
@@ -256,7 +266,6 @@ private:
     bool isCascadeFir_ = true;
     bool lrIndependentDither_ = true;
 
-    // ★ ステップ2 & 3 フラグとステート
     bool isMsSpatial_ = false;
     bool isDynamicSbr_ = false;
     float prevSideL_ = 0.0f, prevSideR_ = 0.0f;
@@ -272,8 +281,8 @@ private:
     bool customUseGroupDelay_ = true;
     bool customUseLattice_ = false;
 
-    float customFreqGain_ = 0.22f;
-    float customFreqExtractFreq_ = 10500.0f;
+    float customFreqGain_ = 0.25f;
+    float customFreqExtractFreq_ = 8200.0f;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};

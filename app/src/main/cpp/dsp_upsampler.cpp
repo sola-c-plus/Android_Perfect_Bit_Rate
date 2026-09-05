@@ -1,4 +1,4 @@
-﻿#include "dsp_upsampler.h"
+#include "dsp_upsampler.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -229,8 +229,8 @@ void FirStage2x::processStereo(
         for (size_t i = 0; i < tpp; ++i) {
             s0_L += c0[i] * hPtrL[i];
             s1_L += c1[i] * hPtrL[i];
-            s0_R += c0[i] * hPtrR[i];
-            s1_R += c1[i] * hPtrR[i];
+            s0_R += c0[i] * hPtrL[i];
+            s1_R += c1[i] * hPtrL[i];
         }
         dstL[n * 2]     = s0_L;
         dstL[n * 2 + 1] = s1_L;
@@ -355,10 +355,10 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
 }
 
 // -----------------------------------------------------------------------------
-// FREQ Engine 実装
+// FREQ Engine 実装 (Harmonic Luster Generator)
 // -----------------------------------------------------------------------------
 DspFreqEngine::DspFreqEngine() {
-    configure(FreqMode::AUTO_AI, 48000.0, 0.22f, 10500.0f);
+    configure(FreqMode::AUTO_AI, 48000.0, 0.25f, 8200.0f);
 }
 
 void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, float extractFreq) {
@@ -373,41 +373,119 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     }
     isBypass_ = false;
 
-    double fExtract = std::min(static_cast<double>(extractFreq), sampleRate_ * 0.45);
+    // ★ モードに応じた周波数帯域・倍音比率チューニング
+    double fExtract = 8200.0;
+    double fOutHp   = 13000.0;
+    evenRatio_ = 0.65;
+    oddRatio_  = 0.35;
+    modeGainScale_ = 1.15;
+
+    switch (mode_) {
+        case FreqMode::STUDIO_VOCAL:
+            // ★ ボーカルの艶・潤い・息遣いを最大化するプロフェッショナル調律
+            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 6400.0;
+            fOutHp   = 12000.0;
+            evenRatio_ = 0.75; // 2次倍音(Even: 声帯の温かみ・滑らかさ)を75%配合
+            oddRatio_  = 0.25; // 3次倍音(Odd: 抜け・芯・透明感)を25%配合
+            modeGainScale_ = 1.35;
+            break;
+
+        case FreqMode::AUTO_AI:
+            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 8200.0;
+            fOutHp   = 13000.0;
+            evenRatio_ = 0.65;
+            oddRatio_  = 0.35;
+            modeGainScale_ = 1.15;
+            break;
+
+        case FreqMode::ACOUSTIC_INSTRUMENT:
+            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 6800.0;
+            fOutHp   = 12500.0;
+            evenRatio_ = 0.70;
+            oddRatio_  = 0.30;
+            modeGainScale_ = 1.20;
+            break;
+
+        case FreqMode::DYNAMIC_PERCUSSION:
+            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 9500.0;
+            fOutHp   = 14000.0;
+            evenRatio_ = 0.45;
+            oddRatio_  = 0.55;
+            modeGainScale_ = 1.10;
+            break;
+
+        case FreqMode::AIR_EXPANDER:
+            fExtract = (extractFreq > 1000.0f) ? static_cast<double>(extractFreq) : 11000.0;
+            fOutHp   = 14500.0;
+            evenRatio_ = 0.50;
+            oddRatio_  = 0.50;
+            modeGainScale_ = 1.25;
+            break;
+
+        default:
+            break;
+    }
+
+    fExtract = std::clamp(fExtract, 1000.0, sampleRate_ * 0.42);
+    fOutHp   = std::clamp(fOutHp, 2000.0, sampleRate_ * 0.45);
+
+    // 1. 抽出ハイパスフィルター (Butterworth 2nd-order Highpass)
     double w0_in = 2.0 * PI * fExtract / sampleRate_;
     double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
     double cosw0_in = std::cos(w0_in);
 
-    double in_b0 = (1.0 + cosw0_in) / 2.0;
+    double in_b0 = (1.0 + cosw0_in) * 0.5;
     double in_b1 = -(1.0 + cosw0_in);
-    double in_b2 = (1.0 + cosw0_in) / 2.0;
+    double in_b2 = (1.0 + cosw0_in) * 0.5;
     double in_a0 = 1.0 + alpha_in;
     double in_a1 = -2.0 * cosw0_in;
     double in_a2 = 1.0 - alpha_in;
 
-    in_hp_b0_ = in_b0 / in_a0;
-    in_hp_b1_ = in_b1 / in_a0;
-    in_hp_b2_ = in_b2 / in_a0;
-    in_hp_a1_ = in_a1 / in_a0;
-    in_hp_a2_ = in_a2 / in_a0;
+    double inv_in_a0 = 1.0 / in_a0;
+    in_hp_b0_ = in_b0 * inv_in_a0;
+    in_hp_b1_ = in_b1 * inv_in_a0;
+    in_hp_b2_ = in_b2 * inv_in_a0;
+    in_hp_a1_ = in_a1 * inv_in_a0;
+    in_hp_a2_ = in_a2 * inv_in_a0;
 
-    double fOutHp = std::min(16000.0, sampleRate_ * 0.45);
+    // 2. 出力ハイパスフィルター (Butterworth 2nd-order Highpass)
     double w0_out = 2.0 * PI * fOutHp / sampleRate_;
     double alpha_out = std::sin(w0_out) / (2.0 * 0.70710678);
     double cosw0_out = std::cos(w0_out);
 
-    double out_b0 = (1.0 + cosw0_out) / 2.0;
+    double out_b0 = (1.0 + cosw0_out) * 0.5;
     double out_b1 = -(1.0 + cosw0_out);
-    double out_b2 = (1.0 + cosw0_out) / 2.0;
+    double out_b2 = (1.0 + cosw0_out) * 0.5;
     double out_a0 = 1.0 + alpha_out;
     double out_a1 = -2.0 * cosw0_out;
     double out_a2 = 1.0 - alpha_out;
 
-    out_hp_b0_ = out_b0 / out_a0;
-    out_hp_b1_ = out_b1 / out_a0;
-    out_hp_b2_ = out_b2 / out_a0;
-    out_hp_a1_ = out_a1 / out_a0;
-    out_hp_a2_ = out_a2 / out_a0;
+    double inv_out_a0 = 1.0 / out_a0;
+    out_hp_b0_ = out_b0 * inv_out_a0;
+    out_hp_b1_ = out_b1 * inv_out_a0;
+    out_hp_b2_ = out_b2 * inv_out_a0;
+    out_hp_a1_ = out_a1 * inv_out_a0;
+    out_hp_a2_ = out_a2 * inv_out_a0;
+
+    // 3. シルキースムージングフィルター (Butterworth 2nd-order Lowpass)
+    double fSilk = std::min(36000.0, sampleRate_ * 0.44);
+    double w0_silk = 2.0 * PI * fSilk / sampleRate_;
+    double alpha_silk = std::sin(w0_silk) / (2.0 * 0.70710678);
+    double cosw0_silk = std::cos(w0_silk);
+
+    double silk_b0 = (1.0 - cosw0_silk) * 0.5;
+    double silk_b1 = 1.0 - cosw0_silk;
+    double silk_b2 = (1.0 - cosw0_silk) * 0.5;
+    double silk_a0 = 1.0 + alpha_silk;
+    double silk_a1 = -2.0 * cosw0_silk;
+    double silk_a2 = 1.0 - alpha_silk;
+
+    double inv_silk_a0 = 1.0 / silk_a0;
+    silk_lp_b0_ = silk_b0 * inv_silk_a0;
+    silk_lp_b1_ = silk_b1 * inv_silk_a0;
+    silk_lp_b2_ = silk_b2 * inv_silk_a0;
+    silk_lp_a1_ = silk_a1 * inv_silk_a0;
+    silk_lp_a2_ = silk_a2 * inv_silk_a0;
 }
 
 void DspFreqEngine::reset() {
@@ -415,10 +493,9 @@ void DspFreqEngine::reset() {
     in_s1_R_ = 0.0; in_s2_R_ = 0.0;
     out_s1_L_ = 0.0; out_s2_L_ = 0.0;
     out_s1_R_ = 0.0; out_s2_R_ = 0.0;
-    r0_L_ = 1e-4; r1_L_ = 0.0;
-    r0_R_ = 1e-4; r1_R_ = 0.0;
-    prevSampleL_ = 0.0; prevSampleR_ = 0.0;
-    transientFluxL_ = 0.0; transientFluxR_ = 0.0;
+    silk_s1_L_ = 0.0; silk_s2_L_ = 0.0;
+    silk_s1_R_ = 0.0; silk_s2_R_ = 0.0;
+    r0_L_ = 1e-4; r0_R_ = 1e-4;
     smoothedGainL_ = 0.0; smoothedGainR_ = 0.0;
 }
 
@@ -426,6 +503,7 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
 
     for (size_t i = 0; i < numFrames; ++i) {
+        // --- Left チャンネル ---
         double inL = static_cast<double>(left[i]);
 
         // 1. 高域抽出ハイパス
@@ -433,52 +511,77 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         in_s1_L_ = in_hp_b1_ * inL - in_hp_a1_ * hiL + in_s2_L_;
         in_s2_L_ = in_hp_b2_ * inL - in_hp_a2_ * hiL;
 
-        // 2. 高域エネルギー検出 (信号がないときは倍音生成を完全停止し、常時ピィィン音を根絶)
+        // 2. 適応型RMSエネルギー検出 (素早い立ち上がり・滑らかなリリース)
         double hiPowL = hiL * hiL;
-        r0_L_ = r0_L_ * 0.998 + hiPowL * 0.002;
+        double adaptAlphaL = (hiPowL > r0_L_) ? 0.020 : 0.003;
+        r0_L_ = r0_L_ * (1.0 - adaptAlphaL) + hiPowL * adaptAlphaL;
+        double rmsL = std::sqrt(std::max(1e-12, r0_L_));
 
-        if (r0_L_ < 1e-6) {
-            smoothedGainL_ *= 0.98; // 高域がないときは速やかに完全ゼロへ
+        if (r0_L_ < 1e-7) {
+            smoothedGainL_ *= 0.96;
         } else {
-            double target = std::min(std::sqrt(r0_L_) * 0.4, static_cast<double>(targetGain_ * 0.12f));
-            smoothedGainL_ += (target - smoothedGainL_) * 0.005;
+            double targetL = std::min(rmsL * 0.85, static_cast<double>(targetGain_ * modeGainScale_ * 0.25f));
+            double gainRateL = (targetL > smoothedGainL_) ? 0.03 : 0.004;
+            smoothedGainL_ += (targetL - smoothedGainL_) * gainRateL;
         }
 
-        // 3. 全波整流による純粋なオクターブ調和倍音 (相互変調・差音ビートの発生ゼロ)
-        double harmL = (std::abs(hiL) - std::sqrt(r0_L_) * 0.7979);
+        // 3. 多項式による純粋調和倍音生成 (2次: 艶・肉声感 / 3次: 抜け・透明感)
+        double normL = hiL / (rmsL * 1.414 + 1e-5);
+        normL = std::clamp(normL, -3.0, 3.0);
 
-        // 4. 超高域出力ハイパス (16kHz以下への逆流を完全遮断)
+        double h2_L = (normL * normL - 0.70) * rmsL;
+        double h3_L = (normL * normL * normL - 0.75 * normL) * (rmsL * 0.45);
+        double harmL = (evenRatio_ * h2_L + oddRatio_ * h3_L);
+
+        // 4. 超高域出力ハイパス
         double outHarmL = out_hp_b0_ * harmL + out_s1_L_;
         out_s1_L_ = out_hp_b1_ * harmL - out_hp_a1_ * outHarmL + out_s2_L_;
         out_s2_L_ = out_hp_b2_ * harmL - out_hp_a2_ * outHarmL;
 
-        // 5. 原音に超高域のみを極小ブレンド
-        double totalL = inL + outHarmL * smoothedGainL_;
+        // 5. シルキースムージングフィルター
+        double silkHarmL = silk_lp_b0_ * outHarmL + silk_s1_L_;
+        silk_s1_L_ = silk_lp_b1_ * outHarmL - silk_lp_a1_ * silkHarmL + silk_s2_L_;
+        silk_s2_L_ = silk_lp_b2_ * outHarmL - silk_lp_a2_ * silkHarmL;
+
+        double totalL = inL + silkHarmL * smoothedGainL_;
         left[i] = static_cast<float>(std::clamp(totalL, -1.0, 1.0));
 
-        // Rチャンネル
+        // --- Right チャンネル ---
         double inR = static_cast<double>(right[i]);
+
         double hiR = in_hp_b0_ * inR + in_s1_R_;
         in_s1_R_ = in_hp_b1_ * inR - in_hp_a1_ * hiR + in_s2_R_;
         in_s2_R_ = in_hp_b2_ * inR - in_hp_a2_ * hiR;
 
         double hiPowR = hiR * hiR;
-        r0_R_ = r0_R_ * 0.998 + hiPowR * 0.002;
+        double adaptAlphaR = (hiPowR > r0_R_) ? 0.020 : 0.003;
+        r0_R_ = r0_R_ * (1.0 - adaptAlphaR) + hiPowR * adaptAlphaR;
+        double rmsR = std::sqrt(std::max(1e-12, r0_R_));
 
-        if (r0_R_ < 1e-6) {
-            smoothedGainR_ *= 0.98;
+        if (r0_R_ < 1e-7) {
+            smoothedGainR_ *= 0.96;
         } else {
-            double target = std::min(std::sqrt(r0_R_) * 0.4, static_cast<double>(targetGain_ * 0.12f));
-            smoothedGainR_ += (target - smoothedGainR_) * 0.005;
+            double targetR = std::min(rmsR * 0.85, static_cast<double>(targetGain_ * modeGainScale_ * 0.25f));
+            double gainRateR = (targetR > smoothedGainR_) ? 0.03 : 0.004;
+            smoothedGainR_ += (targetR - smoothedGainR_) * gainRateR;
         }
 
-        double harmR = (std::abs(hiR) - std::sqrt(r0_R_) * 0.7979);
+        double normR = hiR / (rmsR * 1.414 + 1e-5);
+        normR = std::clamp(normR, -3.0, 3.0);
+
+        double h2_R = (normR * normR - 0.70) * rmsR;
+        double h3_R = (normR * normR * normR - 0.75 * normR) * (rmsR * 0.45);
+        double harmR = (evenRatio_ * h2_R + oddRatio_ * h3_R);
 
         double outHarmR = out_hp_b0_ * harmR + out_s1_R_;
         out_s1_R_ = out_hp_b1_ * harmR - out_hp_a1_ * outHarmR + out_s2_R_;
         out_s2_R_ = out_hp_b2_ * harmR - out_hp_a2_ * outHarmR;
 
-        double totalR = inR + outHarmR * smoothedGainR_;
+        double silkHarmR = silk_lp_b0_ * outHarmR + silk_s1_R_;
+        silk_s1_R_ = silk_lp_b1_ * outHarmR - silk_lp_a1_ * silkHarmR + silk_s2_R_;
+        silk_s2_R_ = silk_lp_b2_ * outHarmR - silk_lp_a2_ * silkHarmR;
+
+        double totalR = inR + silkHarmR * smoothedGainR_;
         right[i] = static_cast<float>(std::clamp(totalR, -1.0, 1.0));
     }
 }
@@ -603,7 +706,7 @@ void DspUpsampler::setDcPhaseType(DcPhaseType type) {
 
 void DspUpsampler::setFreqMode(FreqMode mode) {
     freqMode_ = mode;
-    freqEngine_.configure(mode, static_cast<double>(inSampleRate_ * factor_), customFreqGain_, customFreqExtractFreq_);
+    freqEngine_.configure(freqMode_, static_cast<double>(inSampleRate_ * factor_), customFreqGain_, customFreqExtractFreq_);
 }
 
 void DspUpsampler::setFreqCustomParams(float gain, float extractFreq) {
@@ -866,7 +969,6 @@ void DspUpsampler::executeFftAnalysis() {
     float binHzHi = baseFs / static_cast<float>(N);
     float binHzLo = (baseFs * 0.5f) / static_cast<float>(N);
 
-    // 0〜27番 (可聴帯域〜16kHz) の集計
     for (int b = 0; b < 28; ++b) {
         float fc = FREQS[b];
         float fLow = fc * 0.8909f;
@@ -893,14 +995,11 @@ void DspUpsampler::executeFftAnalysis() {
         float meanPower = (binCount > 0) ? (powerSum / binCount) : 0.0f;
         float rms = std::sqrt(meanPower) / (N * 0.22f);
 
-        // 低域 (31Hz〜315Hz) の過剰な盛り上がりを等ラウドネス傾斜で自然に抑制
         if (b < 11) {
             float tilt = 0.30f + (static_cast<float>(b) / 11.0f) * 0.70f;
             rms *= tilt;
         }
 
-        // ★ [感度アップ] 10kHz〜16kHz (24〜27番) の表示感度を自然にブースト (+5.1dB)
-        // ハイハットやシンバル、ブレスのアタックに合わせて適度に山が立って躍動するよう調整
         if (b >= 24 && b <= 27) {
             float hfBoost = 1.0f + (static_cast<float>(b - 24) / 3.0f) * 0.8f;
             rms *= hfBoost;
@@ -910,18 +1009,13 @@ void DspUpsampler::executeFftAnalysis() {
         spectrumDb_[b] = std::clamp(db, -60.0f, 0.0f);
     }
 
-    // ★ [完全修正] 超高域 (28〜31番: 20k〜40kHz 金色ZONE) の表示感度オプティマイズ
     bool isFreqActive = (freqMode_ != FreqMode::OFF) && !isDirectSource_;
 
     for (int b = 28; b < 32; ++b) {
         if (factor_ >= 2 && !isDirectSource_) {
-            // ★ [完全修正] 16kHzから超高域へ向けて常に右肩下がりに減衰 (-3.0dB/バンド)
-            // 余計な加算ゲインを全廃し、どのプリセットでも不自然な盛り上がり (V字跳ね上がり) を物理的にゼロ化
             float decayPerBand = isFreqActive ? 3.0f : 4.5f;
             float slope = static_cast<float>(b - 27) * decayPerBand;
             float targetDb = spectrumDb_[27] - slope;
-
-            // ★ 下限クランプを -60.0dB まで解放し、40k が岩盤で停止する問題を完全解消 (40kまで生き生きと動く)
             spectrumDb_[b] = std::clamp(targetDb, -60.0f, 0.0f);
         } else {
             spectrumDb_[b] = -60.0f;
@@ -954,7 +1048,6 @@ void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames)
 }
 
 void DspUpsampler::processDynamicSbr(float* left, float* right, size_t numFrames) {
-    // ★ 可聴帯域を汚す危険な変調音を完全バイパス
     return;
 }
 
@@ -989,13 +1082,10 @@ size_t DspUpsampler::process(
     tempOutR_.resize(numOutFrames);
 
     // =========================================================================
-    // ★ ステップ1: ARM NEON 多段カスケード Sinc FIR の完全直結
+    // ステップ1: ARM NEON 多段カスケード Sinc FIR の直結
     // =========================================================================
     if (!isDirectSource_ && currentFactor > 1) {
         if (isCascadeFir_) {
-            // -------------------------------------------------------------
-            // 多段カスケード FIR (3段 2x 接続: 255 -> 63 -> 39 taps)
-            // -------------------------------------------------------------
             if (currentFactor == 2) {
                 cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
                 if (!is441Base) {
@@ -1046,9 +1136,6 @@ size_t DspUpsampler::process(
                 }
             }
         } else {
-            // -------------------------------------------------------------
-            // ★ [完全修正] Cascade FIR OFF時: 標準ポリフェーズSinc FIR補間 (Single-stage)
-            // -------------------------------------------------------------
             size_t factorFrames = numInFrames * currentFactor;
             stageBuf1_L_.resize(factorFrames);
             stageBuf1_R_.resize(factorFrames);
