@@ -190,10 +190,24 @@ private:
     double silk_s1_L_ = 0.0, silk_s2_L_ = 0.0;
     double silk_s1_R_ = 0.0, silk_s2_R_ = 0.0;
 
+    // 口腔フォルマント検出 (3.2kHz BPF)
     double formant_bp_b0_ = 0.0, formant_bp_b1_ = 0.0, formant_bp_b2_ = 0.0;
     double formant_bp_a1_ = 0.0, formant_bp_a2_ = 0.0;
     double formant_s1_L_ = 0.0, formant_s2_L_ = 0.0;
     double formant_s1_R_ = 0.0, formant_s2_R_ = 0.0;
+
+    // ★ 1. アンチ・リンギング (20kHz 遮断リンギング相殺 BPF)
+    double ar_bp_b0_ = 0.0, ar_bp_b1_ = 0.0, ar_bp_b2_ = 0.0;
+    double ar_bp_a1_ = 0.0, ar_bp_a2_ = 0.0;
+    double ar_s1_L_ = 0.0, ar_s2_L_ = 0.0;
+    double ar_s1_R_ = 0.0, ar_s2_R_ = 0.0;
+
+    // ★ 2. 心理音響リバース・マスキング (中域基音エネルギー追従 BPF)
+    double mask_bp_b0_ = 0.0, mask_bp_b1_ = 0.0, mask_bp_b2_ = 0.0;
+    double mask_bp_a1_ = 0.0, mask_bp_a2_ = 0.0;
+    double mask_s1_L_ = 0.0, mask_s2_L_ = 0.0;
+    double mask_s1_R_ = 0.0, mask_s2_R_ = 0.0;
+    double maskMidPowerL_ = 1e-4, maskMidPowerR_ = 1e-4;
 
     double evenRatio_ = 0.70;
     double oddRatio_ = 0.30;
@@ -206,7 +220,7 @@ private:
     double transientFluxL_ = 0.0, transientFluxR_ = 0.0;
     double noiseFloorL_ = 1e-5, noiseFloorR_ = 1e-5;
 
-    // ★ 1. 物理音響LPC (8次 Levinson-Durbin) 分析ステート
+    // 8次 LPC 物理モデリングステート
     static constexpr int LPC_ORDER = 8;
     static constexpr int LPC_FRAME_SIZE = 128;
     double lpcBuffer_[LPC_FRAME_SIZE] = {0.0};
@@ -216,7 +230,7 @@ private:
     double lpcHistL_[LPC_ORDER] = {0.0};
     double lpcHistR_[LPC_ORDER] = {0.0};
 
-    // ★ 3. 動的スペクトル包絡スロープ自動追従ステート
+    // 動的スペクトル包絡スロープ追従ステート
     double slope_bpA_b0_ = 0.0, slope_bpA_b1_ = 0.0, slope_bpA_b2_ = 0.0;
     double slope_bpA_a1_ = 0.0, slope_bpA_a2_ = 0.0;
     double slope_s1_A_L_ = 0.0, slope_s2_A_L_ = 0.0;
