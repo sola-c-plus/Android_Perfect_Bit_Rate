@@ -8,8 +8,6 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -22,7 +20,6 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -68,252 +65,6 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
-
-    // =========================================================================
-    // ★ [完全リンク] 表・裏スピナー常時同期 ＆ パラメータ自動変化マネージャー
-    // =========================================================================
-    data class FreqPresetDef(
-        val id: Int,                 // 0: OFF, 1: Auto AI, 2: 男性ボーカル, 3: 女性ボーカル, 4: パーカッション, 5: ストリングス
-        val name: String,
-        val firType: Int,           // 0: Linear Sharp, 1: Linear Slow, 2: Min Sharp, 3: Min Slow
-        val transientMode: Int,     // 0: OFF, 1: Natural, 2: Punch, 3: Acoustic
-        val lpcAlgo: Int,           // 0: DSEE AI, 1: K2 LPC, 2: Adaptive Exciter
-        val gain: Float,
-        val extractFreq: Float,
-        val useQmf: Boolean,
-        val useGroupDelay: Boolean,
-        val useLattice: Boolean,
-        val useLrDither: Boolean,
-        val useMsSpatial: Boolean,
-        val useDynamicSbr: Boolean
-    )
-
-    private val PRESET_NAMES = listOf("OFF", "Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
-
-    // ★ 553曲実測データ準拠の調律プリセット
-    private val PRESET_DEFS = arrayOf(
-        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 13000.0f, false, false, false, false, false, false),
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.22f, 13000.0f, true, true, true, true, true, true),
-        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.20f, 12000.0f, true, true, false, true, false, false),
-        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.22f, 12500.0f, true, true, false, true, true, false),
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.18f, 13800.0f, false, true, true, true, false, false),
-        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.22f, 12500.0f, true, true, true, true, true, true)
-    )
-
-    private var currentPresetIndex = 0
-    private var isPresetSyncing = false
-    private var frontSpinnerWeakRef: java.lang.ref.WeakReference<Spinner>? = null
-    private var backSpinnerWeakRef: java.lang.ref.WeakReference<Spinner>? = null
-    private var backDialogViewWeakRef: java.lang.ref.WeakReference<View>? = null
-
-    // ★ 表ダイアログの Performance Mode 連動用弱参照
-    private var frontPerfSectionWeakRef: java.lang.ref.WeakReference<View>? = null
-    private var frontPerfSpinnerWeakRef: java.lang.ref.WeakReference<Spinner>? = null
-
-    /**
-     * 表ダイアログの Performance Mode を FREQ の状態（OFFかどうか）に連動して即時グレーアウト更新
-     */
-    private fun updateFrontPerfModeUI() {
-        val isDirect = isDirectSource
-        val factor = if (isDirect) 1 else upsampleFactor
-        // FREQ が実質動作しているか: Direct でなく、2x以上アップサンプルされ、かつプリセットが OFF(0) ではない
-        val isPerfActive = !isDirect && (factor >= 2) && (currentPresetIndex != 0)
-        val alpha = if (isPerfActive) 1.0f else 0.35f
-
-        frontPerfSectionWeakRef?.get()?.let {
-            it.alpha = alpha
-        }
-        frontPerfSpinnerWeakRef?.get()?.let {
-            it.isEnabled = isPerfActive
-            it.alpha = alpha
-        }
-    }
-
-    private fun applyPresetToNativeEngine(p: FreqPresetDef) {
-        if (p.id == 0) {
-            NativeAudioEngine.nativeSetFirFilterType(0)
-            NativeAudioEngine.nativeSetFreqMode(0)
-            NativeAudioEngine.nativeSetTransientMode(0)
-            NativeAudioEngine.nativeSetMsSpatial(false)
-            NativeAudioEngine.nativeSetDynamicSbr(false)
-            NativeAudioEngine.nativeSetTransientCustomParams(false, false)
-            NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 12500.0f)
-        } else {
-            NativeAudioEngine.nativeSetFirFilterType(p.firType)
-            NativeAudioEngine.nativeSetTransientMode(p.transientMode)
-            NativeAudioEngine.nativeSetTransientCustomParams(p.useGroupDelay, p.useLattice)
-            NativeAudioEngine.nativeSetFreqMode(p.lpcAlgo)
-            NativeAudioEngine.nativeSetFreqCustomParams(p.gain, p.extractFreq)
-            NativeAudioEngine.nativeSetLrIndependentDither(p.useLrDither)
-            NativeAudioEngine.nativeSetMsSpatial(p.useMsSpatial)
-            NativeAudioEngine.nativeSetDynamicSbr(p.useDynamicSbr)
-        }
-    }
-
-    private fun updateBackTunerUI(dialogView: View?, p: FreqPresetDef) {
-        if (dialogView == null) return
-        dialogView.post {
-            try {
-                val targetSp = dialogView.findViewById<View>(R.id.spinnerTargetPreset) as? Spinner
-                if (targetSp != null && targetSp.selectedItemPosition != p.id) {
-                    targetSp.setSelection(p.id)
-                }
-
-                (dialogView.findViewById<View>(R.id.devSpinnerFir) as? Spinner)?.setSelection(p.firType)
-                (dialogView.findViewById<View>(R.id.devSpinnerTransient) as? Spinner)?.setSelection(p.transientMode)
-                (dialogView.findViewById<View>(R.id.devSpinnerLpcAlgo) as? Spinner)?.setSelection(p.lpcAlgo)
-
-                (dialogView.findViewById<View>(R.id.devSpinnerGain) as? Spinner)?.let { sp ->
-                    val ad = sp.adapter ?: return@let
-                    var best = 0
-                    var minD = Float.MAX_VALUE
-                    for (i in 0 until ad.count) {
-                        val num = Regex("""\d+(\.\d+)?""").find(ad.getItem(i).toString())?.value?.toFloatOrNull()
-                        if (num != null && kotlin.math.abs(num - p.gain) < minD) {
-                            minD = kotlin.math.abs(num - p.gain)
-                            best = i
-                        }
-                    }
-                    sp.setSelection(best)
-                }
-
-                (dialogView.findViewById<View>(R.id.devSpinnerExtractFreq) as? Spinner)?.let { sp ->
-                    val ad = sp.adapter ?: return@let
-                    var best = 0
-                    var minD = Float.MAX_VALUE
-                    for (i in 0 until ad.count) {
-                        val cleanStr = ad.getItem(i).toString().replace(",", "")
-                        val num = Regex("""\d+""").find(cleanStr)?.value?.toFloatOrNull()
-                        if (num != null && kotlin.math.abs(num - p.extractFreq) < minD) {
-                            minD = kotlin.math.abs(num - p.extractFreq)
-                            best = i
-                        }
-                    }
-                    sp.setSelection(best)
-                }
-
-                (dialogView.findViewById<View>(R.id.devSwitchQmf) as? SwitchCompat)?.isChecked = p.useQmf
-                (dialogView.findViewById<View>(R.id.devSwitchGroupDelay) as? SwitchCompat)?.isChecked = p.useGroupDelay
-                (dialogView.findViewById<View>(R.id.devSwitchLattice) as? SwitchCompat)?.isChecked = p.useLattice
-                (dialogView.findViewById<View>(R.id.devSwitchLrDither) as? SwitchCompat)?.isChecked = p.useLrDither
-                (dialogView.findViewById<View>(R.id.devSwitchMsSpatial) as? SwitchCompat)?.isChecked = p.useMsSpatial
-                (dialogView.findViewById<View>(R.id.devSwitchDynamicSbr) as? SwitchCompat)?.isChecked = p.useDynamicSbr
-
-                val isDseeActive = (p.id != 0)
-                val dseeAlpha = if (isDseeActive) 1.0f else 0.35f
-
-                val transView = dialogView.findViewById<View>(R.id.devSpinnerTransient)
-                val lpcView = dialogView.findViewById<View>(R.id.devSpinnerLpcAlgo)
-                val gainView = dialogView.findViewById<View>(R.id.devSpinnerGain)
-                val freqView = dialogView.findViewById<View>(R.id.devSpinnerExtractFreq)
-
-                (transView?.parent as? View)?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-                transView?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-                (lpcView?.parent as? View)?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-                (gainView?.parent as? View)?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-                lpcView?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-                gainView?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-                freqView?.let {
-                    it.isEnabled = isDseeActive
-                    it.alpha = dseeAlpha
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    private fun onUnifiedPresetSelected(position: Int) {
-        if (isPresetSyncing) return
-        isPresetSyncing = true
-        try {
-            val safePos = position.coerceIn(0, PRESET_DEFS.size - 1)
-            currentPresetIndex = safePos
-            val preset = PRESET_DEFS[safePos]
-
-            applyPresetToNativeEngine(preset)
-
-            frontSpinnerWeakRef?.get()?.let { sp ->
-                if (sp.selectedItemPosition != safePos) {
-                    sp.setSelection(safePos)
-                }
-            }
-
-            backSpinnerWeakRef?.get()?.let { sp ->
-                if (sp.selectedItemPosition != safePos) {
-                    sp.setSelection(safePos)
-                }
-            }
-
-            updateBackTunerUI(backDialogViewWeakRef?.get(), preset)
-
-            // ★ FREQ プリセット変更時に Performance Mode のグレーアウト状態を即座に連動更新！
-            updateFrontPerfModeUI()
-        } finally {
-            isPresetSyncing = false
-        }
-    }
-
-    private fun hookDspSettingsDialog(dialogView: View?) {
-        if (dialogView == null) return
-        dialogView.post {
-            val frontSp = dialogView.findViewById<View>(R.id.dialogSpinnerDsee) as? Spinner ?: return@post
-            frontSpinnerWeakRef = java.lang.ref.WeakReference(frontSp)
-
-            val ad = ArrayAdapter(dialogView.context, R.layout.item_spinner_dap, PRESET_NAMES)
-            ad.setDropDownViewResource(R.layout.item_spinner_dap)
-            frontSp.adapter = ad
-            frontSp.setSelection(currentPresetIndex)
-
-            frontSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p0: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    onUnifiedPresetSelected(pos)
-                }
-                override fun onNothingSelected(p0: AdapterView<*>?) {}
-            }
-        }
-    }
-
-    private fun hookDevPresetsDialog(dialogView: View?) {
-        if (dialogView == null) return
-        dialogView.post {
-            val backSp = dialogView.findViewById<View>(R.id.spinnerTargetPreset) as? Spinner ?: return@post
-            backSpinnerWeakRef = java.lang.ref.WeakReference(backSp)
-            backDialogViewWeakRef = java.lang.ref.WeakReference(dialogView)
-
-            val ad = ArrayAdapter(dialogView.context, R.layout.item_spinner_dap, PRESET_NAMES)
-            ad.setDropDownViewResource(R.layout.item_spinner_dap)
-            backSp.adapter = ad
-            backSp.setSelection(currentPresetIndex)
-
-            backSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p0: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    onUnifiedPresetSelected(pos)
-                }
-                override fun onNothingSelected(p0: AdapterView<*>?) {}
-            }
-
-            updateBackTunerUI(dialogView, PRESET_DEFS[currentPresetIndex])
-        }
-    }
 
     private lateinit var mainRootLayout: View
     private lateinit var badgeDirect: TextView
@@ -418,6 +169,26 @@ class MainActivity : AppCompatActivity() {
     private var isVolLockOn = false
     private var isPlayingState = false
 
+    // ★ Performance Mode 連動用弱参照
+    private var frontPerfSectionWeakRef: java.lang.ref.WeakReference<View>? = null
+    private var frontPerfSpinnerWeakRef: java.lang.ref.WeakReference<Spinner>? = null
+
+    /**
+     * 表ダイアログの Performance Mode を FREQ の状態に連動して即時グレーアウト更新
+     */
+    private fun updateFrontPerfModeUI() {
+        val isDirect = isDirectSource
+        val factor = if (isDirect) 1 else upsampleFactor
+        val isPerfActive = !isDirect && (factor >= 2) && (FreqPresetManager.currentPresetIndex != 0)
+        val alpha = if (isPerfActive) 1.0f else 0.35f
+
+        frontPerfSectionWeakRef?.get()?.let { it.alpha = alpha }
+        frontPerfSpinnerWeakRef?.get()?.let {
+            it.isEnabled = isPerfActive
+            it.alpha = alpha
+        }
+    }
+
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
@@ -475,7 +246,9 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetDitherMode(currentDitherMode)
             NativeAudioEngine.nativeSetLrIndependentDither(isLrIndependentDither)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
-            applyPresetToNativeEngine(PRESET_DEFS[currentPresetIndex])
+            
+            // ★ FreqPresetManager に集約された現在設定を Native に適用
+            FreqPresetManager.applyCurrentPresetToNative()
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -566,7 +339,14 @@ class MainActivity : AppCompatActivity() {
         upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
         currentDitherMode = prefs.getInt("selected_dither_mode", 1)
         currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
-        currentPresetIndex = prefs.getInt("selected_preset_index", 1)
+
+        // ★ FreqPresetManager に初期インデックスを設定 & リスナー接続
+        val savedPresetIdx = prefs.getInt("selected_preset_index", 1)
+        FreqPresetManager.setInitialPresetIndex(savedPresetIdx)
+        FreqPresetManager.onPresetChangedListener = { pos, _ ->
+            prefs.edit { putInt("selected_preset_index", pos) }
+            updateFrontPerfModeUI()
+        }
 
         isEqEnabled = prefs.getBoolean("eq_enabled", false)
         for (i in 0..9) {
@@ -735,8 +515,9 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dsp_settings, null)
+        
+        // ★ FreqPresetManager にフック処理を一本化
         FreqPresetManager.hookDspSettingsDialog(view)
-        hookDspSettingsDialog(view)
         dialog.setContentView(view)
 
         val isDark = isDarkThemeActive()
@@ -778,7 +559,6 @@ class MainActivity : AppCompatActivity() {
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
 
-        // ★ 表ダイアログの Performance Mode をリアルタイム連動用に保持
         frontPerfSectionWeakRef = java.lang.ref.WeakReference(layoutSectionPerfMode)
         frontPerfSpinnerWeakRef = java.lang.ref.WeakReference(spinnerPerfMode)
 
@@ -975,8 +755,8 @@ class MainActivity : AppCompatActivity() {
             layoutSectionCascadeFir.alpha = if (isUpsampleActive) 1.0f else 0.3f
             switchCascadeFir.isEnabled = isUpsampleActive
 
-            // ★ FREQ が有効（アップサンプル2x以上）かつ OFF (プリセット0) でない場合のみ Performance Mode を活性化！
-            val isPerfActive = isDseeActive && (currentPresetIndex != 0)
+            // ★ FreqPresetManager の一元管理インデックスを参照
+            val isPerfActive = isDseeActive && (FreqPresetManager.currentPresetIndex != 0)
             val perfAlpha = if (isPerfActive) 1.0f else 0.35f
             layoutSectionPerfMode?.alpha = perfAlpha
             spinnerPerfMode?.isEnabled = isPerfActive
@@ -1175,6 +955,7 @@ class MainActivity : AppCompatActivity() {
             activeDialogEqView = null
             frontPerfSectionWeakRef = null
             frontPerfSpinnerWeakRef = null
+            FreqPresetManager.clearFrontDialogRefs()
         }
 
         btnClose.setOnClickListener { dialog.dismiss() }
@@ -1363,13 +1144,18 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
+        
+        // ★ FreqPresetManager にフック処理を一本化
         FreqPresetManager.hookDevPresetsDialog(view)
-        hookDevPresetsDialog(view)
         dialog.setContentView(view)
 
         dialog.setOnShowListener {
             val bottomSheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             bottomSheet?.setBackgroundColor(Color.TRANSPARENT)
+        }
+
+        dialog.setOnDismissListener {
+            FreqPresetManager.clearDevDialogRefs()
         }
 
         val btnDevClose = view.findViewById<Button>(R.id.btnDevClose)

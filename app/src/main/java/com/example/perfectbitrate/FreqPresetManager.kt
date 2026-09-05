@@ -1,9 +1,14 @@
 ﻿package com.example.perfectbitrate
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.Spinner
+import android.widget.Toast
 import androidx.appcompat.widget.SwitchCompat
 import java.lang.ref.WeakReference
 import kotlin.math.abs
@@ -11,45 +16,62 @@ import kotlin.math.abs
 data class FreqPresetDef(
     val id: Int,
     val name: String,
-    val firType: Int,
-    val transientMode: Int,
-    val lpcAlgo: Int,
-    val gain: Float,
-    val extractFreq: Float,
-    val useQmf: Boolean,
-    val useGroupDelay: Boolean,
-    val useLattice: Boolean,
-    val useLrDither: Boolean,
-    val useMsSpatial: Boolean,
-    val useDynamicSbr: Boolean
+    var firType: Int,
+    var transientMode: Int,
+    var lpcAlgo: Int,
+    var gain: Float,
+    var extractFreq: Float,
+    var useQmf: Boolean,
+    var useGroupDelay: Boolean,
+    var useLattice: Boolean,
+    var useLrDither: Boolean,
+    var useMsSpatial: Boolean,
+    var useDynamicSbr: Boolean
 )
 
 object FreqPresetManager {
 
     val PRESET_NAMES = listOf("OFF", "Auto AI", "男性ボーカル", "女性ボーカル", "パーカッション", "ストリングス")
 
-    // ★ 280曲実測プロファイル完全適合プリセット
-    val PRESETS = listOf(
-        // 0: OFF (Linear Phase Sharp確実適用・全DSPバイパス)
+    val FIR_OPTIONS = arrayOf("Linear Phase Sharp", "Linear Phase Slow", "Minimum Phase Sharp", "Minimum Phase Slow")
+    val TRANSIENT_OPTIONS = arrayOf("OFF", "Natural (CD)", "Punch (打楽器)", "Acoustic (弦・打弦)")
+    val LPC_OPTIONS = arrayOf("DSEE HX AI (適応)", "K2 LPC Natural (物理)", "Adaptive Exciter (輪郭)")
+    val GAIN_OPTIONS = arrayOf("0.16", "0.18", "0.20", "0.22", "0.24", "0.26")
+    val GAIN_VALUES = floatArrayOf(0.16f, 0.18f, 0.20f, 0.22f, 0.24f, 0.26f)
+    val FREQ_OPTIONS = arrayOf("10,000 Hz", "11,500 Hz", "12,000 Hz", "12,500 Hz", "13,000 Hz", "13,500 Hz", "13,800 Hz")
+    val FREQ_VALUES = floatArrayOf(10000.0f, 11500.0f, 12000.0f, 12500.0f, 13000.0f, 13500.0f, 13800.0f)
+
+    // ★ 280曲実測プロファイル完全適合プリセット (Single Source of Truth)
+    val DEFAULT_PRESETS = listOf(
         FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 13000f, false, false, false, false, false, false),
-        // 1: Auto AI (Min Sharp・19.8kHzクロスオーバー・自然減衰-4.01dB/kHz)
         FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.22f, 13000f, true, true, true, true, true, true),
-        // 2: 男性ボーカル (12k息成分・直接音Midの位相を強力ロック)
         FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.20f, 12000f, true, true, false, true, false, false),
-        // 3: 女性ボーカル (12.5kブレス艶・刺さりゼロ・自然な空間エアー)
         FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.22f, 12500f, true, true, false, true, true, false),
-        // 4: パーカッション (13.8kシンバル帯域・アタック鈍化-0.04dB適合)
         FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.18f, 13800f, false, true, true, true, false, false),
-        // 5: ストリングス (12.5k弦倍音・自然減衰K2 LPC)
         FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.22f, 12500f, true, true, true, true, true, true)
     )
 
-    var currentPresetIndex = 0
-    private var isSyncing = false
+    val PRESETS = DEFAULT_PRESETS.map { it.copy() }.toMutableList()
 
+    var currentPresetIndex = 1
+        private set
+
+    var onPresetChangedListener: ((Int, FreqPresetDef) -> Unit)? = null
+
+    private var isSyncing = false
     private var frontSpinnerRef: WeakReference<Spinner>? = null
     private var backSpinnerRef: WeakReference<Spinner>? = null
     private var backDialogViewRef: WeakReference<View>? = null
+
+    fun setInitialPresetIndex(index: Int) {
+        currentPresetIndex = index.coerceIn(0, PRESETS.size - 1)
+    }
+
+    fun getCurrentPreset(): FreqPresetDef = PRESETS[currentPresetIndex]
+
+    fun applyCurrentPresetToNative() {
+        applyPresetToNative(getCurrentPreset())
+    }
 
     fun applyPresetToNative(p: FreqPresetDef) {
         if (p.id == 0) {
@@ -97,6 +119,8 @@ object FreqPresetManager {
             backDialogViewRef?.get()?.let { view ->
                 updateDevDialogUI(view, preset)
             }
+
+            onPresetChangedListener?.invoke(safePos, preset)
         } finally {
             isSyncing = false
         }
@@ -114,57 +138,55 @@ object FreqPresetManager {
                     targetSp.setSelection(p.id)
                 }
 
-                (dialogView.findViewById<View>(R.id.devSpinnerFir) as? Spinner)?.setSelection(p.firType)
+                val spFir = dialogView.findViewById<View>(R.id.devSpinnerFir) as? Spinner
+                spFir?.setSelection(p.firType.coerceIn(0, FIR_OPTIONS.size - 1))
 
-                dialogView.findViewById<View>(R.id.devSpinnerLpcAlgo)?.apply {
-                    isEnabled = !isOff
-                    alpha = disableAlpha
-                    (this as? Spinner)?.setSelection(p.lpcAlgo)
-                }
+                val transView = dialogView.findViewById<View>(R.id.devSpinnerTransient) as? Spinner
+                val lpcView = dialogView.findViewById<View>(R.id.devSpinnerLpcAlgo) as? Spinner
+                val gainView = dialogView.findViewById<View>(R.id.devSpinnerGain) as? Spinner
+                val freqView = dialogView.findViewById<View>(R.id.devSpinnerExtractFreq) as? Spinner
 
-                dialogView.findViewById<View>(R.id.devSpinnerTransient)?.apply {
-                    isEnabled = !isOff
-                    alpha = disableAlpha
-                    (this as? Spinner)?.setSelection(p.transientMode)
-                }
-
-                dialogView.findViewById<View>(R.id.devSpinnerGain)?.apply {
-                    isEnabled = !isOff
-                    alpha = disableAlpha
-                    (this as? Spinner)?.let { sp ->
-                        val ad = sp.adapter ?: return@let
-                        var best = 0
-                        var minD = Float.MAX_VALUE
-                        for (i in 0 until ad.count) {
-                            val num = Regex("""\d+(\.\d+)?""").find(ad.getItem(i).toString())?.value?.toFloatOrNull()
-                            if (num != null && abs(num - p.gain) < minD) {
-                                minD = abs(num - p.gain)
-                                best = i
-                            }
-                        }
-                        sp.setSelection(best)
+                listOf(transView, lpcView, gainView, freqView).forEach { v ->
+                    (v?.parent as? View)?.let {
+                        it.isEnabled = !isOff
+                        it.alpha = disableAlpha
                     }
+                    v?.isEnabled = !isOff
+                    v?.alpha = disableAlpha
                 }
 
-                dialogView.findViewById<View>(R.id.devSpinnerExtractFreq)?.apply {
-                    isEnabled = !isOff
-                    alpha = disableAlpha
-                    (this as? Spinner)?.let { sp ->
-                        val ad = sp.adapter ?: return@let
-                        var best = 0
-                        var minD = Float.MAX_VALUE
-                        for (i in 0 until ad.count) {
-                            val cleanStr = ad.getItem(i).toString().replace(",", "")
-                            val num = Regex("""\d+""").find(cleanStr)?.value?.toFloatOrNull()
-                            if (num != null && abs(num - p.extractFreq) < minD) {
-                                minD = abs(num - p.extractFreq)
-                                best = i
-                            }
+                lpcView?.setSelection(p.lpcAlgo.coerceIn(0, LPC_OPTIONS.size - 1))
+                transView?.setSelection(p.transientMode.coerceIn(0, TRANSIENT_OPTIONS.size - 1))
+
+                // ゲイン選択
+                gainView?.let { sp ->
+                    var best = 0
+                    var minD = Float.MAX_VALUE
+                    for (i in GAIN_VALUES.indices) {
+                        val d = abs(GAIN_VALUES[i] - p.gain)
+                        if (d < minD) {
+                            minD = d
+                            best = i
                         }
-                        sp.setSelection(best)
                     }
+                    sp.setSelection(best)
                 }
 
+                // 周波数選択
+                freqView?.let { sp ->
+                    var best = 0
+                    var minD = Float.MAX_VALUE
+                    for (i in FREQ_VALUES.indices) {
+                        val d = abs(FREQ_VALUES[i] - p.extractFreq)
+                        if (d < minD) {
+                            minD = d
+                            best = i
+                        }
+                    }
+                    sp.setSelection(best)
+                }
+
+                // スイッチ6種
                 (dialogView.findViewById<View>(R.id.devSwitchQmf) as? SwitchCompat)?.isChecked = p.useQmf
                 (dialogView.findViewById<View>(R.id.devSwitchGroupDelay) as? SwitchCompat)?.isChecked = p.useGroupDelay
                 (dialogView.findViewById<View>(R.id.devSwitchLattice) as? SwitchCompat)?.isChecked = p.useLattice
@@ -200,23 +222,118 @@ object FreqPresetManager {
     fun hookDevPresetsDialog(dialogView: View?) {
         if (dialogView == null) return
         dialogView.post {
-            val backSp = dialogView.findViewById<View>(R.id.spinnerTargetPreset) as? Spinner ?: return@post
-            backSpinnerRef = WeakReference(backSp)
+            val ctx = dialogView.context
+
+            // 1. 各スピナーの Adapter をすべて確実にセット！
+            fun setupAdapter(spId: Int, items: Array<String>): Spinner? {
+                val sp = dialogView.findViewById<View>(spId) as? Spinner ?: return null
+                val ad = ArrayAdapter(ctx, R.layout.item_spinner_dap, items)
+                ad.setDropDownViewResource(R.layout.item_spinner_dap)
+                sp.adapter = ad
+                return sp
+            }
+
+            val backSp = dialogView.findViewById<View>(R.id.spinnerTargetPreset) as? Spinner
+            if (backSp != null) {
+                val ad = ArrayAdapter(ctx, R.layout.item_spinner_dap, PRESET_NAMES)
+                ad.setDropDownViewResource(R.layout.item_spinner_dap)
+                backSp.adapter = ad
+                backSp.setSelection(currentPresetIndex)
+                backSpinnerRef = WeakReference(backSp)
+            }
+
+            val devSpFir = setupAdapter(R.id.devSpinnerFir, FIR_OPTIONS)
+            val devSpTrans = setupAdapter(R.id.devSpinnerTransient, TRANSIENT_OPTIONS)
+            val devSpLpc = setupAdapter(R.id.devSpinnerLpcAlgo, LPC_OPTIONS)
+            val devSpGain = setupAdapter(R.id.devSpinnerGain, GAIN_OPTIONS)
+            val devSpFreq = setupAdapter(R.id.devSpinnerExtractFreq, FREQ_OPTIONS)
+
             backDialogViewRef = WeakReference(dialogView)
 
-            val ad = ArrayAdapter(dialogView.context, R.layout.item_spinner_dap, PRESET_NAMES)
-            ad.setDropDownViewResource(R.layout.item_spinner_dap)
-            backSp.adapter = ad
-            backSp.setSelection(currentPresetIndex)
-
-            backSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            // 2. 最上部 TARGET PRESET スピナーのリスナー
+            backSp?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(p0: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                     onPresetChanged(pos)
                 }
                 override fun onNothingSelected(p0: AdapterView<*>?) {}
             }
 
-            updateDevDialogUI(dialogView, PRESETS[currentPresetIndex])
+            // 3. 各スピナー・スイッチの変更を現在のプリセットに即時保存・適用する処理
+            fun saveAndApplyFromUI() {
+                if (isSyncing) return
+                val p = getCurrentPreset()
+                if (p.id == 0) return
+
+                devSpFir?.let { p.firType = it.selectedItemPosition }
+                devSpTrans?.let { p.transientMode = it.selectedItemPosition }
+                devSpLpc?.let { p.lpcAlgo = it.selectedItemPosition }
+                devSpGain?.let { p.gain = GAIN_VALUES[it.selectedItemPosition.coerceIn(0, GAIN_VALUES.size - 1)] }
+                devSpFreq?.let { p.extractFreq = FREQ_VALUES[it.selectedItemPosition.coerceIn(0, FREQ_VALUES.size - 1)] }
+
+                (dialogView.findViewById<View>(R.id.devSwitchQmf) as? SwitchCompat)?.let { p.useQmf = it.isChecked }
+                (dialogView.findViewById<View>(R.id.devSwitchGroupDelay) as? SwitchCompat)?.let { p.useGroupDelay = it.isChecked }
+                (dialogView.findViewById<View>(R.id.devSwitchLattice) as? SwitchCompat)?.let { p.useLattice = it.isChecked }
+                (dialogView.findViewById<View>(R.id.devSwitchLrDither) as? SwitchCompat)?.let { p.useLrDither = it.isChecked }
+                (dialogView.findViewById<View>(R.id.devSwitchMsSpatial) as? SwitchCompat)?.let { p.useMsSpatial = it.isChecked }
+                (dialogView.findViewById<View>(R.id.devSwitchDynamicSbr) as? SwitchCompat)?.let { p.useDynamicSbr = it.isChecked }
+
+                applyPresetToNative(p)
+            }
+
+            val itemListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p0: AdapterView<*>?, v: View?, p2: Int, p3: Long) { saveAndApplyFromUI() }
+                override fun onNothingSelected(p0: AdapterView<*>?) {}
+            }
+            devSpFir?.onItemSelectedListener = itemListener
+            devSpTrans?.onItemSelectedListener = itemListener
+            devSpLpc?.onItemSelectedListener = itemListener
+            devSpGain?.onItemSelectedListener = itemListener
+            devSpFreq?.onItemSelectedListener = itemListener
+
+            listOf(
+                R.id.devSwitchQmf, R.id.devSwitchGroupDelay, R.id.devSwitchLattice,
+                R.id.devSwitchLrDither, R.id.devSwitchMsSpatial, R.id.devSwitchDynamicSbr
+            ).forEach { id ->
+                (dialogView.findViewById<View>(id) as? SwitchCompat)?.setOnCheckedChangeListener { _, _ ->
+                    saveAndApplyFromUI()
+                }
+            }
+
+            // 4. コピーボタン
+            dialogView.findViewById<Button>(R.id.btnDevCopyConfig)?.setOnClickListener {
+                val sb = StringBuilder()
+                sb.append("// ========================================================\n")
+                sb.append("// ★ 実測最適化プリセット設定コード\n")
+                sb.append("// ========================================================\n")
+                PRESETS.forEach { pr ->
+                    sb.append("FreqPresetDef(${pr.id}, \"${pr.name}\", ${pr.firType}, ${pr.transientMode}, ${pr.lpcAlgo}, ${pr.gain}f, ${pr.extractFreq}f, ${pr.useQmf}, ${pr.useGroupDelay}, ${pr.useLattice}, ${pr.useLrDither}, ${pr.useMsSpatial}, ${pr.useDynamicSbr}),\n")
+                }
+                val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("PresetConfig", sb.toString()))
+                Toast.makeText(ctx, "全プリセット設定コードをコピーしました！", Toast.LENGTH_SHORT).show()
+            }
+
+            // 5. リセットボタン
+            dialogView.findViewById<Button>(R.id.btnDevResetDefault)?.setOnClickListener {
+                for (i in DEFAULT_PRESETS.indices) {
+                    PRESETS[i] = DEFAULT_PRESETS[i].copy()
+                }
+                updateDevDialogUI(dialogView, getCurrentPreset())
+                applyCurrentPresetToNative()
+                Toast.makeText(ctx, "初期値にリセットしました", Toast.LENGTH_SHORT).show()
+            }
+
+            // 初回表示時のUI反映
+            updateDevDialogUI(dialogView, getCurrentPreset())
         }
+    }
+
+    fun clearFrontDialogRefs() {
+        frontSpinnerRef = null
+    }
+
+    fun clearDevDialogRefs() {
+        backSpinnerRef = null
+        backDialogViewRef = null
     }
 }
