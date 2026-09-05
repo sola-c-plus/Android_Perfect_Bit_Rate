@@ -13,7 +13,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -50,7 +49,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.edit
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import org.json.JSONObject
@@ -86,7 +84,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var geckoSession: GeckoSession
     private var geckoRuntime: GeckoRuntime? = null
     private lateinit var audioManager: AudioManager
-    private lateinit var prefs: SharedPreferences
+    
+    // ★ AppPreferences による型安全な設定アクセス
+    private val appPrefs by lazy { AppPreferences.get() }
     private var appWakeLock: PowerManager.WakeLock? = null
 
     private var playbackService: BitPerfectPlaybackService? = null
@@ -169,13 +169,9 @@ class MainActivity : AppCompatActivity() {
     private var isVolLockOn = false
     private var isPlayingState = false
 
-    // ★ Performance Mode 連動用弱参照
     private var frontPerfSectionWeakRef: java.lang.ref.WeakReference<View>? = null
     private var frontPerfSpinnerWeakRef: java.lang.ref.WeakReference<Spinner>? = null
 
-    /**
-     * 表ダイアログの Performance Mode を FREQ の状態に連動して即時グレーアウト更新
-     */
     private fun updateFrontPerfModeUI() {
         val isDirect = isDirectSource
         val factor = if (isDirect) 1 else upsampleFactor
@@ -247,7 +243,6 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetLrIndependentDither(isLrIndependentDither)
             NativeAudioEngine.nativeSetDcPhaseType(currentDcPhaseType)
             
-            // ★ FreqPresetManager に集約された現在設定を Native に適用
             FreqPresetManager.applyCurrentPresetToNative()
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
 
@@ -255,7 +250,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (actualMode != currentBitMode) {
                         currentBitMode = actualMode
-                        prefs.edit { putString("selected_bit_mode", actualMode) }
+                        appPrefs.selectedBitMode = actualMode
                         updateStatus()
                     }
                 }
@@ -273,7 +268,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.onDeviceDisconnectedListener = {
                 runOnUiThread {
                     isVolLockOn = false
-                    prefs.edit { putBoolean("vol_lock_enabled", false) }
+                    appPrefs.isVolLockEnabled = false
                     detectAudioOutputDevice()
                 }
             }
@@ -305,6 +300,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // ★ AppPreferences 初期化
+        AppPreferences.init(this)
+
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         appWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::MainActivityWakeLock")
         appWakeLock?.acquire()
@@ -326,31 +324,30 @@ class MainActivity : AppCompatActivity() {
         btnUiSettings = findViewById(R.id.btnUiSettings)
         geckoView = findViewById(R.id.geckoview)
 
-        prefs = getSharedPreferences("bp_settings", Context.MODE_PRIVATE)
-        isDirectSource = prefs.getBoolean("direct_source_enabled", false)
-        isCascadeFir = prefs.getBoolean("cascade_fir_enabled", true)
-        isLrIndependentDither = prefs.getBoolean("lr_dither_enabled", true)
-        isSpectrumOn = prefs.getBoolean("spectrum_enabled", true)
-        isAdBlockOn = prefs.getBoolean("ad_block_enabled", true)
-        currentThemeMode = prefs.getString("ui_theme_mode", "dark") ?: "dark"
+        // ★ 設定の読み出し (AppPreferences から型安全に取得)
+        isDirectSource = appPrefs.isDirectSource
+        isCascadeFir = appPrefs.isCascadeFir
+        isLrIndependentDither = appPrefs.isLrIndependentDither
+        isSpectrumOn = appPrefs.isSpectrumEnabled
+        isAdBlockOn = appPrefs.isAdBlockEnabled
+        currentThemeMode = appPrefs.uiThemeMode
         isVolLockOn = false
-        currentBitMode = prefs.getString("selected_bit_mode", "16bit") ?: "16bit"
-        currentPerfMode = prefs.getInt("selected_perf_mode", 1)
-        upsampleFactor = prefs.getInt("selected_upsample_factor", 1)
-        currentDitherMode = prefs.getInt("selected_dither_mode", 1)
-        currentDcPhaseType = prefs.getInt("selected_dc_phase_type", 2)
+        currentBitMode = appPrefs.selectedBitMode
+        currentPerfMode = appPrefs.selectedPerfMode
+        upsampleFactor = appPrefs.selectedUpsampleFactor
+        currentDitherMode = appPrefs.selectedDitherMode
+        currentDcPhaseType = appPrefs.selectedDcPhaseType
 
-        // ★ FreqPresetManager に初期インデックスを設定 & リスナー接続
-        val savedPresetIdx = prefs.getInt("selected_preset_index", 1)
+        val savedPresetIdx = appPrefs.selectedPresetIndex
         FreqPresetManager.setInitialPresetIndex(savedPresetIdx)
         FreqPresetManager.onPresetChangedListener = { pos, _ ->
-            prefs.edit { putInt("selected_preset_index", pos) }
+            appPrefs.selectedPresetIndex = pos
             updateFrontPerfModeUI()
         }
 
-        isEqEnabled = prefs.getBoolean("eq_enabled", false)
+        isEqEnabled = appPrefs.isEqEnabled
         for (i in 0..9) {
-            eqGains[i] = prefs.getFloat("eq_gain_$i", 0.0f)
+            eqGains[i] = appPrefs.getEqGain(i)
         }
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -515,8 +512,6 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dsp_settings, null)
-        
-        // ★ FreqPresetManager にフック処理を一本化
         FreqPresetManager.hookDspSettingsDialog(view)
         dialog.setContentView(view)
 
@@ -687,7 +682,7 @@ class MainActivity : AppCompatActivity() {
         switchSpectrumEnable.isChecked = isSpectrumOn
         switchSpectrumEnable.setOnCheckedChangeListener { _, isChecked ->
             isSpectrumOn = isChecked
-            prefs.edit { putBoolean("spectrum_enabled", isChecked) }
+            appPrefs.isSpectrumEnabled = isChecked
             walkmanEqView.isSpectrumEnabled = isChecked
         }
 
@@ -755,7 +750,6 @@ class MainActivity : AppCompatActivity() {
             layoutSectionCascadeFir.alpha = if (isUpsampleActive) 1.0f else 0.3f
             switchCascadeFir.isEnabled = isUpsampleActive
 
-            // ★ FreqPresetManager の一元管理インデックスを参照
             val isPerfActive = isDseeActive && (FreqPresetManager.currentPresetIndex != 0)
             val perfAlpha = if (isPerfActive) 1.0f else 0.35f
             layoutSectionPerfMode?.alpha = perfAlpha
@@ -769,7 +763,7 @@ class MainActivity : AppCompatActivity() {
 
         switchDirectSource.setOnCheckedChangeListener { _, isChecked ->
             isDirectSource = isChecked
-            prefs.edit { putBoolean("direct_source_enabled", isChecked) }
+            appPrefs.isDirectSource = isChecked
             NativeAudioEngine.nativeSetDirectSource(isChecked)
 
             val effectiveFactor = if (isChecked) 1 else upsampleFactor
@@ -781,7 +775,7 @@ class MainActivity : AppCompatActivity() {
         switchCascadeFir.isChecked = isCascadeFir
         switchCascadeFir.setOnCheckedChangeListener { _, isChecked ->
             isCascadeFir = isChecked
-            prefs.edit { putBoolean("cascade_fir_enabled", isChecked) }
+            appPrefs.isCascadeFir = isChecked
             NativeAudioEngine.nativeSetCascadeFir(isChecked)
         }
 
@@ -800,7 +794,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnCheckedChangeListener
             }
             isVolLockOn = isChecked
-            prefs.edit { putBoolean("vol_lock_enabled", isChecked) }
+            appPrefs.isVolLockEnabled = isChecked
             playbackService?.isVolumeLocked = isChecked
             if (isChecked) playbackService?.lockSystemVolumeToMax()
             updateStatus()
@@ -837,14 +831,14 @@ class MainActivity : AppCompatActivity() {
             updateEqHeader(bandIdx, gain)
             System.arraycopy(allGains, 0, eqGains, 0, 10)
             NativeAudioEngine.nativeSetEqualizer(isEqEnabled, eqGains)
-            prefs.edit { for (i in 0..9) putFloat("eq_gain_$i", eqGains[i]) }
+            appPrefs.setAllEqGains(eqGains)
         }
 
         btnEqEdit.setOnClickListener { setEditMode(!walkmanEqView.isEditMode) }
         switchEqEnable.setOnCheckedChangeListener { _, isChecked ->
             isEqEnabled = isChecked
             walkmanEqView.isDirectBypass = !isChecked
-            prefs.edit { putBoolean("eq_enabled", isChecked) }
+            appPrefs.isEqEnabled = isChecked
             NativeAudioEngine.nativeSetEqualizer(isChecked, eqGains)
             if (!isChecked) setEditMode(false)
         }
@@ -863,7 +857,7 @@ class MainActivity : AppCompatActivity() {
                 val selectedMode = bitModeValues[position]
                 if (selectedMode != currentBitMode) {
                     currentBitMode = selectedMode
-                    prefs.edit { putString("selected_bit_mode", selectedMode) }
+                    appPrefs.selectedBitMode = selectedMode
                     playbackService?.currentBitMode = selectedMode
                     playbackService?.initAudioTrack(selectedMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
                     bitActivityMask = 0
@@ -885,7 +879,7 @@ class MainActivity : AppCompatActivity() {
                 val selectedMode = ditherModeValues[position]
                 if (selectedMode != currentDitherMode) {
                     currentDitherMode = selectedMode
-                    prefs.edit { putInt("selected_dither_mode", selectedMode) }
+                    appPrefs.selectedDitherMode = selectedMode
                     NativeAudioEngine.nativeSetDitherMode(selectedMode)
                 }
             }
@@ -901,7 +895,7 @@ class MainActivity : AppCompatActivity() {
                 val selectedType = dcPhaseTypeValues[position]
                 if (selectedType != currentDcPhaseType) {
                     currentDcPhaseType = selectedType
-                    prefs.edit { putInt("selected_dc_phase_type", selectedType) }
+                    appPrefs.selectedDcPhaseType = selectedType
                     NativeAudioEngine.nativeSetDcPhaseType(selectedType)
                 }
             }
@@ -917,7 +911,7 @@ class MainActivity : AppCompatActivity() {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                 if (currentPerfMode != position) {
                     currentPerfMode = position
-                    prefs.edit { putInt("selected_perf_mode", position) }
+                    appPrefs.selectedPerfMode = position
                     NativeAudioEngine.nativeSetPerformanceMode(position)
                 }
             }
@@ -933,7 +927,7 @@ class MainActivity : AppCompatActivity() {
                 val selectedFactor = upsampleFactorValues[position]
                 if (selectedFactor != upsampleFactor) {
                     upsampleFactor = selectedFactor
-                    prefs.edit { putInt("selected_upsample_factor", selectedFactor) }
+                    appPrefs.selectedUpsampleFactor = selectedFactor
                     if (!isDirectSource) {
                         playbackService?.setUpsampling(selectedFactor)
                     }
@@ -1060,7 +1054,7 @@ class MainActivity : AppCompatActivity() {
                 val selected = themeValues[position]
                 if (selected != currentThemeMode) {
                     currentThemeMode = selected
-                    prefs.edit { putString("ui_theme_mode", selected) }
+                    appPrefs.uiThemeMode = selected
                     applyThemeUi(selected)
                     dialog.dismiss()
                     showUiSettingsDialog()
@@ -1076,7 +1070,7 @@ class MainActivity : AppCompatActivity() {
         switchAdBlock.isChecked = isAdBlockOn
         switchAdBlock.setOnCheckedChangeListener { _, isChecked ->
             isAdBlockOn = isChecked
-            prefs.edit { putBoolean("ad_block_enabled", isChecked) }
+            appPrefs.isAdBlockEnabled = isChecked
             sendAdBlockSetting(isChecked)
         }
 
@@ -1144,8 +1138,6 @@ class MainActivity : AppCompatActivity() {
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         val view = layoutInflater.inflate(R.layout.dialog_dev_presets, null)
-        
-        // ★ FreqPresetManager にフック処理を一本化
         FreqPresetManager.hookDevPresetsDialog(view)
         dialog.setContentView(view)
 
