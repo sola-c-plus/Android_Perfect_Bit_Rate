@@ -466,14 +466,14 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- FREQ ENGINE -->
+            <!-- FREQ ENGINE (親項目) -->
             <LinearLayout
                 android:id="@+id/layoutSectionDsee"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="12dp">
+                android:layout_marginBottom="6dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -507,14 +507,7 @@
                     android:popupBackground="#1A1A1A" />
             </LinearLayout>
 
-            <View
-                android:id="@+id/dividerDsp4"
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#1C1C1C"
-                android:layout_marginBottom="12dp" />
-
-            <!-- ★ PERFORMANCE PROFILE (動作モード: Eco / 普通 / 超高音質) -->
+            <!-- ★ PERFORMANCE PROFILE (間の線なし！FREQ直下のサブ設定) -->
             <LinearLayout
                 android:id="@+id/layoutSectionPerfMode"
                 android:layout_width="match_parent"

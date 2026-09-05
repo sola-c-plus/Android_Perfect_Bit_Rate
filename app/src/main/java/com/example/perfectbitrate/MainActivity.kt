@@ -257,6 +257,17 @@ class MainActivity : AppCompatActivity() {
 
             // 4. 裏ダイアログの全UI（下の各パラメータ＆スイッチ6種）を自動変化！
             updateBackTunerUI(backDialogViewWeakRef?.get(), preset)
+
+            // 表ダイアログが開いている場合、FREQがOFFならPERFORMANCE PROFILEを即座にグレーアウト
+            frontSpinnerWeakRef?.get()?.let { frontSp ->
+                val root = frontSp.rootView
+                val perfSection = root.findViewById<View>(R.id.layoutSectionPerfMode)
+                val perfSp = root.findViewById<View>(R.id.dialogSpinnerPerfMode)
+                val activeFactor = if (isDirectSource) 1 else upsampleFactor
+                val isPerfActive = (!isDirectSource) && (activeFactor >= 2) && (safePos != 0)
+                perfSection?.alpha = if (isPerfActive) 1.0f else 0.3f
+                perfSp?.isEnabled = isPerfActive
+            }
         } finally {
             isPresetSyncing = false
         }
@@ -881,7 +892,7 @@ class MainActivity : AppCompatActivity() {
             view.findViewById<View>(R.id.dividerDsp1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp3)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
-            view.findViewById<View>(R.id.dividerDsp4)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+            view.findViewById<View>(R.id.dividerDspPerf)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
             view.findViewById<View>(R.id.dividerDsp5)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
             val swTrackLight = ContextCompat.getDrawable(this, R.drawable.switch_track_walkman_outline_light)
@@ -1034,6 +1045,11 @@ class MainActivity : AppCompatActivity() {
             val isDseeActive = dspEnabled && factor >= 2
             layoutSectionDsee.alpha = if (isDseeActive) 1.0f else 0.3f
             spinnerDsee.isEnabled = isDseeActive
+
+            // ★ FREQが有効 かつ 選択が「OFF (0)」ではない時のみ点灯、OFFの時はグレーアウト
+            val isPerfActive = isDseeActive && (currentPresetIndex != 0)
+            layoutSectionPerfMode?.alpha = if (isPerfActive) 1.0f else 0.3f
+            spinnerPerfMode?.isEnabled = isPerfActive
 
             val isUpsampleActive = dspEnabled && factor >= 2
             layoutSectionCascadeFir.alpha = if (isUpsampleActive) 1.0f else 0.3f
