@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.Manifest
 import android.content.ComponentName
@@ -129,6 +129,11 @@ class MainActivity : AppCompatActivity() {
             playbackService?.currentBitMode = currentBitMode
             playbackService?.upsampleFactor = if (isDirectSource) 1 else upsampleFactor
             playbackService?.setOutputDevice(activeOutputDevice)
+            // ★ 事前接続 DAC 復帰: 起動時から繋がっていた DAC の AudioTrack 初期化を即時強制トリガー
+            if (activeOutputDevice != null) {
+                playbackService?.restoreVolumeForDevice(activeOutputDevice)
+                playbackService?.initAudioTrack(currentBitMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
+            }
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
             NativeAudioEngine.nativeSetRichHarmonics(appPrefs.isRichHarmonicsEnabled)
