@@ -1,4 +1,4 @@
-﻿#include "dsp_equalizer.h"
+#include "dsp_equalizer.h"
 #include <algorithm>
 
 constexpr double PI = 3.14159265358979323846;
@@ -44,32 +44,17 @@ DspEqualizer::DspEqualizer() {
     setSampleRate(48000.0);
 }
 
-void DspEqualizer::recalculateHeadroom() {
-    float maxBoost = 0.0f;
-    for (float g : gainsDb_) {
-        if (g > maxBoost) maxBoost = g;
-    }
-    // ブースト量に応じて自動アッテネーションを計算（歪みをゼロ化）
-    if (maxBoost > 0.05f) {
-        headRoomGain_ = std::pow(10.0, -maxBoost / 20.0);
-    } else {
-        headRoomGain_ = 1.0;
-    }
-}
-
 void DspEqualizer::setSampleRate(double sampleRate) {
     sampleRate_ = std::max(8000.0, sampleRate);
     for (int i = 0; i < NUM_BANDS; ++i) {
         filters_[i].update(FREQUENCIES[i], gainsDb_[i], OPTIMIZED_Q, sampleRate_);
     }
-    recalculateHeadroom();
 }
 
 void DspEqualizer::setBandGain(int band, float gainDb) {
     if (band < 0 || band >= NUM_BANDS) return;
     gainsDb_[band] = std::clamp(gainDb, -10.0f, 10.0f);
     filters_[band].update(FREQUENCIES[band], gainsDb_[band], OPTIMIZED_Q, sampleRate_);
-    recalculateHeadroom();
 }
 
 void DspEqualizer::setAllGains(const float* gains) {
@@ -78,7 +63,6 @@ void DspEqualizer::setAllGains(const float* gains) {
         gainsDb_[i] = std::clamp(gains[i], -10.0f, 10.0f);
         filters_[i].update(FREQUENCIES[i], gainsDb_[i], OPTIMIZED_Q, sampleRate_);
     }
-    recalculateHeadroom();
 }
 
 void DspEqualizer::setEnabled(bool enabled) {
@@ -105,11 +89,11 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
             filters_[b].process(l, r);
         }
 
-        // オートヘッドルーム補正 (クリップ防止)
-        l *= headRoomGain_;
-        r *= headRoomGain_;
+        // ★ Walkman 仕様: 全体音量を下げず、過大ピークのみソフトリミッターで透明に吸収
+        l = softLimit(l);
+        r = softLimit(r);
 
-        left[i] = static_cast<float>(l);
-        right[i] = static_cast<float>(r);
+        left[i] = static_cast<float>(std::clamp(l, -1.0, 1.0));
+        right[i] = static_cast<float>(std::clamp(r, -1.0, 1.0));
     }
 }
