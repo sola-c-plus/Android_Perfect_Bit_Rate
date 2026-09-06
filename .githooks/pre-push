@@ -1,0 +1,14 @@
+#!/bin/sh
+# Windows で JAVA_HOME が未設定の場合、Android Studio 内蔵の Java (JBR) を自動補完
+if [ -z "$JAVA_HOME" ] && [ -d "/c/Program Files/Android/Android Studio/jbr" ]; then
+  export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
+  export PATH="$JAVA_HOME/bin:$PATH"
+fi
+
+echo "push する前にビルドが通るか確認します..."
+if ! ./gradlew assembleDebug; then
+  echo ""
+  echo "ビルドが通らないので push を中止しました。"
+  echo "（どうしても push したいときは git push --no-verify）"
+  exit 1
+fi

@@ -1,0 +1,10 @@
+#!/bin/sh
+# コミットしてはいけないファイルが混ざっていないか見る
+ng=$(git diff --cached --name-only --diff-filter=ACM \
+     | grep -E '\.bak$|^.idea/|^.kotlin/|local\.properties$')
+if [ -n "$ng" ]; then
+  echo "コミットに含めてはいけないファイルがあります:"
+  echo "$ng" | sed 's/^/  - /'
+  echo "対処: git restore --staged <ファイル> して .gitignore に追加してください"
+  exit 1
+fi
