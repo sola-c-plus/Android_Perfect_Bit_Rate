@@ -94,7 +94,7 @@ object FreqPresetManager {
             NativeAudioEngine.nativeSetFirFilterType(p.firType)
             NativeAudioEngine.nativeSetTransientMode(p.transientMode)
             NativeAudioEngine.nativeSetTransientCustomParams(p.useGroupDelay, p.useLattice)
-            NativeAudioEngine.nativeSetFreqMode(p.lpcAlgo)
+            NativeAudioEngine.nativeSetFreqMode(p.id)
             NativeAudioEngine.nativeSetFreqCustomParams(p.gain, p.extractFreq)
             NativeAudioEngine.nativeSetLrIndependentDither(p.useLrDither)
             NativeAudioEngine.nativeSetMsSpatial(p.useMsSpatial)
