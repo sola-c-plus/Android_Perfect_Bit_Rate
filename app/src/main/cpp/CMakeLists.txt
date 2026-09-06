@@ -6,6 +6,11 @@ add_library(
     SHARED
     aaudio_engine.cpp
     dsp_equalizer.cpp
+    dsp_fir_stage.cpp
+    dsp_preecho.cpp
+    dsp_transient.cpp
+    dsp_freq_engine.cpp
+    dsp_dc_phase.cpp
     dsp_upsampler.cpp
     jni_bridge.cpp
 )
