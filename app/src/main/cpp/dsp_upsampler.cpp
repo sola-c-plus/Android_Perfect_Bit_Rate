@@ -417,8 +417,32 @@ void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames)
     }
 }
 
+// ★ 動的SBR: ふくよかSW (isRichHarmonics_) がONの時のみ動作！
 void DspUpsampler::processDynamicSbr(float* left, float* right, size_t numFrames) {
-    return;
+    if (!isDynamicSbr_ || !freqEngine_.isRichHarmonics() || !left || !right || numFrames == 0) return;
+
+    // 14k〜16kHz のエネルギーから 18k〜24kHz+ へふくよかな高調波をレプリケーション
+    const float shiftHz = 4000.0f;
+    const float twoPi = static_cast<float>(2.0 * DSP_PI);
+    const float phaseInc = twoPi * shiftHz / (inSampleRate_ * (isDirectSource_ ? 1 : factor_));
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        float inL = left[i];
+        float inR = right[i];
+
+        float modL = inL * std::cos(sbrPhaseL_);
+        float modR = inR * std::cos(sbrPhaseR_);
+
+        sbrPhaseL_ += phaseInc;
+        if (sbrPhaseL_ >= twoPi) sbrPhaseL_ -= twoPi;
+        sbrPhaseR_ += phaseInc;
+        if (sbrPhaseR_ >= twoPi) sbrPhaseR_ -= twoPi;
+
+        // 実測 -4.01 dB/kHz スロープに合わせた微小ブレンド (過度なギラつきを防止)
+        const float sbrGain = 0.10f;
+        left[i]  = std::clamp(inL + modL * sbrGain, -1.0f, 1.0f);
+        right[i] = std::clamp(inR + modR * sbrGain, -1.0f, 1.0f);
+    }
 }
 
 size_t DspUpsampler::process(

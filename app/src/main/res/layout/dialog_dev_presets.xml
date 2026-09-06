@@ -361,7 +361,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="AAC/Opusの遮断周波数を自動追従し倍音構造を複製"
+                android:text="AAC/Opus遮断帯域の倍音複製 (※ふくよかSW ON時のみ動作)"
                 android:textColor="#888888"
                 android:textSize="9sp" />
         </LinearLayout>

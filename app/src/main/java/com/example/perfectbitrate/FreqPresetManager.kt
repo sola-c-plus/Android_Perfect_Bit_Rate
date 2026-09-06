@@ -199,7 +199,15 @@ object FreqPresetManager {
                 (dialogView.findViewById<View>(R.id.devSwitchLattice) as? SwitchCompat)?.isChecked = p.useLattice
                 (dialogView.findViewById<View>(R.id.devSwitchLrDither) as? SwitchCompat)?.isChecked = p.useLrDither
                 (dialogView.findViewById<View>(R.id.devSwitchMsSpatial) as? SwitchCompat)?.isChecked = p.useMsSpatial
-                (dialogView.findViewById<View>(R.id.devSwitchDynamicSbr) as? SwitchCompat)?.isChecked = p.useDynamicSbr
+                val isRichOn = AppPreferences.get().isRichHarmonicsEnabled
+                val sbrSwitch = dialogView.findViewById<View>(R.id.devSwitchDynamicSbr) as? SwitchCompat
+                val sbrParent = sbrSwitch?.parent as? View
+
+                // ★ ふくよかSWがONの時のみSBRスイッチを操作可能に
+                sbrSwitch?.isEnabled = !isOff && isRichOn
+                sbrSwitch?.alpha = if (!isOff && isRichOn) 1.0f else 0.35f
+                sbrParent?.alpha = if (!isOff && isRichOn) 1.0f else 0.35f
+                sbrSwitch?.isChecked = if (isRichOn) p.useDynamicSbr else false
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
