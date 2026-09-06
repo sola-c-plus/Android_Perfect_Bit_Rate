@@ -17,61 +17,44 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     }
     isBypass_ = false;
 
-    double fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
-    double fOutHp   = 19800.0;
-    evenRatio_ = 0.65;
-    oddRatio_  = 0.35;
-    modeGainScale_ = 1.15;
+    fExtract_ = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
+
+    // ★ RICH HARMONICS: ONなら 16.0kHz (可聴域のふくよかな艶)、OFFなら 19.8kHz (リアルHi-Res)
+    double fOutHp = isRichHarmonics_ ? 16000.0 : 19800.0;
+    
+    // ふくよかモード時は温かみを与える偶数次倍音(2次/4次)を78%まで引き上げ、ゲインも厚めに
+    evenRatio_ = isRichHarmonics_ ? 0.78 : 0.65;
+    oddRatio_  = isRichHarmonics_ ? 0.22 : 0.35;
+    modeGainScale_ = isRichHarmonics_ ? 1.35 : 1.15;
 
     switch (mode_) {
         case FreqMode::AUTO_AI:
-            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
-            fOutHp   = 19800.0;
-            evenRatio_ = 0.65;
-            oddRatio_  = 0.35;
-            modeGainScale_ = 1.18;
+            fOutHp = isRichHarmonics_ ? 16000.0 : 19800.0;
             break;
-
         case FreqMode::STUDIO_VOCAL:
-            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 12000.0;
-            fOutHp   = 19850.0;
-            evenRatio_ = 0.72;
-            oddRatio_  = 0.28;
-            modeGainScale_ = 1.15;
+            fOutHp = isRichHarmonics_ ? 15500.0 : 19850.0;
+            evenRatio_ = isRichHarmonics_ ? 0.82 : 0.72;
+            oddRatio_  = isRichHarmonics_ ? 0.18 : 0.28;
             break;
-
         case FreqMode::ACOUSTIC_INSTRUMENT:
-            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 12500.0;
-            fOutHp   = 19800.0;
-            evenRatio_ = 0.60;
-            oddRatio_  = 0.40;
-            modeGainScale_ = 1.18;
+            fOutHp = isRichHarmonics_ ? 15800.0 : 19800.0;
+            evenRatio_ = isRichHarmonics_ ? 0.75 : 0.60;
+            oddRatio_  = isRichHarmonics_ ? 0.25 : 0.40;
             break;
-
         case FreqMode::DYNAMIC_PERCUSSION:
-            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13800.0;
-            fOutHp   = 19700.0;
-            evenRatio_ = 0.45;
-            oddRatio_  = 0.55;
-            modeGainScale_ = 1.12;
+            fOutHp = isRichHarmonics_ ? 16500.0 : 19700.0;
             break;
-
         case FreqMode::AIR_EXPANDER:
-            fExtract = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 14200.0;
-            fOutHp   = 19900.0;
-            evenRatio_ = 0.50;
-            oddRatio_  = 0.50;
-            modeGainScale_ = 1.22;
+            fOutHp = isRichHarmonics_ ? 16800.0 : 19900.0;
             break;
-
         default:
             break;
     }
 
-    fExtract = std::clamp(fExtract, 4000.0, sampleRate_ * 0.40);
-    fOutHp   = std::clamp(fOutHp, 8000.0, sampleRate_ * 0.43);
+    fExtract_ = std::clamp(fExtract_, 4000.0, sampleRate_ * 0.40);
+    fOutHp    = std::clamp(fOutHp, 8000.0, sampleRate_ * 0.43);
 
-    double w0_in = 2.0 * DSP_PI * fExtract / sampleRate_;
+    double w0_in = 2.0 * DSP_PI * fExtract_ / sampleRate_;
     double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
     double cosw0_in = std::cos(w0_in);
 

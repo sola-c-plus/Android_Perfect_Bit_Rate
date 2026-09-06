@@ -48,6 +48,8 @@ class DspSettingsDialog(
 
     private var layoutSectionPerfMode: View? = null
     private var spinnerPerfMode: Spinner? = null
+    private var layoutSectionRichHarmonics: View? = null
+    private var switchRichHarmonics: SwitchCompat? = null
 
     private var isUserSeeking = false
     private var currentDuration = 0L
@@ -117,6 +119,8 @@ class DspSettingsDialog(
         val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
         val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
         spinnerPerfMode = view.findViewById(R.id.dialogSpinnerPerfMode)
+        layoutSectionRichHarmonics = view.findViewById(R.id.layoutSectionRichHarmonics)
+        switchRichHarmonics = view.findViewById(R.id.dialogSwitchRichHarmonics)
         layoutSectionPerfMode = view.findViewById(R.id.layoutSectionPerfMode)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
@@ -155,6 +159,12 @@ class DspSettingsDialog(
                     behavior.peekHeight = targetH
                 }
             }
+        }
+
+        switchRichHarmonics?.isChecked = appPrefs.isRichHarmonicsEnabled
+        switchRichHarmonics?.setOnCheckedChangeListener { _, isChecked ->
+            appPrefs.isRichHarmonicsEnabled = isChecked
+            NativeAudioEngine.nativeSetRichHarmonics(isChecked)
         }
 
         walkmanEqView?.isLightMode = !isDarkTheme
@@ -386,6 +396,8 @@ class DspSettingsDialog(
             btnPlayPause = null
             layoutSectionPerfMode = null
             spinnerPerfMode = null
+            layoutSectionRichHarmonics = null
+            switchRichHarmonics = null
             FreqPresetManager.clearFrontDialogRefs()
             onDismiss()
         }
@@ -399,6 +411,10 @@ class DspSettingsDialog(
         layoutSectionPerfMode?.alpha = perfAlpha
         spinnerPerfMode?.isEnabled = isPerfActive
         spinnerPerfMode?.alpha = perfAlpha
+
+        // ★ RICH HARMONICS も FREQ の状態に完全連動してグレーアウト！
+        layoutSectionRichHarmonics?.alpha = perfAlpha
+        switchRichHarmonics?.isEnabled = isPerfActive
     }
 
     override fun updatePlayerState(
@@ -489,6 +505,17 @@ class DspSettingsDialog(
         view.findViewById<TextView>(R.id.textPerfModeTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textPerfModeSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<View>(R.id.dividerDspPerf)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+        view.findViewById<TextView>(R.id.textRichHarmonicsTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+        view.findViewById<TextView>(R.id.textRichHarmonicsSub)?.setTextColor(Color.parseColor("#636366"))
+        val idRich = activity.resources.getIdentifier("dividerDspRich", "id", activity.packageName)
+        if (idRich != 0) view.findViewById<View>(idRich)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+        val swRich = view.findViewById<SwitchCompat>(R.id.dialogSwitchRichHarmonics)
+        if (swRich != null) {
+            val swTrackL = ContextCompat.getDrawable(activity, R.drawable.switch_track_walkman_outline_light)
+            val swThumbL = ContextCompat.getDrawable(activity, R.drawable.switch_thumb_light)
+            swRich.trackDrawable = swTrackL
+            swRich.thumbDrawable = swThumbL
+        }
         spinnerPerfMode.setBackgroundResource(R.drawable.bg_spinner_dap_light)
         spinnerPerfMode.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
         view.findViewById<TextView>(R.id.textDseeTitle)?.setTextColor(Color.parseColor("#1C1C1E"))

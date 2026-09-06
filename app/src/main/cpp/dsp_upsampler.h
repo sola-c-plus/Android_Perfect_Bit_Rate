@@ -39,6 +39,8 @@ public:
 
     void setFreqMode(FreqMode mode);
     void setFreqCustomParams(float gain, float extractFreq);
+    void setRichHarmonics(bool enabled) { freqEngine_.setRichHarmonics(enabled); }
+    bool isRichHarmonics() const { return freqEngine_.isRichHarmonics(); }
     FreqMode getFreqMode() const { return freqMode_; }
 
     void setPerformanceMode(PerformanceMode mode) {

@@ -1,4 +1,4 @@
-#include <jni.h>
+﻿#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
@@ -14,6 +14,7 @@ static int g_currentFreqMode = 1;      // AUTO_AI
 static int g_currentTransientMode = 3; // Acoustic
 static bool g_isDirectSource = false;
 static bool g_isCascadeFir = true;
+static bool g_isRichHarmonics = false;
 
 extern "C" {
 
@@ -29,6 +30,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
         g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(g_currentDcPhaseType));
         g_upsampler->setFreqMode(static_cast<FreqMode>(g_currentFreqMode));
         g_upsampler->setTransientMode(static_cast<TransientMode>(g_currentTransientMode));
+        g_upsampler->setRichHarmonics(g_isRichHarmonics);
     }
 }
 
@@ -92,7 +94,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
     g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(type));
 }
 
-
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetPerformanceMode(
         JNIEnv *env, jobject thiz, jint mode) {
@@ -106,6 +107,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(
     g_currentFreqMode = mode;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setFreqMode(static_cast<FreqMode>(mode));
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetRichHarmonics(
+        JNIEnv *env, jobject thiz, jboolean enabled) {
+    g_isRichHarmonics = (enabled == JNI_TRUE);
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setRichHarmonics(g_isRichHarmonics);
 }
 
 JNIEXPORT void JNICALL

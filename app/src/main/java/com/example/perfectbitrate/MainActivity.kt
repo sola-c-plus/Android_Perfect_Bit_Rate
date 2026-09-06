@@ -131,6 +131,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.setOutputDevice(activeOutputDevice)
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
+            NativeAudioEngine.nativeSetRichHarmonics(appPrefs.isRichHarmonicsEnabled)
             NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             NativeAudioEngine.nativeSetCascadeFir(appPrefs.isCascadeFir)
             NativeAudioEngine.nativeSetDitherMode(appPrefs.selectedDitherMode)

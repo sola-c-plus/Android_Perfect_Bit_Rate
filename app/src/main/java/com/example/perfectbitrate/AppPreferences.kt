@@ -24,6 +24,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SELECTED_DITHER_MODE = "selected_dither_mode"
         private const val KEY_SELECTED_DC_PHASE_TYPE = "selected_dc_phase_type"
         private const val KEY_SELECTED_PRESET_INDEX = "selected_preset_index"
+        private const val KEY_RICH_HARMONICS_ENABLED = "rich_harmonics_enabled"
         private const val KEY_EQ_ENABLED = "eq_enabled"
         private const val KEY_EQ_GAIN_PREFIX = "eq_gain_"
 
@@ -88,6 +89,10 @@ class AppPreferences private constructor(context: Context) {
     var selectedDcPhaseType: Int
         get() = prefs.getInt(KEY_SELECTED_DC_PHASE_TYPE, 2)
         set(value) = prefs.edit { putInt(KEY_SELECTED_DC_PHASE_TYPE, value) }
+
+    var isRichHarmonicsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_RICH_HARMONICS_ENABLED, false)
+        set(value) = prefs.edit { putBoolean(KEY_RICH_HARMONICS_ENABLED, value) }
 
     var selectedPresetIndex: Int
         get() = prefs.getInt(KEY_SELECTED_PRESET_INDEX, 1)

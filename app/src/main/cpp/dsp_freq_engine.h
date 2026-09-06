@@ -8,13 +8,24 @@ public:
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
     void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
+    
+    // ★ ふくよか倍音スイッチ (ON: 16kHz〜偶数次倍音ブレンド / OFF: 19.8kHz〜リアルHi-Res)
+    void setRichHarmonics(bool enabled) {
+        if (isRichHarmonics_ != enabled) {
+            isRichHarmonics_ = enabled;
+            configure(mode_, sampleRate_, targetGain_, static_cast<float>(fExtract_));
+        }
+    }
+    bool isRichHarmonics() const { return isRichHarmonics_; }
 
 private:
     FreqMode mode_ = FreqMode::AUTO_AI;
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     double sampleRate_ = 48000.0;
     bool isBypass_ = false;
+    bool isRichHarmonics_ = false;
     float targetGain_ = 0.22f;
+    double fExtract_ = 13000.0;
 
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;

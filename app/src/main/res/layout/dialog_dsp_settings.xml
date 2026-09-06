@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/dspDialogRoot"
@@ -550,6 +550,57 @@
 
             <View
                 android:id="@+id/dividerDspPerf"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1C1C1C"
+                android:layout_marginBottom="12dp" />
+
+            <!-- ★ RICH HARMONICS (ふくよか倍音 / ウォーム) -->
+            <LinearLayout
+                android:id="@+id/layoutSectionRichHarmonics"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textRichHarmonicsTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="RICH HARMONICS (ふくよか倍音)"
+                        android:textColor="#E5A93C"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/textRichHarmonicsSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="16kHz〜へ温かみのある偶数次倍音をブレンドし音に厚みを付加"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/dialogSwitchRichHarmonics"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline"
+                    android:checked="false" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/dividerDspRich"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:background="#1C1C1C"
