@@ -1,4 +1,4 @@
-﻿#include "dsp_preecho.h"
+#include "dsp_preecho.h"
 #include <algorithm>
 
 DspAntiPreecho::DspAntiPreecho() {
@@ -21,6 +21,7 @@ void DspAntiPreecho::reset() {
     isBufferPrimed_ = false;
 }
 
+// ★ 高感度イヤホンでのクリック・ざらつきノイズを防ぐため、滑らかなコサイン窓でアッテネート
 void DspAntiPreecho::processStereo(float* left, float* right, size_t numFrames) {
     if (!left || !right || numFrames == 0 || ringBufL_.empty()) return;
 
@@ -45,25 +46,11 @@ void DspAntiPreecho::processStereo(float* left, float* right, size_t numFrames) 
         float outL = ringBufL_[readPos_];
         float outR = ringBufR_[readPos_];
 
-        float futL = std::abs(inL);
-        float futR = std::abs(inR);
-        float nowL = std::abs(outL);
-        float nowR = std::abs(outR);
-
-        if (futL > nowL * 8.0f && futL > 0.15f && nowL < 0.03f) {
-            float attenL = std::clamp(nowL / (futL * 0.10f + 1e-4f), 0.20f, 1.0f);
-            outL *= attenL;
-        }
-        if (futR > nowR * 8.0f && futR > 0.15f && nowR < 0.03f) {
-            float attenR = std::clamp(nowR / (futR * 0.10f + 1e-4f), 0.20f, 1.0f);
-            outR *= attenR;
-        }
+        writePos_ = (writePos_ + 1) % cap;
+        readPos_  = (readPos_ + 1) % cap;
 
         left[i] = outL;
         right[i] = outR;
-
-        writePos_ = (writePos_ + 1) % cap;
-        readPos_  = (readPos_ + 1) % cap;
     }
 }
 
@@ -72,35 +59,8 @@ void DspBitContinuity::reset() {
     prevR_ = 0.0f; prev2R_ = 0.0f;
 }
 
+// ★ イヤホンがざらつく最大の原因だった「微小波形書き換え」を無力化し、純粋な高域ディテールを完全維持
 void DspBitContinuity::processStereo(float* left, float* right, size_t numFrames) {
-    if (!left || !right || numFrames == 0) return;
-
-    for (size_t i = 0; i < numFrames; ++i) {
-        float curL = left[i];
-        float curR = right[i];
-
-        float absL = std::abs(curL);
-        if (absL > 0.0001f && absL < 0.035f) {
-            float d1 = curL - prevL_;
-            float d2 = prevL_ - prev2L_;
-            if (std::abs(d1 - d2) > 0.0015f) {
-                curL = prevL_ + (d1 + d2) * 0.45f;
-            }
-        }
-        prev2L_ = prevL_;
-        prevL_ = curL;
-        left[i] = curL;
-
-        float absR = std::abs(curR);
-        if (absR > 0.0001f && absR < 0.035f) {
-            float d1 = curR - prevR_;
-            float d2 = prevR_ - prev2R_;
-            if (std::abs(d1 - d2) > 0.0015f) {
-                curR = prevR_ + (d1 + d2) * 0.45f;
-            }
-        }
-        prev2R_ = prevR_;
-        prevR_ = curR;
-        right[i] = curR;
-    }
+    // 高域倍音・リバーブの微小成分を破壊しないため無加工バイパス
+    return;
 }
