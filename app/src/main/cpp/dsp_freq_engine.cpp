@@ -20,12 +20,12 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     fExtract_ = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
 
     // ★ RICH HARMONICS: ONなら 16.0kHz (可聴域のふくよかな艶)、OFFなら 19.8kHz (リアルHi-Res)
-    double fOutHp = isRichHarmonics_ ? 16000.0 : 19800.0;
+    double fOutHp = isRichHarmonics_ ? 17200.0 : 19800.0;
     
     // ふくよかモード時は温かみを与える偶数次倍音(2次/4次)を78%まで引き上げ、ゲインも厚めに
     evenRatio_ = isRichHarmonics_ ? 0.78 : 0.65;
     oddRatio_  = isRichHarmonics_ ? 0.22 : 0.35;
-    modeGainScale_ = isRichHarmonics_ ? 1.35 : 1.15;
+    modeGainScale_ = isRichHarmonics_ ? 1.18 : 1.15;
 
     switch (mode_) {
         case FreqMode::AUTO_AI:
