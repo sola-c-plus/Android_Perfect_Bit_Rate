@@ -54,7 +54,28 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
+    // ★ スタジオ級ルックアヘッド・スムーズリミッター (ハードクリップを完全排除)
+    static constexpr size_t MAX_LOOKAHEAD = 512;
+    size_t lookaheadFrames_ = 168; // 約 3.5ms
+    std::vector<double> delayBufL_;
+    std::vector<double> delayBufR_;
+    size_t bufWritePos_ = 0;
+    size_t bufReadPos_ = 0;
+    bool isPrimed_ = false;
+
     double env_ = 0.0;
+    double currentGain_ = 1.0;
     double attackCoeff_ = 0.0;
     double releaseCoeff_ = 0.0;
+
+    // 3次エルミートスプラインによるソフト飽和 (角の立たない滑らかなリミット)
+    static inline double hermiteSmooth(double x) {
+        constexpr double th = 0.92;
+        double absX = std::abs(x);
+        if (absX <= th) return x;
+        if (absX >= 1.25) return (x > 0.0) ? 0.999 : -0.999;
+        double t = (absX - th) / (1.25 - th);
+        double compressed = th + (0.999 - th) * (t * t * (3.0 - 2.0 * t));
+        return (x > 0.0) ? compressed : -compressed;
+    }
 };
