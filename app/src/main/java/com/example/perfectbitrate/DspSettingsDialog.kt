@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.Activity
 import android.content.res.ColorStateList

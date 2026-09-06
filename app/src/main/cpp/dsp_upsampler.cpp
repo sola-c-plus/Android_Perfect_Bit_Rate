@@ -1,4 +1,4 @@
-﻿#include "dsp_upsampler.h"
+#include "dsp_upsampler.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -589,6 +589,12 @@ size_t DspUpsampler::process(
 
         equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+
+        // ★ 後段 DSP(DC Phase等)による微小オーバーシュートを確実にガード
+        for (size_t i = 0; i < numOutFrames; ++i) {
+            tempOutL_[i] = std::clamp(tempOutL_[i], -1.0f, 1.0f);
+            tempOutR_[i] = std::clamp(tempOutR_[i], -1.0f, 1.0f);
+        }
     }
 
     size_t curPos = specRingPos_.load(std::memory_order_relaxed);

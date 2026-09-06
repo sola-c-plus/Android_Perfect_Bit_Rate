@@ -25,7 +25,7 @@ public:
     void reset();
 
 private:
-    // ★ 64-bit 倍精度浮動小数点 IIR バイカッドフィルター (桁落ちノイズ皆無)
+    // ★ 64-bit 倍精度浮動小数点 IIR バイカッドフィルター
     struct Biquad64 {
         double b0 = 1.0, b1 = 0.0, b2 = 0.0;
         double a1 = 0.0, a2 = 0.0;
@@ -55,16 +55,8 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
-    // ★ Walkman 仕様: 全体音量を下げず、過大ピークのみを滑らかに吸収するソフトニーリミッター
-    static inline double softLimit(double x) {
-        constexpr double threshold = 0.90;
-        if (x > threshold) {
-            double excess = x - threshold;
-            return threshold + (1.0 - threshold) * std::tanh(excess / (1.0 - threshold));
-        } else if (x < -threshold) {
-            double excess = -x - threshold;
-            return -(threshold + (1.0 - threshold) * std::tanh(excess / (1.0 - threshold)));
-        }
-        return x;
-    }
+    // ★ ダイナミック・ピークリミッター (波形を押し潰さず、ピーク時のみ滑らかにゲインを制御)
+    double env_ = 0.0;
+    double attackCoeff_ = 0.0;
+    double releaseCoeff_ = 0.0;
 };
