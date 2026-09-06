@@ -2,7 +2,6 @@
 #include <algorithm>
 
 constexpr double PI = 3.14159265358979323846;
-// ★ Walkman 1Z 最適化 Q 値 (帯域の重なりによる濁りを排除)
 constexpr double OPTIMIZED_Q = 1.15;
 
 void DspEqualizer::Biquad64::update(double f0, double gainDb, double q, double fs) {
@@ -49,6 +48,9 @@ void DspEqualizer::setSampleRate(double sampleRate) {
     for (int i = 0; i < NUM_BANDS; ++i) {
         filters_[i].update(FREQUENCIES[i], gainsDb_[i], OPTIMIZED_Q, sampleRate_);
     }
+    attackCoeff_ = std::exp(-1.0 / (0.001 * sampleRate_));
+    releaseCoeff_ = std::exp(-1.0 / (0.060 * sampleRate_));
+    env_ = 0.0;
 }
 
 void DspEqualizer::setBandGain(int band, float gainDb) {
@@ -76,6 +78,7 @@ void DspEqualizer::reset() {
     for (int i = 0; i < NUM_BANDS; ++i) {
         filters_[i].resetState();
     }
+    env_ = 0.0;
 }
 
 void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
@@ -89,9 +92,18 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
             filters_[b].process(l, r);
         }
 
-        // ★ Walkman 仕様: 全体音量を下げず、過大ピークのみソフトリミッターで透明に吸収
-        l = softLimit(l);
-        r = softLimit(r);
+        double peak = std::max(std::abs(l), std::abs(r));
+        if (peak > env_) {
+            env_ = peak + attackCoeff_ * (env_ - peak);
+        } else {
+            env_ = peak + releaseCoeff_ * (env_ - peak);
+        }
+
+        if (env_ > 0.98) {
+            double limitGain = 0.98 / env_;
+            l *= limitGain;
+            r *= limitGain;
+        }
 
         left[i] = static_cast<float>(std::clamp(l, -1.0, 1.0));
         right[i] = static_cast<float>(std::clamp(r, -1.0, 1.0));
