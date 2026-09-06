@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/dspDialogRoot"
@@ -216,6 +216,15 @@
                                 app:track="@drawable/switch_track_walkman_outline"
                                 android:checked="true" />
                         </LinearLayout>
+
+                        <!-- ★ SPEC SW の直下に配置した EQ プリセット用スピナー -->
+                        <Spinner
+                            android:id="@+id/dialogSpinnerEqPreset"
+                            android:layout_width="wrap_content"
+                            android:layout_height="26dp"
+                            android:layout_marginTop="4dp"
+                            android:background="@drawable/bg_spinner_dap"
+                            android:popupBackground="#1A1A1A" />
                     </LinearLayout>
                 </LinearLayout>
 
@@ -466,7 +475,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- FREQ ENGINE (親項目) -->
+            <!-- FREQ ENGINE -->
             <LinearLayout
                 android:id="@+id/layoutSectionDsee"
                 android:layout_width="match_parent"
@@ -507,7 +516,7 @@
                     android:popupBackground="#1A1A1A" />
             </LinearLayout>
 
-            <!-- ★ PERFORMANCE PROFILE (間の線なし！FREQ直下のサブ設定) -->
+            <!-- PERFORMANCE PROFILE -->
             <LinearLayout
                 android:id="@+id/layoutSectionPerfMode"
                 android:layout_width="match_parent"
@@ -555,7 +564,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- ★ RICH HARMONICS (ふくよか倍音 / ウォーム) -->
+            <!-- RICH HARMONICS -->
             <LinearLayout
                 android:id="@+id/layoutSectionRichHarmonics"
                 android:layout_width="match_parent"

@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.Activity
 import android.content.res.ColorStateList
@@ -50,9 +50,11 @@ class DspSettingsDialog(
     private var spinnerPerfMode: Spinner? = null
     private var layoutSectionRichHarmonics: View? = null
     private var switchRichHarmonics: SwitchCompat? = null
+    private var spinnerEqPreset: Spinner? = null
 
     private var isUserSeeking = false
     private var currentDuration = 0L
+    private var isApplyingPreset = false
 
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
@@ -75,6 +77,21 @@ class DspSettingsDialog(
     private val dcPhaseTypeValues = arrayOf(0, 2, 1, 3, 5, 4, 6)
 
     private val perfModeOptions = arrayOf("Eco (省電力)", "普通 (標準)", "超高音質 (フルスペック)")
+
+    // ★ 10-Band EQ 定番プリセット定義
+    data class EqPreset(val name: String, val gains: FloatArray)
+
+    private val eqPresets = listOf(
+        EqPreset("Custom", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
+        EqPreset("Flat", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
+        EqPreset("Rock", floatArrayOf(4.5f, 3.0f, 1.5f, 0.0f, -1.0f, -0.5f, 1.0f, 2.5f, 3.5f, 4.0f)),
+        EqPreset("Pop", floatArrayOf(-1.0f, 0.5f, 2.0f, 3.0f, 3.5f, 2.5f, 1.5f, 1.0f, 2.0f, 2.5f)),
+        EqPreset("Jazz", floatArrayOf(3.0f, 2.0f, 1.0f, 1.5f, -1.5f, -1.5f, 0.0f, 1.5f, 2.5f, 3.0f)),
+        EqPreset("Classical", floatArrayOf(4.0f, 3.0f, 2.0f, 1.5f, -1.0f, -1.0f, 0.0f, 2.0f, 3.0f, 3.5f)),
+        EqPreset("Bass Boost", floatArrayOf(6.0f, 4.5f, 3.0f, 1.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f)),
+        EqPreset("Vocal", floatArrayOf(-2.0f, -1.5f, -0.5f, 1.0f, 3.0f, 3.5f, 2.5f, 1.0f, 0.0f, -1.0f)),
+        EqPreset("Treble Boost", floatArrayOf(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 1.5f, 3.0f, 4.5f, 6.0f))
+    )
 
     fun show() {
         val bottomSheetDialog = BottomSheetDialog(activity, R.style.CustomBottomSheetDialogTheme).apply {
@@ -124,6 +141,7 @@ class DspSettingsDialog(
         layoutSectionPerfMode = view.findViewById(R.id.layoutSectionPerfMode)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
+        spinnerEqPreset = view.findViewById(R.id.dialogSpinnerEqPreset)
 
         imageArtwork = view.findViewById(R.id.dialogImageArtwork)
         textTrackTitle = view.findViewById(R.id.dialogTextTrackTitle)
@@ -138,7 +156,7 @@ class DspSettingsDialog(
                 view, btnClose, switchDirectSource, switchEqEnable, switchSpectrumEnable,
                 switchCascadeFir, switchVolLock, btnEqEdit, btnEqFlat, btnEqPlus, btnEqMinus,
                 textEqBandFreq, textEqGainValue, spinnerBitDepth, spinnerDither, spinnerDcPhase,
-                spinnerDsee, spinnerUpsample, spinnerPerfMode!!, btnPrev, btnNext, btnPlayPause!!
+                spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!
             )
         }
 
@@ -175,7 +193,13 @@ class DspSettingsDialog(
             walkmanEqView?.isSpectrumEnabled = isChecked
         }
 
-        // 各セクションの活性・グレーアウト更新
+        // ★ EQ プリセットおよび全 DSP セクションの活性 / グレーアウト制御
+        fun updateEqPresetState(isDirect: Boolean, eqEnabled: Boolean) {
+            val isPresetActive = !isDirect && eqEnabled
+            spinnerEqPreset?.isEnabled = isPresetActive
+            spinnerEqPreset?.alpha = if (isPresetActive) 1.0f else 0.35f
+        }
+
         fun updateDspSectionsState(isDirect: Boolean, factor: Int) {
             val dspAlpha = if (isDirect) 0.3f else 1.0f
             val dspEnabled = !isDirect
@@ -206,6 +230,7 @@ class DspSettingsDialog(
             switchCascadeFir.isEnabled = isUpsampleActive
 
             updatePerfModeState(isDseeActive)
+            updateEqPresetState(isDirect, switchEqEnable.isChecked)
         }
 
         // DIRECT SOURCE
@@ -264,11 +289,21 @@ class DspSettingsDialog(
         setEditMode(false)
         updateEqHeader(walkmanEqView?.selectedBandIndex ?: 7, walkmanEqView?.gains?.getOrNull(walkmanEqView?.selectedBandIndex ?: 7) ?: 0f)
 
+        // 手動調整時は自動的に Custom (0) に切り替える
+        fun markCustomPreset() {
+            if (isApplyingPreset) return
+            if (spinnerEqPreset?.selectedItemPosition != 0) {
+                spinnerEqPreset?.setSelection(0)
+                appPrefs.selectedEqPresetIndex = 0
+            }
+        }
+
         walkmanEqView?.onBandSelectedListener = { bandIdx, gain -> updateEqHeader(bandIdx, gain) }
         walkmanEqView?.onGainChangedListener = { bandIdx, gain, allGains ->
             updateEqHeader(bandIdx, gain)
             NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, allGains)
             appPrefs.setAllEqGains(allGains)
+            markCustomPreset()
         }
 
         btnEqEdit.setOnClickListener { setEditMode(!(walkmanEqView?.isEditMode ?: false)) }
@@ -277,14 +312,57 @@ class DspSettingsDialog(
             walkmanEqView?.isDirectBypass = !isChecked
             NativeAudioEngine.nativeSetEqualizer(isChecked, walkmanEqView?.gains ?: FloatArray(10))
             if (!isChecked) setEditMode(false)
+            updateEqPresetState(appPrefs.isDirectSource, isChecked)
         }
 
-        btnEqPlus.setOnClickListener { walkmanEqView?.stepGain(+0.5f) }
-        btnEqMinus.setOnClickListener { walkmanEqView?.stepGain(-0.5f) }
-        btnEqFlat.setOnClickListener { walkmanEqView?.resetAllFlat() }
+        btnEqPlus.setOnClickListener {
+            walkmanEqView?.stepGain(+0.5f)
+            markCustomPreset()
+        }
+        btnEqMinus.setOnClickListener {
+            walkmanEqView?.stepGain(-0.5f)
+            markCustomPreset()
+        }
+        btnEqFlat.setOnClickListener {
+            walkmanEqView?.resetAllFlat()
+            spinnerEqPreset?.setSelection(1) // Flat プリセット
+            appPrefs.selectedEqPresetIndex = 1
+        }
 
         // スピナー類
         val spinnerLayout = if (isDarkTheme) R.layout.item_spinner_dap else R.layout.item_spinner_dap_light
+
+        // ★ EQ プリセットスピナーのアダプター設定
+        val eqPresetNames = eqPresets.map { it.name }.toTypedArray()
+        val eqPresetAdapter = ArrayAdapter(activity, spinnerLayout, eqPresetNames).apply { setDropDownViewResource(spinnerLayout) }
+        spinnerEqPreset?.adapter = eqPresetAdapter
+        spinnerEqPreset?.setSelection(appPrefs.selectedEqPresetIndex.coerceIn(0, eqPresets.size - 1))
+        spinnerEqPreset?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                if (position != appPrefs.selectedEqPresetIndex) {
+                    appPrefs.selectedEqPresetIndex = position
+                }
+                if (position != 0) { // Custom 以外が選択されたらゲイン値を反映
+                    isApplyingPreset = true
+                    try {
+                        val selectedPreset = eqPresets[position]
+                        for (i in 0..9) {
+                            walkmanEqView?.gains?.set(i, selectedPreset.gains[i])
+                        }
+                        walkmanEqView?.invalidate()
+                        val currentGains = walkmanEqView?.gains ?: FloatArray(10)
+                        NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, currentGains)
+                        appPrefs.setAllEqGains(currentGains)
+                        val curBand = walkmanEqView?.selectedBandIndex ?: 7
+                        updateEqHeader(curBand, currentGains.getOrNull(curBand) ?: 0f)
+                    } finally {
+                        isApplyingPreset = false
+                    }
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        updateEqPresetState(appPrefs.isDirectSource, appPrefs.isEqEnabled)
 
         // Bit Depth
         val bitAdapter = ArrayAdapter(activity, spinnerLayout, bitOptions).apply { setDropDownViewResource(spinnerLayout) }
@@ -398,6 +476,7 @@ class DspSettingsDialog(
             spinnerPerfMode = null
             layoutSectionRichHarmonics = null
             switchRichHarmonics = null
+            spinnerEqPreset = null
             FreqPresetManager.clearFrontDialogRefs()
             onDismiss()
         }
@@ -412,7 +491,6 @@ class DspSettingsDialog(
         spinnerPerfMode?.isEnabled = isPerfActive
         spinnerPerfMode?.alpha = perfAlpha
 
-        // ★ RICH HARMONICS も FREQ の状態に完全連動してグレーアウト！
         layoutSectionRichHarmonics?.alpha = perfAlpha
         switchRichHarmonics?.isEnabled = isPerfActive
     }
@@ -486,6 +564,7 @@ class DspSettingsDialog(
         spinnerDsee: Spinner,
         spinnerUpsample: Spinner,
         spinnerPerfMode: Spinner,
+        spinnerEqPreset: Spinner,
         btnPrev: ImageButton,
         btnNext: ImageButton,
         btnPlayPause: ImageButton
@@ -518,6 +597,8 @@ class DspSettingsDialog(
         }
         spinnerPerfMode.setBackgroundResource(R.drawable.bg_spinner_dap_light)
         spinnerPerfMode.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+        spinnerEqPreset.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+        spinnerEqPreset.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
         view.findViewById<TextView>(R.id.textDseeTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textDseeSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<TextView>(R.id.textUpsampleTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
