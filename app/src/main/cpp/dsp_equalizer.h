@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <vector>
 #include <cmath>
@@ -55,7 +55,16 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
-    // ★ オートヘッドルームゲイン (ブースト時のデジタルクリップ・音割れを完全防止)
-    double headRoomGain_ = 1.0;
-    void recalculateHeadroom();
+    // ★ Walkman 仕様: 全体音量を下げず、過大ピークのみを滑らかに吸収するソフトニーリミッター
+    static inline double softLimit(double x) {
+        constexpr double threshold = 0.90;
+        if (x > threshold) {
+            double excess = x - threshold;
+            return threshold + (1.0 - threshold) * std::tanh(excess / (1.0 - threshold));
+        } else if (x < -threshold) {
+            double excess = -x - threshold;
+            return -(threshold + (1.0 - threshold) * std::tanh(excess / (1.0 - threshold)));
+        }
+        return x;
+    }
 };
