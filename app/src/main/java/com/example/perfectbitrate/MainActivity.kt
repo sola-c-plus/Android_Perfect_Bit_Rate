@@ -133,6 +133,7 @@ class MainActivity : AppCompatActivity() {
             if (activeOutputDevice != null) {
                 playbackService?.restoreVolumeForDevice(activeOutputDevice)
                 playbackService?.initAudioTrack(currentBitMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
+                geckoController.sendCommand("resume_audio")
             }
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
@@ -617,6 +618,11 @@ class MainActivity : AppCompatActivity() {
             bitActivityMask = (bitActivityMask ushr 2) or (bitActivityMask and 0x01)
             lastBitResetTime = now
         }
+    }
+
+        override fun onResume() {
+        super.onResume()
+        geckoController.sendCommand("resume_audio")
     }
 
     override fun onPause() {

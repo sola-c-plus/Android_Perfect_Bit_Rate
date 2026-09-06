@@ -1,4 +1,4 @@
-﻿if (window.self !== window.top) {
+if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
 
@@ -156,16 +156,18 @@ function forceFullVolume() {
 setInterval(forceFullVolume, 2000);
 
 function keepPlayingInBackground() {
-    if (!userWantsPlaying) return;
     const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
-    if (video && video.paused && !video.ended) {
+    if (video && !video.paused && !video.ended) {
+        userWantsPlaying = true;
+    }
+    if (userWantsPlaying && video && video.paused && !video.ended) {
         video.play().catch(() => {});
     }
     if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
         audioCtx.resume().catch(() => {});
     }
 }
-setInterval(keepPlayingInBackground, 1500);
+setInterval(keepPlayingInBackground, 800);
 
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
@@ -338,9 +340,13 @@ HTMLMediaElement.prototype.pause = function() {
 
 function findAndAttachVideo() {
     const video = document.querySelector('video') || document.querySelector('audio');
-    if (video && video !== currentMediaElement) {
-        attachAudioPipeline(video);
-        scanStreamCodec();
+    if (video) {
+        if (video !== currentMediaElement) {
+            attachAudioPipeline(video);
+            scanStreamCodec();
+        } else if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+        }
     }
 }
 setInterval(findAndAttachVideo, 1000);

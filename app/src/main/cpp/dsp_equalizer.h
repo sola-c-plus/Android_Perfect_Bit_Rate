@@ -54,26 +54,21 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
-    // ★ 15Hz サブソニックDCブロック (低音ブースト時の超低周波のうねり・直流偏りをカット)
-    double dcBlock_xL_ = 0.0, dcBlock_yL_ = 0.0;
-    double dcBlock_xR_ = 0.0, dcBlock_yR_ = 0.0;
-    double dcCoeff_ = 0.998;
+    // ★ 18Hz サブソニックフィルター (超低周波のDC揺らぎをカットし低音の抜けを最大化)
+    double hp_xL_ = 0.0, hp_yL_ = 0.0;
+    double hp_xR_ = 0.0, hp_yR_ = 0.0;
+    double hpCoeff_ = 0.997;
 
-    // ★ サイドチェイン・ハイパス (低音の波そのものでリミッターが暴れるのを遮断)
-    double scHp_x_ = 0.0, scHp_y_ = 0.0;
-    double scCoeff_ = 0.985;
-
-    // ★ Walkman 1Z 準拠 ルックアヘッド・リミッター (真の 0.999 フルスケール)
+    // ★ 真の 4ms ルックアヘッド・ブリックウォールリミッター (波形切断を 100% 物理阻止)
     static constexpr size_t MAX_LOOKAHEAD = 512;
-    size_t lookaheadFrames_ = 168;
+    size_t lookaheadFrames_ = 192; // 約 4.0ms
     std::vector<double> delayBufL_;
     std::vector<double> delayBufR_;
     size_t bufWritePos_ = 0;
     size_t bufReadPos_ = 0;
     bool isPrimed_ = false;
 
-    double env_ = 0.0;
-    double currentGain_ = 1.0;
-    double attackCoeff_ = 0.0;
+    double peakEnv_ = 0.0;
+    double gain_ = 1.0;
     double releaseCoeff_ = 0.0;
 };
