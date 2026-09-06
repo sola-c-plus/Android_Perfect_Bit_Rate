@@ -19,7 +19,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
-import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
@@ -29,14 +28,6 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import org.json.JSONObject
-import org.mozilla.geckoview.GeckoResult
-import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoRuntimeSettings
-import org.mozilla.geckoview.GeckoSession
-import org.mozilla.geckoview.GeckoSessionSettings
-import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.WebExtension
 import java.net.URL
 import java.util.concurrent.Executors
 
@@ -58,20 +49,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDspSettings: ImageButton
     private lateinit var btnUiSettings: ImageButton
 
-    private lateinit var geckoView: GeckoView
-    private lateinit var geckoSession: GeckoSession
-    private var geckoRuntime: GeckoRuntime? = null
-    private lateinit var audioManager: AudioManager
-
+    // ★ 独立管理された各コントローラー
     private val appPrefs by lazy { AppPreferences.get() }
-    private var appWakeLock: PowerManager.WakeLock? = null
-
-    // ★ 独立化された Bluetooth コーデックトラッカー
     private lateinit var btCodecTracker: BluetoothCodecTracker
+    private lateinit var geckoController: GeckoSessionController
+    private var activePlayerDialog: PlayerDialogController? = null
+    private var activeDspDialog: DspSettingsDialog? = null
 
     private var playbackService: BitPerfectPlaybackService? = null
     private var isServiceBound = false
-    private var activeWebExtensionPort: WebExtension.Port? = null
+    private var audioManager: AudioManager? = null
+    private var appWakeLock: PowerManager.WakeLock? = null
 
     private var baseSampleRate = 48000
     private var upsampleFactor = 1
@@ -87,9 +75,6 @@ class MainActivity : AppCompatActivity() {
     private var currentPosition = 0L
     private var currentArtworkBitmap: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
-
-    private var activePlayerDialog: PlayerDialogController? = null
-    private var activeDspDialog: DspSettingsDialog? = null
 
     private var isDirectSource = false
     private var currentThemeMode = "dark"
@@ -123,9 +108,7 @@ class MainActivity : AppCompatActivity() {
         detectAudioOutputDevice()
         playbackService?.setOutputDevice(activeOutputDevice)
         btCodecTracker.fetchCurrentCodec()
-        try {
-            activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
-        } catch (e: Exception) {}
+        geckoController.sendCommand("resume_audio")
     }
 
     private val requestMultiplePermissionsLauncher =
@@ -185,22 +168,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            playbackService?.onCommandListener = { cmd ->
-                try {
-                    val jsonCmd = JSONObject().apply { put("command", cmd) }
-                    activeWebExtensionPort?.postMessage(jsonCmd)
-                } catch (e: Exception) {}
-            }
-
-            playbackService?.onSeekListener = { pos ->
-                try {
-                    val jsonCmd = JSONObject().apply {
-                        put("command", "seek")
-                        put("position", pos)
-                    }
-                    activeWebExtensionPort?.postMessage(jsonCmd)
-                } catch (e: Exception) {}
-            }
+            playbackService?.onCommandListener = { cmd -> geckoController.sendCommand(cmd) }
+            playbackService?.onSeekListener = { pos -> geckoController.sendSeek(pos) }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             playbackService = null
@@ -233,7 +202,6 @@ class MainActivity : AppCompatActivity() {
         btnReload = findViewById(R.id.btnReload)
         btnDspSettings = findViewById(R.id.btnDspSettings)
         btnUiSettings = findViewById(R.id.btnUiSettings)
-        geckoView = findViewById(R.id.geckoview)
 
         isDirectSource = appPrefs.isDirectSource
         currentThemeMode = appPrefs.uiThemeMode
@@ -251,23 +219,84 @@ class MainActivity : AppCompatActivity() {
         NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, eqGains)
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
         checkAndRequestPermissions()
 
-        // ★ BluetoothCodecTracker の起動 & コーデック変更の自動受取
+        // 1. Bluetooth コントローラー起動
         btCodecTracker = BluetoothCodecTracker(this) { codec ->
             currentBtCodecName = codec
             updateStatus()
         }
         btCodecTracker.start()
 
+        // 2. GeckoView コントローラー起動
+        geckoController = GeckoSessionController(
+            activity = this,
+            geckoView = findViewById(R.id.geckoview),
+            listener = object : GeckoSessionController.Listener {
+                override fun onFlush() { playbackService?.resetBuffer() }
+                override fun onPcm(pcmBytes: ByteArray, inBitMode: String) {
+                    pcmPacketCount += pcmBytes.size
+                    isPlayingState = true
+                    lastPcmTime = System.currentTimeMillis()
+                    playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
+                }
+                override fun onCodec(codec: String, rate: Int) {
+                    currentCodec = codec
+                    if (rate > 0 && rate != baseSampleRate) {
+                        playbackService?.resetBuffer()
+                        baseSampleRate = rate
+                        playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
+                    }
+                    playbackService?.updateCodec(codec)
+                    updateStatus()
+                }
+                override fun onMetadata(title: String, artist: String, artworkUrl: String) {
+                    currentTitle = title
+                    currentArtist = artist
+                    playbackService?.updateMetadata(title, artist, artworkUrl)
+                    if (artworkUrl.isNotEmpty()) {
+                        imageExecutor.execute {
+                            try {
+                                val stream = URL(artworkUrl).openStream()
+                                val bmp = BitmapFactory.decodeStream(stream)
+                                runOnUiThread {
+                                    currentArtworkBitmap = bmp
+                                    updateDialogPlayerUi()
+                                }
+                            } catch (e: Exception) { Log.e("MainActivity", "Image decode error", e) }
+                        }
+                    }
+                    updateDialogPlayerUi()
+                }
+                override fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean) {
+                    currentPosition = currentMs
+                    currentDuration = durationMs
+                    isPlayingState = isPlaying
+                    playbackService?.updateProgress(currentMs, durationMs, isPlaying)
+                    updateDialogPlayerUi()
+                }
+                override fun onState(isPlaying: Boolean) {
+                    isPlayingState = isPlaying
+                    if (!isPlaying) {
+                        peakDbL = -60f
+                        peakDbR = -60f
+                        bitActivityMask = 0
+                        walkmanLevelMeter?.reset()
+                    }
+                    playbackService?.updatePlaybackState(isPlaying)
+                    updateDialogPlayerUi()
+                }
+                override fun isDarkTheme(): Boolean = isDarkThemeActive()
+                override fun isAdBlockEnabled(): Boolean = appPrefs.isAdBlockEnabled
+            }
+        )
+        geckoController.init()
+
         val serviceIntent = Intent(this, BitPerfectPlaybackService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         registerAudioDeviceCallback()
-        setupGeckoView()
-
         applyThemeUi(currentThemeMode)
 
         btnReload.setOnClickListener { reloadDirectStream() }
@@ -285,29 +314,16 @@ class MainActivity : AppCompatActivity() {
     private fun isDarkThemeActive(): Boolean {
         return when (currentThemeMode) {
             "light" -> false
-            "auto" -> {
-                val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
-                nightMode == Configuration.UI_MODE_NIGHT_YES
-            }
+            "auto" -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
             else -> true
         }
-    }
-
-    private fun sendWebThemeSetting(theme: String) {
-        try {
-            activeWebExtensionPort?.postMessage(JSONObject().apply {
-                put("command", "setWebTheme")
-                put("theme", theme)
-            })
-        } catch (e: Exception) {}
     }
 
     private fun applyThemeUi(themeMode: String) {
         currentThemeMode = themeMode
         val isDark = isDarkThemeActive()
-
         walkmanLevelMeter?.isLightMode = !isDark
-        sendWebThemeSetting(if (isDark) "dark" else "light")
+        geckoController.sendWebTheme(isDark)
 
         if (isDark) {
             mainRootLayout.setBackgroundColor(Color.parseColor("#000000"))
@@ -318,11 +334,9 @@ class MainActivity : AppCompatActivity() {
             textCodec.setTextColor(Color.parseColor("#A0A0A0"))
             textTransfer.setTextColor(Color.parseColor("#666666"))
             textPeak.setTextColor(Color.parseColor("#B0B0B0"))
-
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
-
             btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
             btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
             btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
@@ -335,11 +349,9 @@ class MainActivity : AppCompatActivity() {
             textCodec.setTextColor(Color.parseColor("#636366"))
             textTransfer.setTextColor(Color.parseColor("#636366"))
             textPeak.setTextColor(Color.parseColor("#48484A"))
-
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
-
             btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
             btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
             btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
@@ -400,26 +412,17 @@ class MainActivity : AppCompatActivity() {
             },
             onPlayerCommand = { cmd ->
                 if (cmd == "play_pause") {
-                    val actCmd = if (isPlayingState) "pause" else "play"
-                    try { activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", actCmd) }) } catch (e: Exception) {}
+                    geckoController.sendCommand(if (isPlayingState) "pause" else "play")
                 } else {
-                    try { activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", cmd) }) } catch (e: Exception) {}
+                    geckoController.sendCommand(cmd)
                 }
             },
-            onSeekTo = { pos ->
-                try {
-                    activeWebExtensionPort?.postMessage(JSONObject().apply {
-                        put("command", "seek")
-                        put("position", pos)
-                    })
-                } catch (e: Exception) {}
-            },
+            onSeekTo = { pos -> geckoController.sendSeek(pos) },
             onDismiss = {
                 activePlayerDialog = null
                 activeDspDialog = null
             }
         )
-
         activePlayerDialog = dspDialog
         activeDspDialog = dspDialog
         dspDialog.show()
@@ -434,30 +437,17 @@ class MainActivity : AppCompatActivity() {
                 applyThemeUi(newTheme)
                 showUiSettingsDialog()
             },
-            onAdBlockChanged = { isEnabled ->
-                sendAdBlockSetting(isEnabled)
-            },
+            onAdBlockChanged = { isEnabled -> geckoController.sendAdBlock(isEnabled) },
             onPlayerCommand = { cmd ->
                 if (cmd == "play_pause") {
-                    val actCmd = if (isPlayingState) "pause" else "play"
-                    try { activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", actCmd) }) } catch (e: Exception) {}
+                    geckoController.sendCommand(if (isPlayingState) "pause" else "play")
                 } else {
-                    try { activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", cmd) }) } catch (e: Exception) {}
+                    geckoController.sendCommand(cmd)
                 }
             },
-            onSeekTo = { pos ->
-                try {
-                    activeWebExtensionPort?.postMessage(JSONObject().apply {
-                        put("command", "seek")
-                        put("position", pos)
-                    })
-                } catch (e: Exception) {}
-            },
-            onDismiss = {
-                activePlayerDialog = null
-            }
+            onSeekTo = { pos -> geckoController.sendSeek(pos) },
+            onDismiss = { activePlayerDialog = null }
         )
-
         activePlayerDialog = uiDialog
         uiDialog.show()
     }
@@ -467,19 +457,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkAndRequestPermissions() {
-        val permissionsToRequest = mutableListOf<String>()
+        val permissions = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT)
+                permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+                permissions.add(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        if (permissionsToRequest.isNotEmpty()) {
-            requestMultiplePermissionsLauncher.launch(permissionsToRequest.toTypedArray())
+        if (permissions.isNotEmpty()) {
+            requestMultiplePermissionsLauncher.launch(permissions.toTypedArray())
         }
     }
 
@@ -492,33 +482,18 @@ class MainActivity : AppCompatActivity() {
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
             playbackService?.initAudioTrack(currentBitMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
-            try {
-                activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "resume_audio") })
-            } catch (e: Exception) {}
-            geckoSession.reload()
+            geckoController.reload()
             updateStatus()
         }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            val isUsb = isUsbDevice(activeOutputDevice)
-            if (isUsb) {
+            if (isUsbDevice(activeOutputDevice)) {
                 playbackService?.lockSystemVolumeToMax()
                 if (event?.repeatCount == 0) {
-                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-                        try {
-                            activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "next") })
-                        } catch (e: Exception) {
-                            Log.e("BitPerfect", "Next track error", e)
-                        }
-                    } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                        try {
-                            activeWebExtensionPort?.postMessage(JSONObject().apply { put("command", "prev") })
-                        } catch (e: Exception) {
-                            Log.e("BitPerfect", "Prev track error", e)
-                        }
-                    }
+                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) geckoController.sendCommand("next")
+                    else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) geckoController.sendCommand("prev")
                 }
                 return true
             }
@@ -528,25 +503,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            if (isUsbDevice(activeOutputDevice)) {
-                return true
-            }
+            if (isUsbDevice(activeOutputDevice)) return true
         }
         return super.onKeyUp(keyCode, event)
     }
 
-    private fun sendAdBlockSetting(enabled: Boolean) {
-        try {
-            val jsonCmd = JSONObject().apply {
-                put("command", "setAdBlock")
-                put("enabled", enabled)
-            }
-            activeWebExtensionPort?.postMessage(jsonCmd)
-        } catch (e: Exception) {}
-    }
-
     private fun registerAudioDeviceCallback() {
-        audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
+        audioManager?.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
                 uiHandler.removeCallbacks(deviceDetectRunnable)
                 uiHandler.postDelayed(deviceDetectRunnable, 250)
@@ -559,7 +522,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun detectAudioOutputDevice() {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val devices = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS) ?: return
         var usbDevice: AudioDeviceInfo? = null
         var btDevice: AudioDeviceInfo? = null
 
@@ -595,102 +558,10 @@ class MainActivity : AppCompatActivity() {
         updateStatus()
     }
 
-    private fun safeToJson(msg: Any?): JSONObject? {
-        return when (msg) {
-            is JSONObject -> msg
-            is String -> try { JSONObject(msg) } catch (e: Exception) { null }
-            is Map<*, *> -> try { JSONObject(msg) } catch (e: Exception) { null }
-            null -> null
-            else -> try { JSONObject(msg.toString()) } catch (e: Exception) { null }
-        }
-    }
-
-    private fun handleIncomingMessage(msg: JSONObject) {
-        when (msg.optString("type")) {
-            "flush" -> playbackService?.resetBuffer()
-            "pcm" -> {
-                val base64Pcm = msg.optString("pcm", "")
-                if (base64Pcm.isNotEmpty()) {
-                    val inBitMode = msg.optString("bitMode", "float32")
-                    try {
-                        val pcmBytes = Base64.decode(base64Pcm, Base64.NO_WRAP)
-                        if (pcmBytes != null && pcmBytes.isNotEmpty()) {
-                            pcmPacketCount += pcmBytes.size
-                            isPlayingState = true
-                            lastPcmTime = System.currentTimeMillis()
-                            playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
-                        }
-                    } catch (e: Exception) {
-                        Log.e("BitPerfect", "PCM Base64 decode error", e)
-                    }
-                }
-            }
-            "codec" -> {
-                currentCodec = msg.optString("codec", currentCodec)
-                val rate = msg.optInt("sampleRate", 0)
-                if (rate > 0 && rate != baseSampleRate) {
-                    playbackService?.resetBuffer()
-                    baseSampleRate = rate
-                    playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
-                }
-                playbackService?.updateCodec(currentCodec)
-                updateStatus()
-            }
-            "meta" -> {
-                val title = msg.optString("title", "YouTube Music")
-                val artist = msg.optString("artist", "")
-                val artwork = msg.optString("artwork", "")
-                currentTitle = title
-                currentArtist = artist
-                playbackService?.updateMetadata(title, artist, artwork)
-
-                if (artwork.isNotEmpty()) {
-                    imageExecutor.execute {
-                        try {
-                            val stream = URL(artwork).openStream()
-                            val bmp = BitmapFactory.decodeStream(stream)
-                            runOnUiThread {
-                                currentArtworkBitmap = bmp
-                                updateDialogPlayerUi()
-                            }
-                        } catch (e: Exception) {
-                            Log.e("BitPerfect", "Image decode error", e)
-                        }
-                    }
-                }
-                updateDialogPlayerUi()
-            }
-            "progress" -> {
-                val current = msg.optLong("current", 0L)
-                val duration = msg.optLong("duration", 0L)
-                val isPlaying = msg.optBoolean("playing", isPlayingState)
-                currentPosition = current
-                currentDuration = duration
-                isPlayingState = isPlaying
-                playbackService?.updateProgress(current, duration, isPlaying)
-                updateDialogPlayerUi()
-            }
-            "state" -> {
-                val isPlaying = msg.optBoolean("playing", true)
-                isPlayingState = isPlaying
-                if (!isPlaying) {
-                    peakDbL = -60f
-                    peakDbR = -60f
-                    bitActivityMask = 0
-                    walkmanLevelMeter?.reset()
-                }
-                playbackService?.updatePlaybackState(isPlaying)
-                updateDialogPlayerUi()
-            }
-        }
-    }
-
     private fun updateStatus() {
         val mb = pcmPacketCount / (1024.0 * 1024.0)
-
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
-
         val activeFactor = if (isDirectSource) 1 else upsampleFactor
         val dspTag = if (isDirectSource) " [DIRECT]" else (if (activeFactor > 1) " [DSP ${activeFactor}x]" else "")
 
@@ -705,11 +576,7 @@ class MainActivity : AppCompatActivity() {
                 badgeDirect.text = btCodecBadge
                 badgeDirect.setBackgroundResource(R.drawable.bg_badge_bluetooth)
                 badgeDirect.setTextColor(Color.BLACK)
-                textCodec.text = if (currentBtCodecName.isNotEmpty()) {
-                    "$currentBtCodecName | ${currentCodec.uppercase()}"
-                } else {
-                    currentCodec.uppercase()
-                }
+                textCodec.text = if (currentBtCodecName.isNotEmpty()) "$currentBtCodecName | ${currentCodec.uppercase()}" else currentCodec.uppercase()
             }
         } else {
             badgeDirect.text = "STANDARD MIX$dspTag"
@@ -746,112 +613,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupGeckoView() {
-        val runtimeSettings = GeckoRuntimeSettings.Builder()
-            .consoleOutput(true)
-            .aboutConfigEnabled(true)
-            .build()
-
-        geckoRuntime = GeckoRuntime.getDefault(this)
-
-        val sessionSettings = GeckoSessionSettings.Builder()
-            .usePrivateMode(false)
-            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
-            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
-            .allowJavascript(true)
-            .build()
-
-        geckoSession = GeckoSession(sessionSettings)
-        
-        geckoSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
-            override fun onContentPermissionRequest(
-                session: GeckoSession,
-                perm: GeckoSession.PermissionDelegate.ContentPermission
-            ): GeckoResult<Int>? {
-                if (perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE ||
-                    perm.permission == GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE
-                ) {
-                    return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
-                }
-                return null
-            }
-        }
-
-        geckoRuntime?.let { runtime ->
-            geckoSession.open(runtime)
-            geckoView.setSession(geckoSession)
-
-            val extensionLocation = "resource://android/assets/yt_capture_extension/"
-            val extensionId = "yt_capture@example.com"
-
-            val messageDelegate = object : WebExtension.MessageDelegate {
-                override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
-                    safeToJson(message)?.let { handleIncomingMessage(it) }
-                    return GeckoResult.fromValue(JSONObject())
-                }
-
-                override fun onConnect(port: WebExtension.Port) {
-                    activeWebExtensionPort = port
-                    sendAdBlockSetting(appPrefs.isAdBlockEnabled)
-                    sendWebThemeSetting(if (isDarkThemeActive()) "dark" else "light")
-
-                    port.setDelegate(object : WebExtension.PortDelegate {
-                        override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                            safeToJson(message)?.let { handleIncomingMessage(it) }
-                        }
-                        override fun onDisconnect(port: WebExtension.Port) {
-                            if (activeWebExtensionPort == port) activeWebExtensionPort = null
-                        }
-                    })
-                }
-            }
-
-            runtime.webExtensionController
-                .ensureBuiltIn(extensionLocation, extensionId)
-                .accept({ extension ->
-                    if (extension != null) {
-                        runOnUiThread {
-                            extension.setMessageDelegate(messageDelegate, "browser")
-                            geckoSession.webExtensionController.setMessageDelegate(extension, messageDelegate, "browser")
-                            geckoSession.loadUri("https://music.youtube.com")
-                        }
-                    }
-                }, { e ->
-                    Log.e("BitPerfect", "WebExtension error", e)
-                    runOnUiThread {
-                        geckoSession.loadUri("https://music.youtube.com")
-                    }
-                })
-        }
-    }
-
     override fun onPause() {
         super.onPause()
-        geckoSession.setActive(true)
-        geckoSession.setFocused(true)
+        geckoController.onPause()
     }
 
     override fun onStop() {
         super.onStop()
-        geckoSession.setActive(true)
-        geckoSession.setFocused(true)
+        geckoController.onStop()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         uiHandler.removeCallbacks(uiUpdateRunnable)
         uiHandler.removeCallbacks(deviceDetectRunnable)
-        if (appWakeLock?.isHeld == true) {
-            appWakeLock?.release()
-        }
-        
-        // ★ BluetoothCodecTracker の安全な終了
+        if (appWakeLock?.isHeld == true) appWakeLock?.release()
         btCodecTracker.stop()
-
+        geckoController.onDestroy()
         if (isServiceBound) {
             unbindService(serviceConnection)
             isServiceBound = false
         }
-        geckoSession.close()
     }
 }
