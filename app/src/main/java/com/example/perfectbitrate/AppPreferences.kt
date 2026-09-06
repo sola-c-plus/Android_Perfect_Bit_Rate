@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -26,6 +26,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SELECTED_PRESET_INDEX = "selected_preset_index"
         private const val KEY_RICH_HARMONICS_ENABLED = "rich_harmonics_enabled"
         private const val KEY_EQ_ENABLED = "eq_enabled"
+        private const val KEY_EQ_PRESET_INDEX = "eq_preset_index"
         private const val KEY_EQ_GAIN_PREFIX = "eq_gain_"
 
         @Volatile
@@ -101,6 +102,10 @@ class AppPreferences private constructor(context: Context) {
     var isEqEnabled: Boolean
         get() = prefs.getBoolean(KEY_EQ_ENABLED, false)
         set(value) = prefs.edit { putBoolean(KEY_EQ_ENABLED, value) }
+
+    var selectedEqPresetIndex: Int
+        get() = prefs.getInt(KEY_EQ_PRESET_INDEX, 1)
+        set(value) = prefs.edit { putInt(KEY_EQ_PRESET_INDEX, value) }
 
     fun getEqGain(bandIndex: Int): Float {
         return prefs.getFloat("$KEY_EQ_GAIN_PREFIX$bandIndex", 0.0f)
