@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -274,17 +274,21 @@ class BitPerfectPlaybackService : Service() {
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
         val changed = (activeOutputDevice?.id != device?.id)
+        val needsTrackInit = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED)
         activeOutputDevice = device
 
         if (device == null) {
             isVolumeLocked = false
             muteVolumeToZero()
             clearPreviousMixerAttributes()
+        } else {
+            restoreVolumeForDevice(device)
         }
 
         updateVolumeControlMode()
 
-        if (changed && device != null) {
+        // ★ 事前接続 DAC 対応: デバイスが変更された時だけでなく、AudioTrack が未生成の場合も確実に初期化
+        if ((changed || needsTrackInit) && device != null) {
             isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, device)
@@ -754,6 +758,7 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 audioTrack = createdTrack
+                createdTrack?.let { restoreVolumeForDevice(targetDevice) }
 
                 val actualModeStr = when (finalEncoding) {
                     AudioFormat.ENCODING_PCM_32BIT -> "32bit"

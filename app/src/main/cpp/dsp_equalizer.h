@@ -54,9 +54,18 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
-    // ★ スタジオ級ルックアヘッド・スムーズリミッター (ハードクリップを完全排除)
+    // ★ 15Hz サブソニックDCブロック (低音ブースト時の超低周波のうねり・直流偏りをカット)
+    double dcBlock_xL_ = 0.0, dcBlock_yL_ = 0.0;
+    double dcBlock_xR_ = 0.0, dcBlock_yR_ = 0.0;
+    double dcCoeff_ = 0.998;
+
+    // ★ サイドチェイン・ハイパス (低音の波そのものでリミッターが暴れるのを遮断)
+    double scHp_x_ = 0.0, scHp_y_ = 0.0;
+    double scCoeff_ = 0.985;
+
+    // ★ Walkman 1Z 準拠 ルックアヘッド・リミッター (真の 0.999 フルスケール)
     static constexpr size_t MAX_LOOKAHEAD = 512;
-    size_t lookaheadFrames_ = 168; // 約 3.5ms
+    size_t lookaheadFrames_ = 168;
     std::vector<double> delayBufL_;
     std::vector<double> delayBufR_;
     size_t bufWritePos_ = 0;
@@ -67,15 +76,4 @@ private:
     double currentGain_ = 1.0;
     double attackCoeff_ = 0.0;
     double releaseCoeff_ = 0.0;
-
-    // 3次エルミートスプラインによるソフト飽和 (角の立たない滑らかなリミット)
-    static inline double hermiteSmooth(double x) {
-        constexpr double th = 0.92;
-        double absX = std::abs(x);
-        if (absX <= th) return x;
-        if (absX >= 1.25) return (x > 0.0) ? 0.999 : -0.999;
-        double t = (absX - th) / (1.25 - th);
-        double compressed = th + (0.999 - th) * (t * t * (3.0 - 2.0 * t));
-        return (x > 0.0) ? compressed : -compressed;
-    }
 };
