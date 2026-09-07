@@ -11,13 +11,14 @@ static std::vector<uint8_t> g_outDspBuffer;
 static std::mutex g_dspMutex;
 
 static int g_currentDitherMode = 1;
-static int g_currentFirFilterType = 2; // Minimum Phase Sharp
+static int g_currentFirFilterType = 2;
 static int g_currentDcPhaseType = 2;
-static int g_currentFreqMode = 1;      // AUTO_AI
-static int g_currentTransientMode = 3; // Acoustic
+static int g_currentFreqMode = 1;
+static int g_currentTransientMode = 3;
 static bool g_isDirectSource = false;
 static bool g_isCascadeFir = true;
 static bool g_isRichHarmonics = false;
+static float g_currentSampleRate = 48000.0f;
 
 extern "C" {
 
@@ -42,8 +43,9 @@ JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
         JNIEnv *env, jobject thiz, jint factor, jint sample_rate) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_currentSampleRate = static_cast<float>(sample_rate);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->configure(factor, static_cast<float>(sample_rate));
+    g_upsampler->configure(factor, g_currentSampleRate);
 }
 
 JNIEXPORT void JNICALL
@@ -217,8 +219,9 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetSpectrum(
         JNIEnv *env, jobject thiz, jfloatArray out_array) {
-    if (!out_array || !g_upsampler) return;
+    if (!out_array) return;
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    if (!g_upsampler) return;
     jfloat* dst = env->GetFloatArrayElements(out_array, nullptr);
     if (dst) {
         g_upsampler->getSpectrum(dst);
@@ -240,8 +243,9 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
     const char* outMode = env->GetStringUTFChars(out_bit_mode, nullptr);
 
     int effectiveFactor = g_isDirectSource ? 1 : factor;
+    // ★ ⑨ 修正: Factor 変更時もサンプリングレートを保持して安全に再初期化
     if (g_upsampler->getFactor() != effectiveFactor) {
-        g_upsampler->configure(effectiveFactor);
+        g_upsampler->configure(effectiveFactor, g_currentSampleRate);
     }
 
     jbyte* src = env->GetByteArrayElements(in_bytes, nullptr);

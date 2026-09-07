@@ -84,7 +84,8 @@ class BitPerfectPlaybackService : Service() {
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
-    private val MAX_QUEUE_CAPACITY = 32
+    // ★ ⑬ 修正: キュー容量を 64 に拡張し、バックプレッシャーによるパケットドロップを解消
+    private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
     private val PREROLL_THRESHOLD = 3
@@ -93,11 +94,9 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    var onPeakListener: ((Float, Float, Int, FloatArray) -> Unit)? = null
+    var onPeakListener: ((Float, Float, Int) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
-
-    private val tempSpectrumOut = FloatArray(32) { -60f }
 
     var isVolumeLocked = false
         set(value) {
@@ -283,30 +282,25 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
-    // ★ 0ms 同期即時ミュート ＆ バッファ破棄 (スピーカー爆音を完全に抹殺)
     fun handleBecomingNoisyOrDisconnected() {
         isVolumeLocked = false
         isCurrentlyPlaying = false
 
-        // 1. その場で即座に AudioTrack をゼロミュート & ポーズ & バッファ消去 (0ms遮断)
         try {
             audioTrack?.setVolume(0f)
             audioTrack?.pause()
             audioTrack?.flush()
         } catch (e: Exception) {}
 
-        // 2. キューの残余データを全破棄
         pcmQueue.clear()
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
-        tempSpectrumOut.fill(-60f)
-        onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
+        onPeakListener?.invoke(-60f, -60f, 0)
 
-        // 3. システム音量を安全にゼロミュート
         muteVolumeToZero()
+        setSafeSpeakerVolume()
         onCommandListener?.invoke("pause")
 
-        // 4. 重いリソース破棄 (stop, release, mixerクリア) はワーカースレッドへ委譲してフリーズ防止
         trackExecutor.execute {
             audioLock.lock()
             try {
@@ -411,7 +405,6 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        // ★ DAC 抜去後や再生停止中は PCM を一切受け付けず破棄
         if (!isCurrentlyPlaying || isSwitchingRate.get()) {
             return
         }
@@ -457,8 +450,7 @@ class BitPerfectPlaybackService : Service() {
             audioLock.unlock()
         }
         NativeAudioEngine.nativeResetUpsampler()
-        tempSpectrumOut.fill(-60f)
-        onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
+        onPeakListener?.invoke(-60f, -60f, 0)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -544,8 +536,7 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        tempSpectrumOut.fill(-60f)
-        onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
+        onPeakListener?.invoke(-60f, -60f, 0)
 
         try {
             audioTrack?.setVolume(0f)
@@ -744,6 +735,7 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
                 val effectiveFactor = if (isDirectSource) 1 else factor
+                upsampleFactor = factor
 
                 var targetRate = baseRate * effectiveFactor
 
@@ -941,8 +933,7 @@ class BitPerfectPlaybackService : Service() {
                         } catch (e: Exception) {}
                     }
 
-                    // ★ 再生停止中、またはレート切替中は即座にスリープし、write も setVolume(1.0f) も絶対に呼ばない！
-                    if (!isCurrentlyPlaying || isSwitchingRate.get()) {
+                    if (isSwitchingRate.get() || !isCurrentlyPlaying) {
                         Thread.sleep(15)
                         continue
                     }
@@ -964,6 +955,7 @@ class BitPerfectPlaybackService : Service() {
                         continue
                     }
 
+                    // ★ ⑩ 修正: 再生スレッド内から重い 2048点 FFT を完全排除し、True Peak 算出のみを実行
                     analyzeAndDispatchPeak(pcm, currentBitMode)
 
                     var track: AudioTrack? = null
@@ -974,12 +966,11 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    // ★ isCurrentlyPlaying を厳密に二重チェック！停止中のスピーカー書き込みを物理遮断
+                    // ★ ⑫ 修正: 毎ループの track.setVolume(1.0f) Binder IPC を全廃
                     if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying && !isSwitchingRate.get()) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
-                        track.setVolume(1.0f)
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written < 0) {
                             handleBecomingNoisyOrDisconnected()
@@ -1070,8 +1061,7 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        NativeAudioEngine.nativeGetSpectrum(tempSpectrumOut)
-        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, tempSpectrumOut)
+        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask)
     }
 
     private fun createNotificationChannel() {
