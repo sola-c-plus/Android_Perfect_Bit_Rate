@@ -1,4 +1,4 @@
-﻿if (window.self !== window.top) {
+if (window.self !== window.top) {
     throw new Error("[BitPerfect] Skip iframe");
 }
 
@@ -45,15 +45,11 @@ const itagMap = {
     '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 48000 }
 };
 
-// ★ 正確なスマート反転: コンテナ(panelやdiv)を巻き込まず、メディア要素そのものだけをピンポイント再反転
 const SMART_INVERT_CSS = `
-    /* 1. ページ全体を反転して完全White化 (黒背景->白, 白文字->黒) */
     html {
         filter: invert(1) hue-rotate(180deg) !important;
         background-color: #000000 !important;
     }
-
-    /* 2. 画像・動画・キャンバス・背景画像「のみ」を再反転 (本来のフルカラーを100%維持) */
     img,
     video,
     canvas,
@@ -61,21 +57,15 @@ const SMART_INVERT_CSS = `
     [style*="background: url"] {
         filter: invert(1) hue-rotate(180deg) !important;
     }
-
-    /* 3. pictureタグ等のコンテナへの二重適用を明示的に遮断 */
     picture {
         filter: none !important;
     }
-
-    /* 4. YT MUSIC ロゴ補正: アイコンを鮮やかな赤、文字を白背景でクッキリ読める黒として表示 */
     ytmusic-logo img,
     a.ytmusic-logo img,
     .logo.ytmusic-logo,
     img[src*="on_platform_logo_dark"] {
         filter: saturate(400%) contrast(120%) !important;
     }
-
-    /* 5. 背景暗転オーバーレイの濁りを除去 */
     tp-yt-iron-overlay-backdrop,
     iron-overlay-backdrop {
         opacity: 0.35 !important;
@@ -278,7 +268,7 @@ function attachAudioPipeline(mediaEl) {
         if (!processor || processor.context !== ctx) {
             processor = ctx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
-                if (mediaEl.paused || mediaEl.ended) return;
+                if (mediaEl.paused || mediaEl.ended || !userWantsPlaying) return;
                 if (ctx.state === 'suspended') ctx.resume().catch(() => {});
 
                 const inL = e.inputBuffer.getChannelData(0);
@@ -355,7 +345,7 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 
 function handleNativeMessage(msg) {
     const cmd = (typeof msg === 'string') ? msg : (msg && msg.command ? msg.command : '');
-    const video = currentMediaElement || document.querySelector('video');
+    const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
 
     if (cmd === 'setWebTheme') {
         updateWebWhiteTheme(msg.theme === 'light');
@@ -364,12 +354,18 @@ function handleNativeMessage(msg) {
     } else if (cmd === 'play') {
         userWantsPlaying = true;
         getAudioContext();
-        if (video) { video.muted = false; video.volume = 1.0; video.play().catch(() => {}); }
-        document.querySelector('#play-pause-button')?.click();
+        if (video) {
+            video.muted = false;
+            video.volume = 1.0;
+            if (video.paused) {
+                video.play().catch(() => {});
+            }
+        }
     } else if (cmd === 'pause') {
         userWantsPlaying = false;
-        if (video) video.pause();
-        document.querySelector('#play-pause-button')?.click();
+        if (video && !video.paused) {
+            video.pause();
+        }
     } else if (cmd === 'resume_audio') {
         getAudioContext();
         if (video) {

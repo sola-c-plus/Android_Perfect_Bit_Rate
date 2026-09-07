@@ -140,11 +140,7 @@ class BitPerfectPlaybackService : Service() {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                isVolumeLocked = false
-                muteVolumeToZero()
-                clearPreviousMixerAttributes()
-                forceCloseDacStream()
-                onDeviceDisconnectedListener?.invoke()
+                handleBecomingNoisyOrDisconnected()
             }
         }
     }
@@ -167,7 +163,6 @@ class BitPerfectPlaybackService : Service() {
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PerfectBitRate::ServiceWakeLock")
         wakeLock?.acquire()
 
-        // ★ 消灯時にWi-Fiがスリープしてストリーミングが止まるのを防ぐ High-Perf Wi-Fi Lock
         try {
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "PerfectBitRate::WifiLock")
@@ -235,6 +230,17 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
+    fun setSafeSpeakerVolume() {
+        try {
+            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val safeVol = (maxVol * 0.25f).toInt().coerceAtLeast(1)
+            val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (currentVol > safeVol) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, safeVol, 0)
+            }
+        } catch (e: Exception) {}
+    }
+
     fun restoreVolumeForDevice(device: AudioDeviceInfo?) {
         try {
             if (isUsbDevice(device)) {
@@ -249,8 +255,50 @@ class BitPerfectPlaybackService : Service() {
                     }
                     audioTrack?.setVolume(1.0f)
                 }
+            } else if (device == null) {
+                setSafeSpeakerVolume()
             }
         } catch (e: Exception) {}
+    }
+
+    // ★ メインスレッドを絶対に待たせない非同期・即時切断
+    fun handleBecomingNoisyOrDisconnected() {
+        isCurrentlyPlaying = false
+        isVolumeLocked = false
+
+        pcmQueue.clear()
+        isBuffering.set(true)
+        NativeAudioEngine.nativeResetUpsampler()
+        tempSpectrumOut.fill(-60f)
+        onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
+
+        muteVolumeToZero()
+        setSafeSpeakerVolume()
+        onCommandListener?.invoke("pause")
+
+        trackExecutor.execute {
+            audioLock.lock()
+            try {
+                audioTrack?.let { track ->
+                    try {
+                        track.pause()
+                        track.flush()
+                        track.stop()
+                        track.release()
+                    } catch (e: Exception) {
+                        Log.w("BitPerfect", "AudioTrack release on disconnect", e)
+                    }
+                }
+                audioTrack = null
+                clearPreviousMixerAttributes()
+            } finally {
+                audioLock.unlock()
+            }
+        }
+
+        updatePlaybackState(false)
+        updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, false, currentPosition, currentDuration)
     }
 
     private fun clearPreviousMixerAttributes() {
@@ -274,17 +322,22 @@ class BitPerfectPlaybackService : Service() {
 
     fun setOutputDevice(device: AudioDeviceInfo?) {
         val changed = (activeOutputDevice?.id != device?.id)
+        val prevDev = activeOutputDevice
         activeOutputDevice = device
 
         if (device == null) {
             isVolumeLocked = false
             muteVolumeToZero()
-            clearPreviousMixerAttributes()
+            setSafeSpeakerVolume()
+            if (isUsbDevice(prevDev)) {
+                handleBecomingNoisyOrDisconnected()
+                return
+            }
         }
 
         updateVolumeControlMode()
 
-        if (changed && device != null) {
+        if (changed && device != null && isCurrentlyPlaying) {
             isBuffering.set(true)
             trackExecutor.execute {
                 initAudioTrack(currentBitMode, baseSampleRate, upsampleFactor, device)
@@ -309,7 +362,7 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        isCurrentlyPlaying = true
+        if (!isCurrentlyPlaying) return
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
         val targetEffectiveRate = actualInputRate * upsampleFactor
@@ -447,11 +500,13 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun forceCloseDacStream() {
+        isCurrentlyPlaying = false
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
         tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
+
         trackExecutor.execute {
             audioLock.lock()
             try {
@@ -780,13 +835,17 @@ class BitPerfectPlaybackService : Service() {
             var heartbeatCounter = 0
             while (isRunning) {
                 try {
-                    // ★ 2秒ごとにWebExtensionへハートビートを送信してバックグラウンド停止を阻止
                     heartbeatCounter++
                     if (heartbeatCounter >= 20) {
                         heartbeatCounter = 0
                         try {
                             onCommandListener?.invoke("heartbeat")
                         } catch (e: Exception) {}
+                    }
+
+                    if (!isCurrentlyPlaying) {
+                        Thread.sleep(20)
+                        continue
                     }
 
                     if (isBuffering.get()) {
@@ -816,12 +875,15 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
                         track.setVolume(1.0f)
-                        track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                        val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                        if (written < 0) {
+                            handleBecomingNoisyOrDisconnected()
+                        }
                     }
                 } catch (e: InterruptedException) {
                     break
