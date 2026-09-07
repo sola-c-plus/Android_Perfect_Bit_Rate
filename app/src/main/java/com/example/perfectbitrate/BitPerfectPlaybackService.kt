@@ -261,27 +261,21 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
-    // ★ メインスレッドを絶対にブロックしない超高速・安全な切断処理
+    // ★ メインスレッドを絶対に待たせない非同期・即時切断
     fun handleBecomingNoisyOrDisconnected() {
-        // 1. 再生中フラグとボリュームロックを即座に OFF (マイクロ秒単位で処理)
         isCurrentlyPlaying = false
         isVolumeLocked = false
 
-        // 2. PCM キューを空にし、未再生バッファのスピーカー漏れを物理阻止
         pcmQueue.clear()
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
         tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
 
-        // 3. 音量を即時ゼロミュート ＆ スピーカー上限を安全化
         muteVolumeToZero()
         setSafeSpeakerVolume()
-
-        // 4. Web 側へ一時停止を通知
         onCommandListener?.invoke("pause")
 
-        // 5. AudioTrack の停止・解放とミキサー解除は専用ワーカースレッドへ委譲 (メインスレッドを 1ms も待たせない！)
         trackExecutor.execute {
             audioLock.lock()
             try {
@@ -302,7 +296,6 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        // 6. メディアセッションと通知、ウィジェットを一時停止状態に更新
         updatePlaybackState(false)
         updateNotification()
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, false, currentPosition, currentDuration)
@@ -369,7 +362,6 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        // 再生停止中は PCM を一切受け付けず破棄 (勝手な AudioTrack 再生成を防止)
         if (!isCurrentlyPlaying) return
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
@@ -851,7 +843,6 @@ class BitPerfectPlaybackService : Service() {
                         } catch (e: Exception) {}
                     }
 
-                    // 再生停止中はスレッドを待機させて write を物理ブロック
                     if (!isCurrentlyPlaying) {
                         Thread.sleep(20)
                         continue
@@ -891,7 +882,6 @@ class BitPerfectPlaybackService : Service() {
                         track.setVolume(1.0f)
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written < 0) {
-                            // USB 抜去等による DEAD_OBJECT エラーを検知した場合は即時切断処理
                             handleBecomingNoisyOrDisconnected()
                         }
                     }

@@ -508,7 +508,6 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyUp(keyCode, event)
     }
 
-    // ★ メインスレッドを絶対に止めない即時UI安全停止
     private fun handleEmergencyUsbDacCutoff() {
         if (isHandlingDisconnect) return
         isHandlingDisconnect = true
