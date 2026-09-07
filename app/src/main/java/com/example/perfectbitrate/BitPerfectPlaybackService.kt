@@ -55,6 +55,7 @@ class BitPerfectPlaybackService : Service() {
     
     var currentBitMode = "16bit"
 
+    // ★ ユーザーが選択した本来の設定倍率 (Direct Source ON でも絶対に破壊せず保持)
     var upsampleFactor = 1
         set(value) {
             val valid = when (value) {
@@ -72,6 +73,7 @@ class BitPerfectPlaybackService : Service() {
             NativeAudioEngine.nativeSetDirectSource(value)
         }
 
+    // ★ 実行時の実効倍率 (Direct Source ON 時は 1x、OFF 時はユーザー設定値)
     val effectiveFactor: Int
         get() = if (isDirectSource) 1 else upsampleFactor
 
@@ -84,7 +86,6 @@ class BitPerfectPlaybackService : Service() {
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
-    // ★ ⑬ 修正: キュー容量を 64 に拡張し、バックプレッシャーによるパケットドロップを解消
     private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
@@ -298,7 +299,6 @@ class BitPerfectPlaybackService : Service() {
         onPeakListener?.invoke(-60f, -60f, 0)
 
         muteVolumeToZero()
-        setSafeSpeakerVolume()
         onCommandListener?.invoke("pause")
 
         trackExecutor.execute {
@@ -365,6 +365,7 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★ Direct Source 切り替え時も upsampleFactor は一切破壊せず維持
     fun setDirectSourceMode(isDirect: Boolean) {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
@@ -383,6 +384,14 @@ class BitPerfectPlaybackService : Service() {
         switchStreamConfiguration()
     }
 
+    // ★ ベース周波数の変更時も upsampleFactor を壊さず再構成
+    fun updateBaseSampleRate(newRate: Int) {
+        if (baseSampleRate == newRate) return
+        baseSampleRate = newRate
+        switchStreamConfiguration()
+    }
+
+    // ★ 常に effectiveFactor (Direct時は1x、OFF時は4x等) を使って自動計算
     private fun switchStreamConfiguration() {
         val factorToApply = effectiveFactor
         val targetRate = baseSampleRate * factorToApply
@@ -687,7 +696,7 @@ class BitPerfectPlaybackService : Service() {
     fun initAudioTrack(
         bitMode: String,
         baseRate: Int = baseSampleRate,
-        factor: Int = upsampleFactor,
+        factor: Int = effectiveFactor,
         targetDevice: AudioDeviceInfo? = null
     ) {
         if (isInitializingTrack.getAndSet(true)) {
@@ -734,10 +743,11 @@ class BitPerfectPlaybackService : Service() {
 
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
-                val effectiveFactor = if (isDirectSource) 1 else factor
-                upsampleFactor = factor
 
-                var targetRate = baseRate * effectiveFactor
+                // ★ 渡された factor (Direct時は1、OFF時は4等) を使ってターゲットレートを決定
+                // ※ upsampleFactor (ユーザー希望値) には絶対に代入破壊しない！
+                val factorToApply = factor
+                var targetRate = baseRate * factorToApply
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                     val supportedMixers = try {
@@ -756,7 +766,7 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 effectiveSampleRate = targetRate
-                NativeAudioEngine.nativeConfigureUpsampler(effectiveFactor, baseSampleRate)
+                NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
 
                 val mediaAttr = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -955,7 +965,6 @@ class BitPerfectPlaybackService : Service() {
                         continue
                     }
 
-                    // ★ ⑩ 修正: 再生スレッド内から重い 2048点 FFT を完全排除し、True Peak 算出のみを実行
                     analyzeAndDispatchPeak(pcm, currentBitMode)
 
                     var track: AudioTrack? = null
@@ -966,8 +975,7 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    // ★ ⑫ 修正: 毎ループの track.setVolume(1.0f) Binder IPC を全廃
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying && !isSwitchingRate.get()) {
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && !isSwitchingRate.get()) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
