@@ -133,12 +133,11 @@ class MainActivity : AppCompatActivity() {
 
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
-            playbackService?.isDirectSource = isDirectSource
-            NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             playbackService?.setOutputDevice(activeOutputDevice)
-
-            // ★ 起動時に設定通りの倍率で即座に AudioTrack と DSP を確実に初期化
-            playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
+            playbackService?.setDirectSourceMode(isDirectSource)
+            if (!isDirectSource) {
+                playbackService?.setUpsampling(upsampleFactor)
+            }
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
             NativeAudioEngine.nativeSetRichHarmonics(appPrefs.isRichHarmonicsEnabled)
