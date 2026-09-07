@@ -49,7 +49,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDspSettings: ImageButton
     private lateinit var btnUiSettings: ImageButton
 
-    // ★ 独立管理された各コントローラー
     private val appPrefs by lazy { AppPreferences.get() }
     private lateinit var btCodecTracker: BluetoothCodecTracker
     private lateinit var geckoController: GeckoSessionController
@@ -81,6 +80,7 @@ class MainActivity : AppCompatActivity() {
     private var currentBitMode = "16bit"
     private var isVolLockOn = false
     private var isPlayingState = false
+    private var isHandlingDisconnect = false
 
     private var peakDbL = -60f
     private var peakDbR = -60f
@@ -108,7 +108,10 @@ class MainActivity : AppCompatActivity() {
         detectAudioOutputDevice()
         playbackService?.setOutputDevice(activeOutputDevice)
         btCodecTracker.fetchCurrentCodec()
-        geckoController.sendCommand("resume_audio")
+
+        if (activeOutputDevice != null && isPlayingState) {
+            geckoController.sendCommand("resume_audio")
+        }
     }
 
     private val requestMultiplePermissionsLauncher =
@@ -163,9 +166,7 @@ class MainActivity : AppCompatActivity() {
 
             playbackService?.onDeviceDisconnectedListener = {
                 runOnUiThread {
-                    isVolLockOn = false
-                    appPrefs.isVolLockEnabled = false
-                    detectAudioOutputDevice()
+                    handleEmergencyUsbDacCutoff()
                 }
             }
 
@@ -222,22 +223,20 @@ class MainActivity : AppCompatActivity() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         checkAndRequestPermissions()
 
-        // 1. Bluetooth コントローラー起動
         btCodecTracker = BluetoothCodecTracker(this) { codec ->
             currentBtCodecName = codec
             updateStatus()
         }
         btCodecTracker.start()
 
-        // 2. GeckoView コントローラー起動
         geckoController = GeckoSessionController(
             activity = this,
             geckoView = findViewById(R.id.geckoview),
             listener = object : GeckoSessionController.Listener {
                 override fun onFlush() { playbackService?.resetBuffer() }
                 override fun onPcm(pcmBytes: ByteArray, inBitMode: String) {
+                    if (!isPlayingState) return
                     pcmPacketCount += pcmBytes.size
-                    isPlayingState = true
                     lastPcmTime = System.currentTimeMillis()
                     playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
                 }
@@ -509,6 +508,33 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyUp(keyCode, event)
     }
 
+    // ★ メインスレッドを絶対に止めない即時UI安全停止
+    private fun handleEmergencyUsbDacCutoff() {
+        if (isHandlingDisconnect) return
+        isHandlingDisconnect = true
+
+        try {
+            geckoController.sendCommand("pause")
+            isPlayingState = false
+
+            isVolLockOn = false
+            appPrefs.isVolLockEnabled = false
+            playbackService?.handleBecomingNoisyOrDisconnected()
+
+            peakDbL = -60f
+            peakDbR = -60f
+            bitActivityMask = 0
+            walkmanLevelMeter?.reset()
+
+            activeOutputDevice = null
+            outputDeviceName = "内蔵スピーカー"
+            updateStatus()
+            updateDialogPlayerUi()
+        } finally {
+            uiHandler.postDelayed({ isHandlingDisconnect = false }, 300)
+        }
+    }
+
     private fun registerAudioDeviceCallback() {
         audioManager?.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
@@ -516,6 +542,13 @@ class MainActivity : AppCompatActivity() {
                 uiHandler.postDelayed(deviceDetectRunnable, 250)
             }
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                val wasUsbActive = isUsbDevice(activeOutputDevice)
+                val isCurrentRemoved = removedDevices?.any { it.id == activeOutputDevice?.id || isUsbDevice(it) } == true
+
+                if (wasUsbActive && isCurrentRemoved) {
+                    handleEmergencyUsbDacCutoff()
+                }
+
                 uiHandler.removeCallbacks(deviceDetectRunnable)
                 uiHandler.postDelayed(deviceDetectRunnable, 100)
             }
@@ -554,6 +587,7 @@ class MainActivity : AppCompatActivity() {
             outputDeviceName = "内蔵スピーカー"
             playbackService?.isVolumeLocked = false
             playbackService?.muteVolumeToZero()
+            playbackService?.setSafeSpeakerVolume()
         }
 
         updateStatus()
