@@ -134,10 +134,10 @@ class MainActivity : AppCompatActivity() {
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
+
+            // ★ ユーザーの設定倍率 (例: 4x) を確実にサービスへ同期
+            playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setDirectSourceMode(isDirectSource)
-            if (!isDirectSource) {
-                playbackService?.setUpsampling(upsampleFactor)
-            }
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
             NativeAudioEngine.nativeSetRichHarmonics(appPrefs.isRichHarmonicsEnabled)
@@ -250,8 +250,7 @@ class MainActivity : AppCompatActivity() {
                     if (rate > 0 && rate != baseSampleRate) {
                         playbackService?.resetBuffer()
                         baseSampleRate = rate
-                        val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
-                        playbackService?.setUpsampling(effectiveFactor)
+                        playbackService?.setUpsampling(upsampleFactor)
                     }
                     playbackService?.updateCodec(codec)
                     updateStatus()
@@ -425,8 +424,7 @@ class MainActivity : AppCompatActivity() {
             },
             onUpsampleFactorChanged = { newFactor ->
                 upsampleFactor = newFactor
-                val effectiveFactor = if (isDirectSource) 1 else newFactor
-                playbackService?.setUpsampling(effectiveFactor)
+                playbackService?.setUpsampling(newFactor)
                 updateStatus()
             },
             onDirectSourceChanged = { isDirect ->
@@ -506,7 +504,7 @@ class MainActivity : AppCompatActivity() {
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
             val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
-            playbackService?.setUpsampling(effectiveFactor)
+            playbackService?.setUpsampling(upsampleFactor)
             playbackService?.initAudioTrack(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
             geckoController.reload()
             updateStatus()
@@ -622,7 +620,7 @@ class MainActivity : AppCompatActivity() {
         val mb = pcmPacketCount / (1024.0 * 1024.0)
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
-        val activeFactor = if (isDirectSource) 1 else upsampleFactor
+        val activeFactor = playbackService?.effectiveFactor ?: (if (isDirectSource) 1 else upsampleFactor)
         val dspTag = if (isDirectSource) " [DIRECT]" else (if (activeFactor > 1) " [DSP ${activeFactor}x]" else "")
 
         if (dev != null) {

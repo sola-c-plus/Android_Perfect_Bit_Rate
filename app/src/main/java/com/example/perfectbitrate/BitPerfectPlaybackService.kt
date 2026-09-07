@@ -54,15 +54,35 @@ class BitPerfectPlaybackService : Service() {
     var effectiveSampleRate = 48000
     
     var currentBitMode = "16bit"
+
+    // ★ ユーザーが選択した本来の設定倍率 (Direct Source ON でも絶対に破壊せず保持)
     var upsampleFactor = 1
+        set(value) {
+            val valid = when (value) {
+                2 -> 2
+                4 -> 4
+                8 -> 8
+                else -> 1
+            }
+            field = valid
+        }
+
     var isDirectSource = false
+        set(value) {
+            field = value
+            NativeAudioEngine.nativeSetDirectSource(value)
+        }
+
+    // ★ 実際に出力する実効倍率 (Direct Source ON 時は 1x、OFF 時はユーザー設定値)
+    val effectiveFactor: Int
+        get() = if (isDirectSource) 1 else upsampleFactor
+
     var activeOutputDevice: AudioDeviceInfo? = null
     private val audioLock = ReentrantLock()
 
     private val trackExecutor = Executors.newSingleThreadExecutor()
     private val isInitializingTrack = AtomicBoolean(false)
     private val hasPendingInit = AtomicBoolean(false)
-    // ★ レート切り替え中の巨大データ書き込みデッドロックを物理遮断するガードフラグ
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
@@ -345,6 +365,7 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★ Direct Source 切り替え時も upsampleFactor は破壊せず維持
     fun setDirectSourceMode(isDirect: Boolean) {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
@@ -359,26 +380,25 @@ class BitPerfectPlaybackService : Service() {
             8 -> 8
             else -> 1
         }
-        if (upsampleFactor == validFactor && !isDirectSource) return
         upsampleFactor = validFactor
         switchStreamConfiguration()
     }
 
-    // ★ レート切り替え時のデッドロックを防止する安全なアトミック遷移
+    // ★ レート切り替え時の安全アトミック遷移 (effectiveFactor を自動計算)
     private fun switchStreamConfiguration() {
-        val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
-        val targetRate = baseSampleRate * effectiveFactor
+        val factorToApply = effectiveFactor
+        val targetRate = baseSampleRate * factorToApply
         
         isSwitchingRate.set(true)
         isBuffering.set(true)
         pcmQueue.clear()
 
         effectiveSampleRate = targetRate
-        NativeAudioEngine.nativeConfigureUpsampler(effectiveFactor, baseSampleRate)
+        NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
 
         trackExecutor.execute {
             try {
-                initAudioTrack(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+                initAudioTrack(currentBitMode, baseSampleRate, factorToApply, activeOutputDevice)
             } finally {
                 pcmQueue.clear()
                 isSwitchingRate.set(false)
@@ -389,14 +409,13 @@ class BitPerfectPlaybackService : Service() {
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
         isCurrentlyPlaying = true
 
-        // ★ レート切り替え処理中は PCM を安全に受け流し、古い AudioTrack への書き込みを阻止
         if (isSwitchingRate.get()) {
             return
         }
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
-        val currentFactor = if (isDirectSource) 1 else upsampleFactor
-        val targetEffectiveRate = actualInputRate * currentFactor
+        val factorToApply = effectiveFactor
+        val targetEffectiveRate = actualInputRate * factorToApply
 
         if (actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate) {
             baseSampleRate = actualInputRate
@@ -411,7 +430,7 @@ class BitPerfectPlaybackService : Service() {
         }
 
         val processedBytes = NativeAudioEngine.nativeProcessUpsample(
-            pcmBytes, pcmBytes.size, inBitMode, currentBitMode, currentFactor
+            pcmBytes, pcmBytes.size, inBitMode, currentBitMode, factorToApply
         ) ?: pcmBytes
 
         if (!pcmQueue.offer(processedBytes)) {
@@ -629,8 +648,8 @@ class BitPerfectPlaybackService : Service() {
             else -> "SPEAKER"
         }
 
-        val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
-        val upsampleTag = if (effectiveFactor > 1) " [FREQ ${effectiveFactor}x]" else ""
+        val factorTag = effectiveFactor
+        val upsampleTag = if (factorTag > 1) " [FREQ ${factorTag}x]" else ""
 
         val notification = NotificationCompat.Builder(this, "bitperfect_service_channel")
             .setContentTitle(currentTitle)
@@ -712,7 +731,6 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
                 val effectiveFactor = if (isDirectSource) 1 else factor
-                upsampleFactor = factor
 
                 var targetRate = baseRate * effectiveFactor
 
@@ -910,7 +928,6 @@ class BitPerfectPlaybackService : Service() {
                         } catch (e: Exception) {}
                     }
 
-                    // ★ レート切り替え中は AudioTrack 書き込みを一時停止し、古いバッファとのデッドロックを防止
                     if (isSwitchingRate.get() || !isCurrentlyPlaying) {
                         Thread.sleep(15)
                         continue
