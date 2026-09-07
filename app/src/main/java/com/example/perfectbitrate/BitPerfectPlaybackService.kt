@@ -261,10 +261,9 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
-    // ★ メインスレッドを絶対に待たせない非同期・即時切断
     fun handleBecomingNoisyOrDisconnected() {
-        isCurrentlyPlaying = false
         isVolumeLocked = false
+        isCurrentlyPlaying = false
 
         pcmQueue.clear()
         isBuffering.set(true)
@@ -362,7 +361,8 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        if (!isCurrentlyPlaying) return
+        // ★ 消灯時でも PCM が届いている限り再生中フラグを維持して供給を継続
+        isCurrentlyPlaying = true
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
         val targetEffectiveRate = actualInputRate * upsampleFactor
@@ -545,9 +545,7 @@ class BitPerfectPlaybackService : Service() {
                 .build()
         )
 
-        if (!isPlaying) {
-            forceCloseDacStream()
-        }
+        // ★ 消灯時の一時的な通知で勝手に forceCloseDacStream() を呼ばない
         updateNotification()
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isPlaying, position, currentDuration)
     }
@@ -843,11 +841,6 @@ class BitPerfectPlaybackService : Service() {
                         } catch (e: Exception) {}
                     }
 
-                    if (!isCurrentlyPlaying) {
-                        Thread.sleep(20)
-                        continue
-                    }
-
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
                             Thread.sleep(10)
@@ -875,7 +868,7 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying) {
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }

@@ -25,7 +25,6 @@ import android.view.View
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -82,7 +81,6 @@ class MainActivity : AppCompatActivity() {
     private var isVolLockOn = false
     private var isPlayingState = false
     private var isHandlingDisconnect = false
-    private var lastBackPressTime = 0L
 
     private var peakDbL = -60f
     private var peakDbR = -60f
@@ -237,8 +235,9 @@ class MainActivity : AppCompatActivity() {
             listener = object : GeckoSessionController.Listener {
                 override fun onFlush() { playbackService?.resetBuffer() }
                 override fun onPcm(pcmBytes: ByteArray, inBitMode: String) {
-                    if (!isPlayingState) return
+                    // ★ 画面消灯時でも PCM が届く限り確実にサービスへ流し続ける
                     pcmPacketCount += pcmBytes.size
+                    isPlayingState = true
                     lastPcmTime = System.currentTimeMillis()
                     playbackService?.pushPcm(pcmBytes, baseSampleRate, inBitMode)
                 }
@@ -293,27 +292,6 @@ class MainActivity : AppCompatActivity() {
             }
         )
         geckoController.init()
-
-        // ★ 戻るボタンのスマートハンドリング (ページ戻り ＆ 2度押し終了ガード)
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                // 1. YouTube Music 内で前の画面に戻れる場合は前の画面に戻る
-                if (geckoController.canGoBack) {
-                    geckoController.goBack()
-                    return
-                }
-
-                // 2. これ以上戻れない場合、誤操作・連打によるアプリ終了を防止する (2秒以内の再押しで終了)
-                val now = System.currentTimeMillis()
-                if (now - lastBackPressTime < 2000L) {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
-                } else {
-                    lastBackPressTime = now
-                    Toast.makeText(this@MainActivity, "もう一度戻るを押すとアプリを終了します", Toast.LENGTH_SHORT).show()
-                }
-            }
-        })
 
         val serviceIntent = Intent(this, BitPerfectPlaybackService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
