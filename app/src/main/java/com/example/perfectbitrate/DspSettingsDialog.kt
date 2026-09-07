@@ -78,7 +78,6 @@ class DspSettingsDialog(
 
     private val perfModeOptions = arrayOf("Eco (省電力)", "普通 (標準)", "超高音質 (フルスペック)")
 
-    // ★ 10-Band EQ バランス型プリセット定義 (クリッピングしない最適化カーブ)
     data class EqPreset(val name: String, val gains: FloatArray)
 
     private val eqPresets = listOf(
@@ -232,7 +231,6 @@ class DspSettingsDialog(
             updateEqPresetState(isDirect, switchEqEnable.isChecked)
         }
 
-        // DIRECT SOURCE
         switchDirectSource.isChecked = appPrefs.isDirectSource
         updateDspSectionsState(appPrefs.isDirectSource, if (appPrefs.isDirectSource) 1 else appPrefs.selectedUpsampleFactor)
         switchDirectSource.setOnCheckedChangeListener { _, isChecked ->
@@ -243,14 +241,12 @@ class DspSettingsDialog(
             onDirectSourceChanged(isChecked)
         }
 
-        // CASCADE FIR
         switchCascadeFir.isChecked = appPrefs.isCascadeFir
         switchCascadeFir.setOnCheckedChangeListener { _, isChecked ->
             appPrefs.isCascadeFir = isChecked
             NativeAudioEngine.nativeSetCascadeFir(isChecked)
         }
 
-        // 0dB VOLUME LOCK
         val isUsb = isUsbDevice(activeOutputDevice)
         switchVolLock.isEnabled = isUsb
         switchVolLock.alpha = if (isUsb) 1.0f else 0.35f
@@ -263,7 +259,6 @@ class DspSettingsDialog(
             onVolumeLockChanged(isChecked)
         }
 
-        // EQ 設定
         fun setEditMode(enabled: Boolean) {
             if (appPrefs.isDirectSource) return
             walkmanEqView?.isEditMode = enabled
@@ -327,10 +322,8 @@ class DspSettingsDialog(
             appPrefs.selectedEqPresetIndex = 1
         }
 
-        // スピナー類
         val spinnerLayout = if (isDarkTheme) R.layout.item_spinner_dap else R.layout.item_spinner_dap_light
 
-        // EQ プリセットスピナーのアダプター設定
         val eqPresetNames = eqPresets.map { it.name }.toTypedArray()
         val eqPresetAdapter = ArrayAdapter(activity, spinnerLayout, eqPresetNames).apply { setDropDownViewResource(spinnerLayout) }
         spinnerEqPreset?.adapter = eqPresetAdapter
@@ -362,7 +355,6 @@ class DspSettingsDialog(
         }
         updateEqPresetState(appPrefs.isDirectSource, appPrefs.isEqEnabled)
 
-        // Bit Depth
         val bitAdapter = ArrayAdapter(activity, spinnerLayout, bitOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerBitDepth.adapter = bitAdapter
         spinnerBitDepth.setSelection(bitModeValues.indexOf(appPrefs.selectedBitMode).coerceAtLeast(0))
@@ -377,7 +369,6 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // Dither
         val ditherAdapter = ArrayAdapter(activity, spinnerLayout, ditherOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerDither.adapter = ditherAdapter
         spinnerDither.setSelection(ditherModeValues.indexOf(appPrefs.selectedDitherMode).coerceAtLeast(0))
@@ -392,7 +383,6 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // DC Phase
         val dcPhaseAdapter = ArrayAdapter(activity, spinnerLayout, dcPhaseOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerDcPhase.adapter = dcPhaseAdapter
         spinnerDcPhase.setSelection(dcPhaseTypeValues.indexOf(appPrefs.selectedDcPhaseType).coerceAtLeast(0))
@@ -407,7 +397,6 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // Performance Mode
         val perfAdapter = ArrayAdapter(activity, spinnerLayout, perfModeOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerPerfMode?.adapter = perfAdapter
         spinnerPerfMode?.setSelection(appPrefs.selectedPerfMode.coerceIn(0, 2))
@@ -421,7 +410,6 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // Upsample
         val upsampleAdapter = ArrayAdapter(activity, spinnerLayout, upsampleOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerUpsample.adapter = upsampleAdapter
         spinnerUpsample.setSelection(upsampleFactorValues.indexOf(appPrefs.selectedUpsampleFactor).coerceAtLeast(0))
@@ -437,7 +425,7 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // ミニプレイヤー
+        // ミニプレイヤーの操作系
         btnPlayPause?.setOnClickListener { onPlayerCommand("play_pause") }
         btnPrev.setOnClickListener { onPlayerCommand("prev") }
         btnNext.setOnClickListener { onPlayerCommand("next") }
@@ -458,6 +446,18 @@ class DspSettingsDialog(
                 }
             }
         })
+
+        // ★ 下部ミニプレイヤーの領域（操作ボタン・シークバー以外）を押すと DSP 設定画面が閉じるように設定
+        val dismissClickListener = View.OnClickListener {
+            bottomSheetDialog.dismiss()
+        }
+        view.findViewById<View>(R.id.dspDialogPlayerControl)?.setOnClickListener(dismissClickListener)
+        view.findViewById<View>(R.id.dspPlayerCard)?.setOnClickListener(dismissClickListener)
+        imageArtwork?.setOnClickListener(dismissClickListener)
+        textTrackTitle?.setOnClickListener(dismissClickListener)
+        textTrackArtist?.setOnClickListener(dismissClickListener)
+        textCurrentTime?.setOnClickListener(dismissClickListener)
+        textTotalTime?.setOnClickListener(dismissClickListener)
 
         btnClose.setOnClickListener { bottomSheetDialog.dismiss() }
 

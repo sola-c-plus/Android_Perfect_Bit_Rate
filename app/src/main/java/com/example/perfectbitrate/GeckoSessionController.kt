@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.Activity
 import android.util.Base64
@@ -32,6 +32,19 @@ class GeckoSessionController(
     private var geckoRuntime: GeckoRuntime? = null
     private var activePort: WebExtension.Port? = null
 
+    var canGoBack: Boolean = false
+        private set
+
+    fun canGoBack(): Boolean = canGoBack
+
+    fun goBack(): Boolean {
+        if (canGoBack) {
+            geckoSession.goBack()
+            return true
+        }
+        return false
+    }
+
     fun init() {
         val runtimeSettings = GeckoRuntimeSettings.Builder()
             .consoleOutput(true)
@@ -48,6 +61,12 @@ class GeckoSessionController(
             .build()
 
         geckoSession = GeckoSession(sessionSettings)
+
+        geckoSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                this@GeckoSessionController.canGoBack = canGoBack
+            }
+        }
 
         geckoSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onContentPermissionRequest(

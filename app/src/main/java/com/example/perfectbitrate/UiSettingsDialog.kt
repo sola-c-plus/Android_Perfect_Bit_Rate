@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.app.Activity
 import android.content.Context
@@ -149,6 +149,17 @@ class UiSettingsDialog(
                 }
             }
         })
+
+        val dismissClickListener = View.OnClickListener {
+            bottomSheetDialog.dismiss()
+        }
+        view.findViewById<View>(R.id.uiDialogPlayerControl)?.setOnClickListener(dismissClickListener)
+        view.findViewById<View>(R.id.uiPlayerCard)?.setOnClickListener(dismissClickListener)
+        imageArtwork?.setOnClickListener(dismissClickListener)
+        textTrackTitle?.setOnClickListener(dismissClickListener)
+        textTrackArtist?.setOnClickListener(dismissClickListener)
+        textCurrentTime?.setOnClickListener(dismissClickListener)
+        textTotalTime?.setOnClickListener(dismissClickListener)
 
         btnClose.setOnClickListener { bottomSheetDialog.dismiss() }
 
