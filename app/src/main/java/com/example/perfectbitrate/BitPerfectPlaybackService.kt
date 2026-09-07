@@ -55,7 +55,6 @@ class BitPerfectPlaybackService : Service() {
     
     var currentBitMode = "16bit"
 
-    // ★ ユーザーが選択した本来の設定倍率 (Direct Source ON でも絶対に破壊せず保持)
     var upsampleFactor = 1
         set(value) {
             val valid = when (value) {
@@ -73,7 +72,6 @@ class BitPerfectPlaybackService : Service() {
             NativeAudioEngine.nativeSetDirectSource(value)
         }
 
-    // ★ 実行時の実効倍率 (Direct Source ON 時は 1x、OFF 時はユーザー設定値)
     val effectiveFactor: Int
         get() = if (isDirectSource) 1 else upsampleFactor
 
@@ -365,7 +363,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ Direct Source 切り替え時も upsampleFactor は一切破壊せず維持
     fun setDirectSourceMode(isDirect: Boolean) {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
@@ -384,14 +381,12 @@ class BitPerfectPlaybackService : Service() {
         switchStreamConfiguration()
     }
 
-    // ★ ベース周波数の変更時も upsampleFactor を壊さず再構成
     fun updateBaseSampleRate(newRate: Int) {
         if (baseSampleRate == newRate) return
         baseSampleRate = newRate
         switchStreamConfiguration()
     }
 
-    // ★ 常に effectiveFactor (Direct時は1x、OFF時は4x等) を使って自動計算
     private fun switchStreamConfiguration() {
         val factorToApply = effectiveFactor
         val targetRate = baseSampleRate * factorToApply
@@ -707,7 +702,9 @@ class BitPerfectPlaybackService : Service() {
         try {
             do {
                 hasPendingInit.set(false)
-                doInitAudioTrackInternal(bitMode, baseRate, factor, targetDevice)
+                // ★ 保留ループでも常に最新の effectiveFactor (Direct時は1x、OFF時は4x) を確実に取得
+                val latestFactor = effectiveFactor
+                doInitAudioTrackInternal(bitMode, baseRate, latestFactor, activeOutputDevice)
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
@@ -744,8 +741,7 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
 
-                // ★ 渡された factor (Direct時は1、OFF時は4等) を使ってターゲットレートを決定
-                // ※ upsampleFactor (ユーザー希望値) には絶対に代入破壊しない！
+                // ★ 渡された factor をそのまま適用し、upsampleFactor (ユーザー希望設定値) は破壊しない
                 val factorToApply = factor
                 var targetRate = baseRate * factorToApply
 
@@ -910,6 +906,15 @@ class BitPerfectPlaybackService : Service() {
                     }
                 }
 
+                // ★ 万が一 USB DAC がビジーで失敗した場合の自動復旧リトライ
+                if (createdTrack == null && isUsbDevice(targetDevice)) {
+                    Log.w("BitPerfect", "AudioTrack init failed on USB DAC, scheduling recovery retry...")
+                    trackExecutor.execute {
+                        try { Thread.sleep(250) } catch (e: InterruptedException) {}
+                        initAudioTrack(bitMode, baseRate, factorToApply, targetDevice)
+                    }
+                }
+
                 audioTrack = createdTrack
 
                 val actualModeStr = when (finalEncoding) {
@@ -975,10 +980,11 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && !isSwitchingRate.get()) {
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying && !isSwitchingRate.get()) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
+                        track.setVolume(1.0f)
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written < 0) {
                             handleBecomingNoisyOrDisconnected()

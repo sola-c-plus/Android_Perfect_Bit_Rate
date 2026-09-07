@@ -5,6 +5,8 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.media.AudioDeviceInfo
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.WindowManager
 import android.widget.AdapterView
@@ -231,14 +233,33 @@ class DspSettingsDialog(
             updateEqPresetState(isDirect, switchEqEnable.isChecked)
         }
 
+        // ★ DIRECT SOURCE: 連打による DAC ビジー無音化を防ぐダウンタイム・ロック機構
         switchDirectSource.isChecked = appPrefs.isDirectSource
         updateDspSectionsState(appPrefs.isDirectSource, if (appPrefs.isDirectSource) 1 else appPrefs.selectedUpsampleFactor)
-        switchDirectSource.setOnCheckedChangeListener { _, isChecked ->
+        
+        var isTogglingDirectSource = false
+        val directSourceHandler = Handler(Looper.getMainLooper())
+
+        switchDirectSource.setOnCheckedChangeListener { compoundButton, isChecked ->
+            if (isTogglingDirectSource) return@setOnCheckedChangeListener
+            isTogglingDirectSource = true
+
+            // スイッチを一時的に操作不能 (ロック) にして DAC 切り替えのダウンタイムを確保
+            compoundButton.isEnabled = false
+            compoundButton.alpha = 0.5f
+
             appPrefs.isDirectSource = isChecked
             NativeAudioEngine.nativeSetDirectSource(isChecked)
             val effectiveFactor = if (isChecked) 1 else appPrefs.selectedUpsampleFactor
             updateDspSectionsState(isChecked, effectiveFactor)
             onDirectSourceChanged(isChecked)
+
+            // DAC の物理クロック切り替えが完了する安全時間 (750ms) 後にロックを解除
+            directSourceHandler.postDelayed({
+                compoundButton.isEnabled = true
+                compoundButton.alpha = 1.0f
+                isTogglingDirectSource = false
+            }, 750L)
         }
 
         switchCascadeFir.isChecked = appPrefs.isCascadeFir
@@ -425,7 +446,6 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // ミニプレイヤーの操作系
         btnPlayPause?.setOnClickListener { onPlayerCommand("play_pause") }
         btnPrev.setOnClickListener { onPlayerCommand("prev") }
         btnNext.setOnClickListener { onPlayerCommand("next") }
@@ -447,7 +467,6 @@ class DspSettingsDialog(
             }
         })
 
-        // ★ 下部ミニプレイヤーの領域（操作ボタン・シークバー以外）を押すと DSP 設定画面が閉じるように設定
         val dismissClickListener = View.OnClickListener {
             bottomSheetDialog.dismiss()
         }
