@@ -90,6 +90,9 @@ class MainActivity : AppCompatActivity() {
     private var lastBitResetTime = 0L
     private var lastPcmTime = 0L
 
+    // ★ ⑩ 修正: UI 描画時のみ使用する 32 バンドスペクトラム配列
+    private val uiSpectrumBands = FloatArray(32) { -60f }
+
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
@@ -100,6 +103,13 @@ class MainActivity : AppCompatActivity() {
                 bitActivityMask = 0
                 walkmanLevelMeter?.setLevels(-60f, -60f)
             }
+
+            // ★ UI スレッド側から安全にスペクトラムを取得してダイアログへ供給
+            if (isPlayingState && appPrefs.isSpectrumEnabled) {
+                NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
+                activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
+            }
+
             updateStatus()
             updateDialogPlayerUi()
             uiHandler.postDelayed(this, 30)
@@ -134,6 +144,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
+
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setDirectSourceMode(isDirectSource)
 
@@ -158,13 +169,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            playbackService?.onPeakListener = { dbL, dbR, mask, spectrumBands ->
+            playbackService?.onPeakListener = { dbL, dbR, mask ->
                 lastPcmTime = System.currentTimeMillis()
                 peakDbL = dbL
                 peakDbR = dbR
                 bitActivityMask = bitActivityMask or mask
                 walkmanLevelMeter?.setLevels(dbL, dbR)
-                activePlayerDialog?.setSpectrumLevels(spectrumBands)
             }
 
             playbackService?.onDeviceDisconnectedListener = {

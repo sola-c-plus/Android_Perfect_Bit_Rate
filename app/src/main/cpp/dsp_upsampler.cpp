@@ -1,4 +1,4 @@
-﻿#include "dsp_upsampler.h"
+#include "dsp_upsampler.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -71,9 +71,10 @@ void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) 
     causalCepstrum[half] = cepstrum[half];
 
     std::vector<double> minReal(fftSize, 0.0), minImag(fftSize, 0.0);
+    // ★ 因果的ケプストラム全領域 [0, half] を積算 (打ち切りバグ修正)
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
-        for (int n = 0; n < totalTaps; ++n) {
+        for (int n = 0; n <= half; ++n) {
             double angle = -2.0 * DSP_PI * k * n / fftSize;
             real += causalCepstrum[n] * std::cos(angle);
             imag += causalCepstrum[n] * std::sin(angle);
@@ -417,11 +418,6 @@ void DspUpsampler::processMsSpatial(float* left, float* right, size_t numFrames)
     }
 }
 
-// ★ 異音防止: キャリア変調SBRは完全停止 (高周波ビートを発生させない)
-void DspUpsampler::processDynamicSbr(float* left, float* right, size_t numFrames) {
-    return;
-}
-
 size_t DspUpsampler::process(
     const uint8_t* inPcm,
     size_t inBytes,
@@ -442,17 +438,72 @@ size_t DspUpsampler::process(
         tempInR_[i] = srcFloat[i * 2 + 1];
     }
 
+    int outBytesPerSample = 2;
+    if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
+    else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
+
+    // DIRECT SOURCE 完全バイパス (1:1 ピュアビットパーフェクト)
+    if (isDirectSource_) {
+        size_t outTotalBytes = numInFrames * outBytesPerSample * 2;
+        outBuffer.resize(outTotalBytes);
+        uint8_t* dst = outBuffer.data();
+
+        if (outBytesPerSample == 4) {
+            auto* dst32 = reinterpret_cast<int32_t*>(dst);
+            for (size_t i = 0; i < numInFrames; ++i) {
+                float l = std::clamp(tempInL_[i], -1.0f, 1.0f);
+                float r = std::clamp(tempInR_[i], -1.0f, 1.0f);
+                dst32[i * 2]     = static_cast<int32_t>(l >= 0.0f ? (l * 2147483647.0f) : (l * 2147483648.0f));
+                dst32[i * 2 + 1] = static_cast<int32_t>(r >= 0.0f ? (r * 2147483647.0f) : (r * 2147483648.0f));
+            }
+        } else if (outBytesPerSample == 3) {
+            const double scale = 8388607.0;
+            for (size_t i = 0; i < numInFrames; ++i) {
+                int32_t intL = static_cast<int32_t>(std::clamp(std::round(static_cast<double>(tempInL_[i]) * scale), -8388608.0, 8388607.0));
+                int32_t intR = static_cast<int32_t>(std::clamp(std::round(static_cast<double>(tempInR_[i]) * scale), -8388608.0, 8388607.0));
+                if (intL < 0) intL = 0x1000000 + intL;
+                if (intR < 0) intR = 0x1000000 + intR;
+                size_t base = i * 6;
+                dst[base]     = intL & 0xFF;
+                dst[base + 1] = (intL >> 8) & 0xFF;
+                dst[base + 2] = (intL >> 16) & 0xFF;
+                dst[base + 3] = intR & 0xFF;
+                dst[base + 4] = (intR >> 8) & 0xFF;
+                dst[base + 5] = (intR >> 16) & 0xFF;
+            }
+        } else {
+            const double scale = 32767.0;
+            for (size_t i = 0; i < numInFrames; ++i) {
+                int32_t intL = static_cast<int32_t>(std::clamp(std::round(static_cast<double>(tempInL_[i]) * scale), -32768.0, 32767.0));
+                int32_t intR = static_cast<int32_t>(std::clamp(std::round(static_cast<double>(tempInR_[i]) * scale), -32768.0, 32767.0));
+                dst[i * 4]     = intL & 0xFF;
+                dst[i * 4 + 1] = (intL >> 8) & 0xFF;
+                dst[i * 4 + 2] = intR & 0xFF;
+                dst[i * 4 + 3] = (intR >> 8) & 0xFF;
+            }
+        }
+
+        size_t curPos = specRingPos_.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < numInFrames; ++i) {
+            specRingBuf_[curPos] = (tempInL_[i] + tempInR_[i]) * 0.5f;
+            curPos = (curPos + 1) & 4095;
+        }
+        specRingPos_.store(curPos, std::memory_order_release);
+
+        return outTotalBytes;
+    }
+
     bool is441Base = (std::abs(inSampleRate_ - 44100.0f) < 100.0f);
     double speedRatio = is441Base ? (44100.0 / 48000.0) : 1.0;
 
-    int currentFactor = isDirectSource_ ? 1 : factor_;
+    int currentFactor = factor_;
     size_t numOutFrames = static_cast<size_t>(std::round(numInFrames * speedRatio * currentFactor));
     if (numOutFrames == 0) return 0;
 
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
-    if (!isDirectSource_ && currentFactor > 1) {
+    if (currentFactor > 1) {
         if (isCascadeFir_) {
             if (currentFactor == 2) {
                 cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
@@ -566,30 +617,28 @@ size_t DspUpsampler::process(
         }
     }
 
-    if (!isDirectSource_) {
-        if (currentFactor >= 2) {
-            if (perfMode_ == PerformanceMode::ULTRA_HQ) {
-                antiPreecho_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-                bitContinuity_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            }
-
-            if (transientMode_ != TransientMode::OFF) {
-                transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            }
-            if (freqMode_ != FreqMode::OFF) {
-                freqEngine_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            }
-            if (isDynamicSbr_) {
-                processDynamicSbr(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            }
-            if (isMsSpatial_) {
-                processMsSpatial(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            }
-        }
-
-        equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-        dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    // ★ ⑧ 修正: 過渡応答復元と M/S 空間処理は 1x (48kHz) でもフル稼働させる！
+    if (transientMode_ != TransientMode::OFF) {
+        transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
+    if (isMsSpatial_) {
+        processMsSpatial(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    }
+
+    // ハイレゾ空間 (2x 以上) のみ動作するモジュール
+    if (currentFactor >= 2) {
+        if (perfMode_ == PerformanceMode::ULTRA_HQ) {
+            antiPreecho_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+            bitContinuity_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        }
+        if (freqMode_ != FreqMode::OFF) {
+            freqEngine_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+        }
+    }
+
+    // ★ ① 修正: DC Phase による低域ブーストを先にかけ、EQ の先読みリミッターで安全に包括制御
+    dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 
     size_t curPos = specRingPos_.load(std::memory_order_relaxed);
     for (size_t i = 0; i < numInFrames; ++i) {
@@ -598,10 +647,6 @@ size_t DspUpsampler::process(
         curPos = (curPos + 1) & 4095;
     }
     specRingPos_.store(curPos, std::memory_order_release);
-
-    int outBytesPerSample = 2;
-    if (strcmp(outBitMode, "32bit") == 0) outBytesPerSample = 4;
-    else if (strcmp(outBitMode, "24bit") == 0) outBytesPerSample = 3;
 
     size_t outTotalBytes = numOutFrames * outBytesPerSample * 2;
     outBuffer.resize(outTotalBytes);
@@ -623,24 +668,22 @@ size_t DspUpsampler::process(
             double shapedL = rawL;
             double shapedR = rawR;
 
-            if (!isDirectSource_) {
-                double dL = getTpdfDitherL();
-                double dR = getTpdfDitherR(lrIndependentDither_);
-                if (ditherMode_ == DitherMode::TPDF) {
-                    shapedL += dL; shapedR += dR;
-                } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
-                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
-                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
-                } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
-                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + dL;
-                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + dR;
-                }
+            double dL = getTpdfDitherL();
+            double dR = getTpdfDitherR(lrIndependentDither_);
+            if (ditherMode_ == DitherMode::TPDF) {
+                shapedL += dL; shapedR += dR;
+            } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
+                shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
+                shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
+            } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + dL;
+                shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + dR;
             }
 
             int32_t intL = static_cast<int32_t>(std::clamp(std::round(shapedL), -8388608.0, 8388607.0));
             int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -8388608.0, 8388607.0));
 
-            if (!isDirectSource_ && (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC)) {
+            if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
                 errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0];
                 errHistL_[0] = std::clamp(shapedL - intL, -2.0, 2.0);
                 errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0];
@@ -666,24 +709,22 @@ size_t DspUpsampler::process(
             double shapedL = rawL;
             double shapedR = rawR;
 
-            if (!isDirectSource_) {
-                double dL = getTpdfDitherL();
-                double dR = getTpdfDitherR(lrIndependentDither_);
-                if (ditherMode_ == DitherMode::TPDF) {
-                    shapedL += dL; shapedR += dR;
-                } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
-                    shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
-                    shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
-                } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
-                    shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + dL;
-                    shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + dR;
-                }
+            double dL = getTpdfDitherL();
+            double dR = getTpdfDitherR(lrIndependentDither_);
+            if (ditherMode_ == DitherMode::TPDF) {
+                shapedL += dL; shapedR += dR;
+            } else if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED) {
+                shapedL += (1.5 * errHistL_[0] - 0.6 * errHistL_[1]) + dL;
+                shapedR += (1.5 * errHistR_[0] - 0.6 * errHistR_[1]) + dR;
+            } else if (ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
+                shapedL += (2.033 * errHistL_[0] - 2.165 * errHistL_[1] + 1.959 * errHistL_[2] - 0.827 * errHistL_[3]) + dL;
+                shapedR += (2.033 * errHistR_[0] - 2.165 * errHistR_[1] + 1.959 * errHistR_[2] - 0.827 * errHistR_[3]) + dR;
             }
 
             int32_t intL = static_cast<int32_t>(std::clamp(std::round(shapedL), -32768.0, 32767.0));
             int32_t intR = static_cast<int32_t>(std::clamp(std::round(shapedR), -32768.0, 32767.0));
 
-            if (!isDirectSource_ && (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC)) {
+            if (ditherMode_ == DitherMode::HIGH_PASS_SHAPED || ditherMode_ == DitherMode::PSYCHOACOUSTIC) {
                 errHistL_[3] = errHistL_[2]; errHistL_[2] = errHistL_[1]; errHistL_[1] = errHistL_[0];
                 errHistL_[0] = std::clamp(shapedL - intL, -2.0, 2.0);
                 errHistR_[3] = errHistR_[2]; errHistR_[2] = errHistR_[1]; errHistR_[1] = errHistR_[0];

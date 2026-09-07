@@ -1,4 +1,4 @@
-﻿#include "dsp_fir_stage.h"
+#include "dsp_fir_stage.h"
 #include <algorithm>
 #include <cstring>
 
@@ -48,9 +48,10 @@ void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     causalCepstrum[half] = cepstrum[half];
 
     std::vector<double> minReal(fftSize, 0.0), minImag(fftSize, 0.0);
+    // ★ 因果的ケプストラムの全領域 [0, half] を余さず積算 (高次成分の切り捨てを解消)
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
-        for (int n = 0; n < totalTaps; ++n) {
+        for (int n = 0; n <= half; ++n) {
             double angle = -2.0 * DSP_PI * k * n / fftSize;
             real += causalCepstrum[n] * std::cos(angle);
             imag += causalCepstrum[n] * std::sin(angle);

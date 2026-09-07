@@ -1,4 +1,4 @@
-﻿#include "dsp_transient.h"
+#include "dsp_transient.h"
 #include <algorithm>
 
 DspTransientRestorer::DspTransientRestorer() {
@@ -78,8 +78,8 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double deltaL = predL - prevSampleL_;
         prevSampleL_ = inL;
 
-        double gdL = useGroupDelay_ ? (deltaL * 0.12) : 0.0;
-        double outL = inL + (deltaL * (attackGain_ - 1.0) * transientRatioL * 0.5) + gdL;
+        // ★ 定常音への常時高域ブーストを排除し、過渡アタック時のみ適切にダイナミクス復元
+        double outL = inL + (deltaL * (attackGain_ - 1.0) * transientRatioL * 0.5);
         left[i] = static_cast<float>(std::clamp(outL, -1.0, 1.0));
 
         double inR = static_cast<double>(right[i]);
@@ -102,8 +102,7 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double deltaR = predR - prevSampleR_;
         prevSampleR_ = inR;
 
-        double gdR = useGroupDelay_ ? (deltaR * 0.12) : 0.0;
-        double outR = inR + (deltaR * (attackGain_ - 1.0) * transientRatioR * 0.5) + gdR;
+        double outR = inR + (deltaR * (attackGain_ - 1.0) * transientRatioR * 0.5);
         right[i] = static_cast<float>(std::clamp(outR, -1.0, 1.0));
     }
 }

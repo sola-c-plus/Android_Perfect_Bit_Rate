@@ -3,13 +3,12 @@
 
 constexpr double PI = 3.14159265358979323846;
 
-// ★ Walkman 1Z 最適化 Q 値 (低音バンドの重なりによる異常ゲイン爆発を抑制)
 static inline double getBandQ(int band) {
     switch (band) {
-        case 0: return 0.85; // 31.25Hz: タイトで深く沈む重低音
-        case 1: return 0.95; // 62.5Hz:  パンチ
-        case 2: return 1.05; // 125Hz:   ベースライン
-        default: return 1.15; // 中高域
+        case 0: return 0.85;
+        case 1: return 0.95;
+        case 2: return 1.05;
+        default: return 1.15;
     }
 }
 
@@ -51,6 +50,7 @@ DspEqualizer::DspEqualizer() {
     gainsDb_.fill(0.0f);
     delayBufL_.assign(MAX_LOOKAHEAD, 0.0);
     delayBufR_.assign(MAX_LOOKAHEAD, 0.0);
+    delayPeakBuf_.assign(MAX_LOOKAHEAD, 0.0);
     setSampleRate(48000.0);
 }
 
@@ -59,9 +59,6 @@ void DspEqualizer::updateAdaptiveHeadroom() {
     for (float g : gainsDb_) {
         if (g > maxBoost) maxBoost = g;
     }
-    // ブースト量の 35% のみ穏やかにマージン確保
-    // 例: +3dB ブーストで約 -1.0dB、+6dB で約 -2.1dB、+10dB で約 -3.5dB
-    // 低音エネルギーが圧倒的に増えるため、聴感上「音が小さくなった」とは一切感じず、迫力だけが激増
     if (maxBoost > 0.5f) {
         double safeDb = maxBoost * 0.35;
         adaptiveHeadroomGain_ = std::pow(10.0, -safeDb / 20.0);
@@ -77,9 +74,7 @@ void DspEqualizer::setSampleRate(double sampleRate) {
     }
 
     lookaheadFrames_ = std::min(static_cast<size_t>(sampleRate_ * 0.0040), MAX_LOOKAHEAD - 1);
-    // 自然にゲインが復帰するスムーズリリース (85ms: 低音のサイクル内で揺れず、ポンピングを根絶)
     releaseCoeff_ = std::exp(-1.0 / (0.085 * sampleRate_));
-    // 18Hz サブソニックハイパス係数
     hpCoeff_ = std::exp(-2.0 * PI * 18.0 / sampleRate_);
 
     updateAdaptiveHeadroom();
@@ -115,6 +110,7 @@ void DspEqualizer::reset() {
     }
     std::fill(delayBufL_.begin(), delayBufL_.end(), 0.0);
     std::fill(delayBufR_.begin(), delayBufR_.end(), 0.0);
+    std::fill(delayPeakBuf_.begin(), delayPeakBuf_.end(), 0.0);
     bufWritePos_ = 0;
     bufReadPos_ = 0;
     isPrimed_ = false;
@@ -134,33 +130,33 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
         double l = static_cast<double>(left[i]);
         double r = static_cast<double>(right[i]);
 
-        // 1. サブソニック 18Hz ハイパス (超低周波のDC揺らぎをカットし、可聴低音の抜けを最大化)
+        // 1. サブソニック 18Hz ハイパス
         double yL = l - hp_xL_ + hpCoeff_ * hp_yL_;
         hp_xL_ = l; hp_yL_ = yL; l = yL;
 
         double yR = r - hp_xR_ + hpCoeff_ * hp_yR_;
         hp_xR_ = r; hp_yR_ = yR; r = yR;
 
-        // 2. 10-Band 倍精度 IIR 処理
+        // 2. 10-Band 倍精度 IIR
         for (int b = 0; b < NUM_BANDS; ++b) {
             filters_[b].process(l, r);
         }
 
-        // 3. 音楽的アダプティブ・マージンを適用
         l *= hrGain;
         r *= hrGain;
 
-        // 4. 全帯域ピーク検知 (低音を見落とさず 100% 確実にキャッチ)
         double instantPeak = std::max(std::abs(l), std::abs(r));
+
+        // 3. ピークエンベロープの更新 (先読み遅延バッファに同期格納)
         if (instantPeak > peakEnv_) {
             peakEnv_ = instantPeak;
         } else {
             peakEnv_ = instantPeak + releaseCoeff_ * (peakEnv_ - instantPeak);
         }
 
-        // 5. 先読み遅延バッファへ格納
         delayBufL_[bufWritePos_] = l;
         delayBufR_[bufWritePos_] = r;
+        delayPeakBuf_[bufWritePos_] = peakEnv_;
         bufWritePos_ = (bufWritePos_ + 1) % cap;
 
         if (!isPrimed_) {
@@ -170,20 +166,18 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
             continue;
         }
 
-        // 6. 先読み遅延サンプルの取り出し
         double delayedL = delayBufL_[bufReadPos_];
         double delayedR = delayBufR_[bufReadPos_];
+        // ★ 先読み遅延から出てくるまさにそのサンプルのエンベロープ値を使用 (早期減衰を物理阻止)
+        double delayedPeak = delayPeakBuf_[bufReadPos_];
         bufReadPos_ = (bufReadPos_ + 1) % cap;
 
-        // 7. ブリックウォールリミッター (絶対上限 0.988)
-        // ピーク到来前にゲインが下がりきるため、波形が切断されず 100% 綺麗なサイン波を保持
-        if (peakEnv_ > 0.988) {
-            double limitGain = 0.988 / peakEnv_;
+        if (delayedPeak > 0.988) {
+            double limitGain = 0.988 / delayedPeak;
             delayedL *= limitGain;
             delayedR *= limitGain;
         }
 
-        // 8. 出力 (リミッターが完璧に防ぐため clamp は作動しない)
         left[i] = static_cast<float>(std::clamp(delayedL, -1.0, 1.0));
         right[i] = static_cast<float>(std::clamp(delayedR, -1.0, 1.0));
     }

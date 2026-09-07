@@ -1,4 +1,4 @@
-﻿#include "dsp_preecho.h"
+#include "dsp_preecho.h"
 #include <algorithm>
 
 DspAntiPreecho::DspAntiPreecho() {
@@ -45,20 +45,7 @@ void DspAntiPreecho::processStereo(float* left, float* right, size_t numFrames) 
         float outL = ringBufL_[readPos_];
         float outR = ringBufR_[readPos_];
 
-        float futL = std::abs(inL);
-        float futR = std::abs(inR);
-        float nowL = std::abs(outL);
-        float nowR = std::abs(outR);
-
-        if (futL > nowL * 8.0f && futL > 0.15f && nowL < 0.03f) {
-            float attenL = std::clamp(nowL / (futL * 0.10f + 1e-4f), 0.20f, 1.0f);
-            outL *= attenL;
-        }
-        if (futR > nowR * 8.0f && futR > 0.15f && nowR < 0.03f) {
-            float attenR = std::clamp(nowR / (futR * 0.10f + 1e-4f), 0.20f, 1.0f);
-            outR *= attenR;
-        }
-
+        // ★ 単一サンプルの穴あきアッテネートを撤廃し、トランスペアレントな波形連続性を維持
         left[i] = outL;
         right[i] = outR;
 
@@ -79,11 +66,12 @@ void DspBitContinuity::processStereo(float* left, float* right, size_t numFrames
         float curL = left[i];
         float curR = right[i];
 
+        // ★ 閾値を -60dBFS 以下に引き下げ、ボーカルや楽器の高域倍音のスルーレート破壊を防止
         float absL = std::abs(curL);
-        if (absL > 0.0001f && absL < 0.035f) {
+        if (absL > 0.00005f && absL < 0.001f) {
             float d1 = curL - prevL_;
             float d2 = prevL_ - prev2L_;
-            if (std::abs(d1 - d2) > 0.0015f) {
+            if (std::abs(d1 - d2) > 0.0005f) {
                 curL = prevL_ + (d1 + d2) * 0.45f;
             }
         }
@@ -92,10 +80,10 @@ void DspBitContinuity::processStereo(float* left, float* right, size_t numFrames
         left[i] = curL;
 
         float absR = std::abs(curR);
-        if (absR > 0.0001f && absR < 0.035f) {
+        if (absR > 0.00005f && absR < 0.001f) {
             float d1 = curR - prevR_;
             float d2 = prevR_ - prev2R_;
-            if (std::abs(d1 - d2) > 0.0015f) {
+            if (std::abs(d1 - d2) > 0.0005f) {
                 curR = prevR_ + (d1 + d2) * 0.45f;
             }
         }

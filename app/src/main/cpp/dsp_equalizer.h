@@ -54,20 +54,20 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
-    // ★ 音楽的アダプティブ・マージン (低音の音圧を損なわずクリッピングを未然に防止)
     double adaptiveHeadroomGain_ = 1.0;
     void updateAdaptiveHeadroom();
 
-    // ★ 18Hz サブソニックDCブロック (超低周波の直流揺らぎをカットし低音の抜けを最大化)
     double hp_xL_ = 0.0, hp_yL_ = 0.0;
     double hp_xR_ = 0.0, hp_yR_ = 0.0;
     double hpCoeff_ = 0.997;
 
-    // ★ 4.0ms ルックアヘッド・ブリックウォール防壁リミッター (波形切断を 100% 物理阻止)
-    static constexpr size_t MAX_LOOKAHEAD = 512;
-    size_t lookaheadFrames_ = 192; // 約 4.0ms
+    // ★ ハイレゾ 192k/384k に完全対応する 2048 サンプル先読みバッファ
+    static constexpr size_t MAX_LOOKAHEAD = 2048;
+    size_t lookaheadFrames_ = 192;
     std::vector<double> delayBufL_;
     std::vector<double> delayBufR_;
+    // ★ 先読み遅延と完全に同期したピークホールドバッファ (早期減衰バグを根絶)
+    std::vector<double> delayPeakBuf_;
     size_t bufWritePos_ = 0;
     size_t bufReadPos_ = 0;
     bool isPrimed_ = false;
