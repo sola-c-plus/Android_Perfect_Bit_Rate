@@ -1,12 +1,15 @@
-﻿#include <jni.h>
+#include <jni.h>
 #include "aaudio_engine.h"
 #include "dsp_upsampler.h"
 #include <vector>
 #include <string>
+#include <mutex>
 
 static AAudioEngine* g_engine = nullptr;
 static DspUpsampler* g_upsampler = nullptr;
 static std::vector<uint8_t> g_outDspBuffer;
+static std::mutex g_dspMutex;
+
 static int g_currentDitherMode = 1;
 static int g_currentFirFilterType = 2; // Minimum Phase Sharp
 static int g_currentDcPhaseType = 2;
@@ -20,6 +23,7 @@ extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_engine) g_engine = new AAudioEngine();
     if (!g_upsampler) {
         g_upsampler = new DspUpsampler();
@@ -37,6 +41,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
         JNIEnv *env, jobject thiz, jint factor, jint sample_rate) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->configure(factor, static_cast<float>(sample_rate));
 }
@@ -44,12 +49,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeConfigureUpsampler(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeResetUpsampler(
         JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (g_upsampler) g_upsampler->reset();
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDirectSource(
         JNIEnv *env, jobject thiz, jboolean enabled) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_isDirectSource = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDirectSource(g_isDirectSource);
@@ -58,6 +65,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDirectSource(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetCascadeFir(
         JNIEnv *env, jobject thiz, jboolean enabled) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_isCascadeFir = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setCascadeFir(g_isCascadeFir);
@@ -66,6 +74,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetCascadeFir(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDitherMode(
         JNIEnv *env, jobject thiz, jint mode) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_currentDitherMode = mode;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDitherMode(static_cast<DitherMode>(mode));
@@ -74,6 +83,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDitherMode(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetLrIndependentDither(
         JNIEnv *env, jobject thiz, jboolean enabled) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setLrIndependentDither(enabled == JNI_TRUE);
 }
@@ -81,6 +91,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetLrIndependentDither(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFirFilterType(
         JNIEnv *env, jobject thiz, jint type) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_currentFirFilterType = type;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setFirFilterType(static_cast<FirFilterType>(type));
@@ -89,6 +100,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFirFilterType(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
         JNIEnv *env, jobject thiz, jint type) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_currentDcPhaseType = type;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDcPhaseType(static_cast<DcPhaseType>(type));
@@ -97,6 +109,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDcPhaseType(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetPerformanceMode(
         JNIEnv *env, jobject thiz, jint mode) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setPerformanceMode(static_cast<PerformanceMode>(mode));
 }
@@ -104,6 +117,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetPerformanceMode(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(
         JNIEnv *env, jobject thiz, jint mode) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_currentFreqMode = mode;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setFreqMode(static_cast<FreqMode>(mode));
@@ -112,6 +126,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetRichHarmonics(
         JNIEnv *env, jobject thiz, jboolean enabled) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_isRichHarmonics = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setRichHarmonics(g_isRichHarmonics);
@@ -120,6 +135,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetRichHarmonics(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(
         JNIEnv *env, jobject thiz, jfloat gain, jfloat extractFreq) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setFreqCustomParams(gain, extractFreq);
 }
@@ -139,6 +155,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeCustomParams(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
         JNIEnv *env, jobject thiz, jint mode) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     g_currentTransientMode = mode;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setTransientMode(static_cast<TransientMode>(mode));
@@ -147,6 +164,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientCustomParams(
         JNIEnv *env, jobject thiz, jboolean useGroupDelay, jboolean useLattice) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setTransientCustomParams(useGroupDelay == JNI_TRUE, useLattice == JNI_TRUE);
 }
@@ -154,6 +172,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientCustomParams
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetMsSpatial(
         JNIEnv *env, jobject thiz, jboolean enabled) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setMsSpatial(enabled == JNI_TRUE);
 }
@@ -161,12 +180,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetMsSpatial(
 JNIEXPORT jboolean JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetMsSpatial(
         JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     return (g_upsampler && g_upsampler->isMsSpatial()) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDynamicSbr(
         JNIEnv *env, jobject thiz, jboolean enabled) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setDynamicSbr(enabled == JNI_TRUE);
 }
@@ -174,12 +195,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDynamicSbr(
 JNIEXPORT jboolean JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetDynamicSbr(
         JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     return (g_upsampler && g_upsampler->isDynamicSbr()) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
     if (gains) {
@@ -195,6 +218,7 @@ JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetSpectrum(
         JNIEnv *env, jobject thiz, jfloatArray out_array) {
     if (!out_array || !g_upsampler) return;
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     jfloat* dst = env->GetFloatArrayElements(out_array, nullptr);
     if (dst) {
         g_upsampler->getSpectrum(dst);
@@ -208,6 +232,8 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
         jbyteArray in_bytes, jint in_length,
         jstring in_bit_mode, jstring out_bit_mode, jint factor) {
     if (!in_bytes || in_length <= 0) return nullptr;
+    
+    std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
 
     const char* inMode = env->GetStringUTFChars(in_bit_mode, nullptr);

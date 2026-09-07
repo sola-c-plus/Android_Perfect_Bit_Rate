@@ -62,6 +62,8 @@ class BitPerfectPlaybackService : Service() {
     private val trackExecutor = Executors.newSingleThreadExecutor()
     private val isInitializingTrack = AtomicBoolean(false)
     private val hasPendingInit = AtomicBoolean(false)
+    // ★ レート切り替え中の巨大データ書き込みデッドロックを物理遮断するガードフラグ
+    private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
     private val MAX_QUEUE_CAPACITY = 32
@@ -339,14 +341,15 @@ class BitPerfectPlaybackService : Service() {
         updateVolumeControlMode()
 
         if (changed && device != null) {
-            triggerTrackReinit()
+            switchStreamConfiguration()
         }
     }
 
     fun setDirectSourceMode(isDirect: Boolean) {
+        if (isDirectSource == isDirect) return
         isDirectSource = isDirect
         NativeAudioEngine.nativeSetDirectSource(isDirect)
-        triggerTrackReinit()
+        switchStreamConfiguration()
     }
 
     fun setUpsampling(factor: Int) {
@@ -356,57 +359,55 @@ class BitPerfectPlaybackService : Service() {
             8 -> 8
             else -> 1
         }
+        if (upsampleFactor == validFactor && !isDirectSource) return
         upsampleFactor = validFactor
-        triggerTrackReinit()
+        switchStreamConfiguration()
     }
 
-    private fun triggerTrackReinit() {
+    // ★ レート切り替え時のデッドロックを防止する安全なアトミック遷移
+    private fun switchStreamConfiguration() {
         val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
-        effectiveSampleRate = baseSampleRate * effectiveFactor
-        NativeAudioEngine.nativeConfigureUpsampler(effectiveFactor, baseSampleRate)
-        isBuffering.set(true)
+        val targetRate = baseSampleRate * effectiveFactor
         
-        if (isInitializingTrack.get()) {
-            hasPendingInit.set(true)
-            return
-        }
+        isSwitchingRate.set(true)
+        isBuffering.set(true)
+        pcmQueue.clear()
+
+        effectiveSampleRate = targetRate
+        NativeAudioEngine.nativeConfigureUpsampler(effectiveFactor, baseSampleRate)
 
         trackExecutor.execute {
-            initAudioTrack(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+            try {
+                initAudioTrack(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+            } finally {
+                pcmQueue.clear()
+                isSwitchingRate.set(false)
+            }
         }
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
         isCurrentlyPlaying = true
 
+        // ★ レート切り替え処理中は PCM を安全に受け流し、古い AudioTrack への書き込みを阻止
+        if (isSwitchingRate.get()) {
+            return
+        }
+
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
         val currentFactor = if (isDirectSource) 1 else upsampleFactor
         val targetEffectiveRate = actualInputRate * currentFactor
 
         if (actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate) {
-            pcmQueue.clear()
-            isBuffering.set(true)
-            NativeAudioEngine.nativeResetUpsampler()
-
-            audioLock.lock()
-            try {
-                audioTrack?.flush()
-            } catch (e: Exception) {}
-            finally {
-                audioLock.unlock()
-            }
-
             baseSampleRate = actualInputRate
-            effectiveSampleRate = targetEffectiveRate
-            NativeAudioEngine.nativeConfigureUpsampler(currentFactor, baseSampleRate)
-
-            triggerTrackReinit()
+            switchStreamConfiguration()
             return
         }
 
         val needsRecreate = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED)
         if (needsRecreate) {
-            triggerTrackReinit()
+            switchStreamConfiguration()
+            return
         }
 
         val processedBytes = NativeAudioEngine.nativeProcessUpsample(
@@ -742,7 +743,6 @@ class BitPerfectPlaybackService : Service() {
                 var finalEncoding = AudioFormat.ENCODING_PCM_16BIT
                 var lockSuccess = false
 
-                // ★ Direct Source 時も含め、USB DAC では BIT_PERFECT 属性を最優先で絶対確保 (共有ミキサー減衰を完全阻止)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
                     val supportedMixers = try {
                         audioManager.getSupportedMixerAttributes(targetDevice!!)
@@ -750,7 +750,6 @@ class BitPerfectPlaybackService : Service() {
                         emptyList<AudioMixerAttributes>()
                     }
 
-                    // DAC の物理伝送フォーマット (32bit -> 24bit -> 16bit) の優先度で BIT_PERFECT を探索
                     val preferredEncList = when (bitMode) {
                         "32bit" -> listOf(
                             AudioFormat.ENCODING_PCM_32BIT,
@@ -769,7 +768,6 @@ class BitPerfectPlaybackService : Service() {
                         )
                     }
 
-                    // 1. まず MIXER_BEHAVIOR_BIT_PERFECT を完全一致で探索
                     for (tryEnc in preferredEncList) {
                         val bpMatch = supportedMixers.firstOrNull {
                             it.format.sampleRate == effectiveSampleRate &&
@@ -789,7 +787,6 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    // 2. 一致がない場合、該当レートの任意の BIT_PERFECT ミキサーを探索
                     if (!lockSuccess) {
                         val rateBpMatch = supportedMixers.firstOrNull {
                             it.format.sampleRate == effectiveSampleRate &&
@@ -807,7 +804,6 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    // 3. システム未登録の場合でも BIT_PERFECT 属性の生成を強制試行
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val forcedBp = AudioMixerAttributes.Builder(
@@ -849,7 +845,6 @@ class BitPerfectPlaybackService : Service() {
                 val desiredBuf = effectiveSampleRate * 2 * bytesPerSample / 4
                 val bufferSize = max(if (minBuf > 0) minBuf * 4 else 16384, desiredBuf)
 
-                // ★ USB DAC の物理クロック切り替え遅延に対応するリトライ生成機構 (最大3回)
                 var createdTrack: AudioTrack? = null
                 for (retry in 0..2) {
                     try {
@@ -915,6 +910,12 @@ class BitPerfectPlaybackService : Service() {
                         } catch (e: Exception) {}
                     }
 
+                    // ★ レート切り替え中は AudioTrack 書き込みを一時停止し、古いバッファとのデッドロックを防止
+                    if (isSwitchingRate.get() || !isCurrentlyPlaying) {
+                        Thread.sleep(15)
+                        continue
+                    }
+
                     if (isBuffering.get()) {
                         if (pcmQueue.size < PREROLL_THRESHOLD) {
                             Thread.sleep(10)
@@ -942,7 +943,7 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && !isSwitchingRate.get()) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
