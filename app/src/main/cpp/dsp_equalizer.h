@@ -54,7 +54,24 @@ private:
     std::array<float, NUM_BANDS> gainsDb_{};
     std::array<Biquad64, NUM_BANDS> filters_{};
 
-    double env_ = 0.0;
-    double attackCoeff_ = 0.0;
+    // ★ 音楽的アダプティブ・マージン (低音の音圧を損なわずクリッピングを未然に防止)
+    double adaptiveHeadroomGain_ = 1.0;
+    void updateAdaptiveHeadroom();
+
+    // ★ 18Hz サブソニックDCブロック (超低周波の直流揺らぎをカットし低音の抜けを最大化)
+    double hp_xL_ = 0.0, hp_yL_ = 0.0;
+    double hp_xR_ = 0.0, hp_yR_ = 0.0;
+    double hpCoeff_ = 0.997;
+
+    // ★ 4.0ms ルックアヘッド・ブリックウォール防壁リミッター (波形切断を 100% 物理阻止)
+    static constexpr size_t MAX_LOOKAHEAD = 512;
+    size_t lookaheadFrames_ = 192; // 約 4.0ms
+    std::vector<double> delayBufL_;
+    std::vector<double> delayBufR_;
+    size_t bufWritePos_ = 0;
+    size_t bufReadPos_ = 0;
+    bool isPrimed_ = false;
+
+    double peakEnv_ = 0.0;
     double releaseCoeff_ = 0.0;
 };
