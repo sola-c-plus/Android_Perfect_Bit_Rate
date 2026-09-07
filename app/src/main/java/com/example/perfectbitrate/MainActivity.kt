@@ -25,6 +25,7 @@ import android.view.View
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -81,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private var isVolLockOn = false
     private var isPlayingState = false
     private var isHandlingDisconnect = false
+    private var lastBackPressTime = 0L
 
     private var peakDbL = -60f
     private var peakDbR = -60f
@@ -128,14 +130,18 @@ class MainActivity : AppCompatActivity() {
             playbackService = binder.getService()
             isServiceBound = true
             detectAudioOutputDevice()
+
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
-            playbackService?.upsampleFactor = if (isDirectSource) 1 else upsampleFactor
+            playbackService?.isDirectSource = isDirectSource
+            NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             playbackService?.setOutputDevice(activeOutputDevice)
+
+            // ★ 起動時に設定通りの倍率で即座に AudioTrack と DSP を確実に初期化
+            playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
             NativeAudioEngine.nativeSetRichHarmonics(appPrefs.isRichHarmonicsEnabled)
-            NativeAudioEngine.nativeSetDirectSource(isDirectSource)
             NativeAudioEngine.nativeSetCascadeFir(appPrefs.isCascadeFir)
             NativeAudioEngine.nativeSetDitherMode(appPrefs.selectedDitherMode)
             NativeAudioEngine.nativeSetLrIndependentDither(appPrefs.isLrIndependentDither)
@@ -235,7 +241,6 @@ class MainActivity : AppCompatActivity() {
             listener = object : GeckoSessionController.Listener {
                 override fun onFlush() { playbackService?.resetBuffer() }
                 override fun onPcm(pcmBytes: ByteArray, inBitMode: String) {
-                    // ★ 画面消灯時でも PCM が届く限り確実にサービスへ流し続ける
                     pcmPacketCount += pcmBytes.size
                     isPlayingState = true
                     lastPcmTime = System.currentTimeMillis()
@@ -246,7 +251,8 @@ class MainActivity : AppCompatActivity() {
                     if (rate > 0 && rate != baseSampleRate) {
                         playbackService?.resetBuffer()
                         baseSampleRate = rate
-                        playbackService?.setUpsampling(if (isDirectSource) 1 else upsampleFactor)
+                        val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
+                        playbackService?.setUpsampling(effectiveFactor)
                     }
                     playbackService?.updateCodec(codec)
                     updateStatus()
@@ -292,6 +298,24 @@ class MainActivity : AppCompatActivity() {
             }
         )
         geckoController.init()
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (geckoController.canGoBack) {
+                    geckoController.goBack()
+                    return
+                }
+
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressTime < 2000L) {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                } else {
+                    lastBackPressTime = now
+                    Toast.makeText(this@MainActivity, "もう一度戻るを押すとアプリを終了します", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
 
         val serviceIntent = Intent(this, BitPerfectPlaybackService::class.java)
         ContextCompat.startForegroundService(this, serviceIntent)
@@ -402,13 +426,13 @@ class MainActivity : AppCompatActivity() {
             },
             onUpsampleFactorChanged = { newFactor ->
                 upsampleFactor = newFactor
-                if (!isDirectSource) playbackService?.setUpsampling(newFactor)
+                val effectiveFactor = if (isDirectSource) 1 else newFactor
+                playbackService?.setUpsampling(effectiveFactor)
                 updateStatus()
             },
             onDirectSourceChanged = { isDirect ->
                 isDirectSource = isDirect
-                val effectiveFactor = if (isDirect) 1 else upsampleFactor
-                playbackService?.setUpsampling(effectiveFactor)
+                playbackService?.setDirectSourceMode(isDirect)
                 updateStatus()
             },
             onPlayerCommand = { cmd ->
@@ -482,7 +506,9 @@ class MainActivity : AppCompatActivity() {
             peakDbR = -60f
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
-            playbackService?.initAudioTrack(currentBitMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
+            val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
+            playbackService?.setUpsampling(effectiveFactor)
+            playbackService?.initAudioTrack(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
             geckoController.reload()
             updateStatus()
         }
