@@ -134,8 +134,6 @@ class MainActivity : AppCompatActivity() {
             playbackService?.isVolumeLocked = isVolLockOn
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
-
-            // ★ ユーザーの設定倍率 (例: 4x) を確実にサービスへ同期
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setDirectSourceMode(isDirectSource)
 
@@ -250,7 +248,8 @@ class MainActivity : AppCompatActivity() {
                     if (rate > 0 && rate != baseSampleRate) {
                         playbackService?.resetBuffer()
                         baseSampleRate = rate
-                        playbackService?.setUpsampling(upsampleFactor)
+                        val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
+                        playbackService?.setUpsampling(effectiveFactor)
                     }
                     playbackService?.updateCodec(codec)
                     updateStatus()
@@ -424,7 +423,8 @@ class MainActivity : AppCompatActivity() {
             },
             onUpsampleFactorChanged = { newFactor ->
                 upsampleFactor = newFactor
-                playbackService?.setUpsampling(newFactor)
+                val effectiveFactor = if (isDirectSource) 1 else newFactor
+                playbackService?.setUpsampling(effectiveFactor)
                 updateStatus()
             },
             onDirectSourceChanged = { isDirect ->

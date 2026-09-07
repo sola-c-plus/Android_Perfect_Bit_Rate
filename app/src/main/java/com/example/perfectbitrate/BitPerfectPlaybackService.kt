@@ -55,7 +55,6 @@ class BitPerfectPlaybackService : Service() {
     
     var currentBitMode = "16bit"
 
-    // ★ ユーザーが選択した本来の設定倍率 (Direct Source ON でも絶対に破壊せず保持)
     var upsampleFactor = 1
         set(value) {
             val valid = when (value) {
@@ -73,7 +72,6 @@ class BitPerfectPlaybackService : Service() {
             NativeAudioEngine.nativeSetDirectSource(value)
         }
 
-    // ★ 実際に出力する実効倍率 (Direct Source ON 時は 1x、OFF 時はユーザー設定値)
     val effectiveFactor: Int
         get() = if (isDirectSource) 1 else upsampleFactor
 
@@ -285,27 +283,35 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
+    // ★ 0ms 同期即時ミュート ＆ バッファ破棄 (スピーカー爆音を完全に抹殺)
     fun handleBecomingNoisyOrDisconnected() {
         isVolumeLocked = false
         isCurrentlyPlaying = false
 
+        // 1. その場で即座に AudioTrack をゼロミュート & ポーズ & バッファ消去 (0ms遮断)
+        try {
+            audioTrack?.setVolume(0f)
+            audioTrack?.pause()
+            audioTrack?.flush()
+        } catch (e: Exception) {}
+
+        // 2. キューの残余データを全破棄
         pcmQueue.clear()
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
         tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
 
+        // 3. システム音量を安全にゼロミュート
         muteVolumeToZero()
-        setSafeSpeakerVolume()
         onCommandListener?.invoke("pause")
 
+        // 4. 重いリソース破棄 (stop, release, mixerクリア) はワーカースレッドへ委譲してフリーズ防止
         trackExecutor.execute {
             audioLock.lock()
             try {
                 audioTrack?.let { track ->
                     try {
-                        track.pause()
-                        track.flush()
                         track.stop()
                         track.release()
                     } catch (e: Exception) {
@@ -365,7 +371,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ Direct Source 切り替え時も upsampleFactor は破壊せず維持
     fun setDirectSourceMode(isDirect: Boolean) {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
@@ -384,7 +389,6 @@ class BitPerfectPlaybackService : Service() {
         switchStreamConfiguration()
     }
 
-    // ★ レート切り替え時の安全アトミック遷移 (effectiveFactor を自動計算)
     private fun switchStreamConfiguration() {
         val factorToApply = effectiveFactor
         val targetRate = baseSampleRate * factorToApply
@@ -407,9 +411,8 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        isCurrentlyPlaying = true
-
-        if (isSwitchingRate.get()) {
+        // ★ DAC 抜去後や再生停止中は PCM を一切受け付けず破棄
+        if (!isCurrentlyPlaying || isSwitchingRate.get()) {
             return
         }
 
@@ -460,7 +463,10 @@ class BitPerfectPlaybackService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            "ACTION_PLAY" -> onCommandListener?.invoke("play")
+            "ACTION_PLAY" -> {
+                isCurrentlyPlaying = true
+                onCommandListener?.invoke("play")
+            }
             "ACTION_PAUSE" -> {
                 onCommandListener?.invoke("pause")
                 forceCloseDacStream()
@@ -491,7 +497,10 @@ class BitPerfectPlaybackService : Service() {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
             setSessionActivity(sessionActivityPendingIntent)
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() { onCommandListener?.invoke("play") }
+                override fun onPlay() {
+                    isCurrentlyPlaying = true
+                    onCommandListener?.invoke("play")
+                }
                 override fun onPause() {
                     onCommandListener?.invoke("pause")
                     forceCloseDacStream()
@@ -538,13 +547,17 @@ class BitPerfectPlaybackService : Service() {
         tempSpectrumOut.fill(-60f)
         onPeakListener?.invoke(-60f, -60f, 0, tempSpectrumOut)
 
+        try {
+            audioTrack?.setVolume(0f)
+            audioTrack?.pause()
+            audioTrack?.flush()
+        } catch (e: Exception) {}
+
         trackExecutor.execute {
             audioLock.lock()
             try {
                 audioTrack?.let { track ->
                     try {
-                        track.pause()
-                        track.flush()
                         track.stop()
                         track.release()
                     } catch (e: Exception) {}
@@ -928,7 +941,8 @@ class BitPerfectPlaybackService : Service() {
                         } catch (e: Exception) {}
                     }
 
-                    if (isSwitchingRate.get() || !isCurrentlyPlaying) {
+                    // ★ 再生停止中、またはレート切替中は即座にスリープし、write も setVolume(1.0f) も絶対に呼ばない！
+                    if (!isCurrentlyPlaying || isSwitchingRate.get()) {
                         Thread.sleep(15)
                         continue
                     }
@@ -960,7 +974,8 @@ class BitPerfectPlaybackService : Service() {
                         audioLock.unlock()
                     }
 
-                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && !isSwitchingRate.get()) {
+                    // ★ isCurrentlyPlaying を厳密に二重チェック！停止中のスピーカー書き込みを物理遮断
+                    if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isCurrentlyPlaying && !isSwitchingRate.get()) {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
