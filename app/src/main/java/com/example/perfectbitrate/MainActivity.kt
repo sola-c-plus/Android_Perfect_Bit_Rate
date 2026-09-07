@@ -90,7 +90,6 @@ class MainActivity : AppCompatActivity() {
     private var lastBitResetTime = 0L
     private var lastPcmTime = 0L
 
-    // ★ ⑩ 修正: UI 描画時のみ使用する 32 バンドスペクトラム配列
     private val uiSpectrumBands = FloatArray(32) { -60f }
 
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -104,7 +103,6 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(-60f, -60f)
             }
 
-            // ★ UI スレッド側から安全にスペクトラムを取得してダイアログへ供給
             if (isPlayingState && appPrefs.isSpectrumEnabled) {
                 NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
                 activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
@@ -145,6 +143,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
 
+            // ★ ユーザーの希望設定倍率 (4x など) をサービスへ正しく同期
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setDirectSourceMode(isDirectSource)
 
@@ -258,8 +257,8 @@ class MainActivity : AppCompatActivity() {
                     if (rate > 0 && rate != baseSampleRate) {
                         playbackService?.resetBuffer()
                         baseSampleRate = rate
-                        val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
-                        playbackService?.setUpsampling(effectiveFactor)
+                        // ★ upsampleFactor を壊さず、新ベースレートだけを安全にサービスへ反映
+                        playbackService?.updateBaseSampleRate(rate)
                     }
                     playbackService?.updateCodec(codec)
                     updateStatus()
@@ -433,8 +432,7 @@ class MainActivity : AppCompatActivity() {
             },
             onUpsampleFactorChanged = { newFactor ->
                 upsampleFactor = newFactor
-                val effectiveFactor = if (isDirectSource) 1 else newFactor
-                playbackService?.setUpsampling(effectiveFactor)
+                playbackService?.setUpsampling(newFactor)
                 updateStatus()
             },
             onDirectSourceChanged = { isDirect ->
@@ -630,6 +628,8 @@ class MainActivity : AppCompatActivity() {
         val mb = pcmPacketCount / (1024.0 * 1024.0)
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
+        
+        // ★ サービス側の実効倍率 (Direct時は1x、OFF時は4x等) を直接取得して表示
         val activeFactor = playbackService?.effectiveFactor ?: (if (isDirectSource) 1 else upsampleFactor)
         val dspTag = if (isDirectSource) " [DIRECT]" else (if (activeFactor > 1) " [DSP ${activeFactor}x]" else "")
 
