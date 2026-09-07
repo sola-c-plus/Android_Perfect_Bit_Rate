@@ -409,7 +409,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        if (!isCurrentlyPlaying || isSwitchingRate.get()) {
+        // ★ ① 修正: 曲切り替えで一時停止フラグが落ちていても、PCMが届いた瞬間に確実に再生状態へ復帰！
+        isCurrentlyPlaying = true
+
+        if (isSwitchingRate.get()) {
             return
         }
 
@@ -702,7 +705,6 @@ class BitPerfectPlaybackService : Service() {
         try {
             do {
                 hasPendingInit.set(false)
-                // ★ 保留ループでも常に最新の effectiveFactor (Direct時は1x、OFF時は4x) を確実に取得
                 val latestFactor = effectiveFactor
                 doInitAudioTrackInternal(bitMode, baseRate, latestFactor, activeOutputDevice)
             } while (hasPendingInit.get())
@@ -741,7 +743,6 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
 
-                // ★ 渡された factor をそのまま適用し、upsampleFactor (ユーザー希望設定値) は破壊しない
                 val factorToApply = factor
                 var targetRate = baseRate * factorToApply
 
@@ -906,7 +907,6 @@ class BitPerfectPlaybackService : Service() {
                     }
                 }
 
-                // ★ 万が一 USB DAC がビジーで失敗した場合の自動復旧リトライ
                 if (createdTrack == null && isUsbDevice(targetDevice)) {
                     Log.w("BitPerfect", "AudioTrack init failed on USB DAC, scheduling recovery retry...")
                     trackExecutor.execute {

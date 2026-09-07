@@ -6,6 +6,7 @@ try {
     Object.defineProperty(document, 'hidden', { value: false, writable: false });
     Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
     document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
+    window.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true);
     window.addEventListener('blur', (e) => e.stopImmediatePropagation(), true);
     window.addEventListener('pagehide', (e) => e.stopImmediatePropagation(), true);
 } catch(e) {}
@@ -13,7 +14,7 @@ try {
 let port = null;
 let lastCodecName = "";
 let adBlockEnabled = true;
-let userWantsPlaying = false;
+let userWantsPlaying = true;
 let detectedStreamRate = 48000;
 let isWhiteThemeActive = false;
 
@@ -124,7 +125,7 @@ function safeAdSkip() {
 
     const player = document.querySelector('#movie_player') || document.querySelector('.html5-video-player');
     const isAd = player?.classList.contains('ad-showing') || player?.classList.contains('ad-interrupting');
-    const video = currentMediaElement || document.querySelector('video');
+    const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
 
     if (isAd && video) {
         video.playbackRate = 8.0;
@@ -138,7 +139,7 @@ function safeAdSkip() {
 setInterval(safeAdSkip, 1000);
 
 function forceFullVolume() {
-    const video = currentMediaElement || document.querySelector('video');
+    const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
     if (video && video.volume < 1.0) {
         video.volume = 1.0;
     }
@@ -155,7 +156,7 @@ function keepPlayingInBackground() {
         audioCtx.resume().catch(() => {});
     }
 }
-setInterval(keepPlayingInBackground, 1500);
+setInterval(keepPlayingInBackground, 1000);
 
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
@@ -226,31 +227,37 @@ function bytesToBase64(bytes) {
 
 function attachAudioPipeline(mediaEl) {
     if (!mediaEl) return;
-    if (currentMediaElement !== mediaEl) {
-        currentMediaElement = mediaEl;
+    
+    // 常に最新のメディア要素を更新
+    currentMediaElement = mediaEl;
 
-        const onTrackChanged = () => {
-            scanStreamCodec();
-            postNativeMessage({ type: "flush" });
-        };
-        mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
-        mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
-        mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
+    const onTrackChanged = () => {
+        scanStreamCodec();
+        getAudioContext();
+        postNativeMessage({ type: "flush" });
+    };
 
-        mediaEl.addEventListener('pause', () => {
-            userWantsPlaying = false;
-            postNativeMessage({ type: "state", playing: false });
-        }, { passive: true });
+    mediaEl.removeEventListener('loadstart', onTrackChanged);
+    mediaEl.removeEventListener('loadedmetadata', onTrackChanged);
+    mediaEl.removeEventListener('emptied', onTrackChanged);
 
-        mediaEl.addEventListener('play', () => {
-            userWantsPlaying = true;
-            postNativeMessage({ type: "state", playing: true });
-        }, { passive: true });
-    }
+    mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
+    mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
+    mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
+
+    mediaEl.addEventListener('pause', () => {
+        postNativeMessage({ type: "state", playing: false });
+    }, { passive: true });
+
+    mediaEl.addEventListener('play', () => {
+        userWantsPlaying = true;
+        getAudioContext();
+        postNativeMessage({ type: "state", playing: true });
+    }, { passive: true });
 
     try {
         const ctx = getAudioContext();
-        if (ctx.state === 'suspended') {
+        if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
             ctx.resume().catch(() => {});
         }
 
@@ -267,32 +274,38 @@ function attachAudioPipeline(mediaEl) {
 
         if (!processor || processor.context !== ctx) {
             processor = ctx.createScriptProcessor(4096, 2, 2);
-            processor.onaudioprocess = function(e) {
-                if (mediaEl.paused || mediaEl.ended || !userWantsPlaying) return;
-                if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-
-                const inL = e.inputBuffer.getChannelData(0);
-                const inR = e.inputBuffer.getChannelData(1);
-                const len = inL.length;
-
-                const totalBytes = len * 8;
-                const { view, bytes } = getTransferBuffers(totalBytes);
-
-                for (let i = 0; i < len; i++) {
-                    view.setFloat32(i * 8, inL[i], true);
-                    view.setFloat32(i * 8 + 4, inR[i], true);
-                }
-
-                const base64Pcm = bytesToBase64(bytes);
-
-                postNativeMessage({
-                    type: "pcm",
-                    pcm: base64Pcm,
-                    sampleRate: detectedStreamRate,
-                    bitMode: "float32"
-                });
-            };
         }
+
+        // ★ ① 修正: 古いメディア要素のクロージャ参照を全廃し、常に最新の要素を動的参照
+        processor.onaudioprocess = function(e) {
+            const activeEl = currentMediaElement || mediaEl;
+            if (!activeEl || activeEl.paused || activeEl.ended) return;
+
+            if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                ctx.resume().catch(() => {});
+            }
+
+            const inL = e.inputBuffer.getChannelData(0);
+            const inR = e.inputBuffer.getChannelData(1);
+            const len = inL.length;
+
+            const totalBytes = len * 8;
+            const { view, bytes } = getTransferBuffers(totalBytes);
+
+            for (let i = 0; i < len; i++) {
+                view.setFloat32(i * 8, inL[i], true);
+                view.setFloat32(i * 8 + 4, inR[i], true);
+            }
+
+            const base64Pcm = bytesToBase64(bytes);
+
+            postNativeMessage({
+                type: "pcm",
+                pcm: base64Pcm,
+                sampleRate: detectedStreamRate,
+                bitMode: "float32"
+            });
+        };
 
         if (!virtualDest || virtualDest.context !== ctx) {
             virtualDest = ctx.createMediaStreamDestination();
@@ -315,13 +328,13 @@ HTMLMediaElement.prototype.play = function() {
     userWantsPlaying = true;
     scanStreamCodec();
     attachAudioPipeline(mediaEl);
+    getAudioContext();
     postNativeMessage({ type: "state", playing: true });
     return origPlay.apply(this, arguments);
 };
 
 const origPause = HTMLMediaElement.prototype.pause;
 HTMLMediaElement.prototype.pause = function() {
-    userWantsPlaying = false;
     postNativeMessage({ type: "state", playing: false });
     return origPause.apply(this, arguments);
 };
@@ -357,20 +370,40 @@ function handleNativeMessage(msg) {
         if (video) {
             video.muted = false;
             video.volume = 1.0;
-            if (video.paused) {
+        }
+        const playPauseBtn = document.querySelector('#play-pause-button') || document.querySelector('.play-pause-button');
+        if (playPauseBtn) {
+            const label = (playPauseBtn.getAttribute('aria-label') || playPauseBtn.getAttribute('title') || '').toLowerCase();
+            const isPlayIcon = label.includes('play') || label.includes('再生') || !!playPauseBtn.querySelector('iron-icon[icon*="play"]');
+            if (isPlayIcon) {
+                playPauseBtn.click();
+            } else if (video && video.paused) {
                 video.play().catch(() => {});
             }
+        } else if (video && video.paused) {
+            video.play().catch(() => {});
         }
     } else if (cmd === 'pause') {
         userWantsPlaying = false;
-        if (video && !video.paused) {
+        if (video) {
             video.pause();
+        }
+        const playPauseBtn = document.querySelector('#play-pause-button') || document.querySelector('.play-pause-button');
+        if (playPauseBtn) {
+            const label = (playPauseBtn.getAttribute('aria-label') || playPauseBtn.getAttribute('title') || '').toLowerCase();
+            const isPauseIcon = label.includes('pause') || label.includes('一時停止') || !!playPauseBtn.querySelector('iron-icon[icon*="pause"]');
+            if (isPauseIcon) {
+                playPauseBtn.click();
+            }
         }
     } else if (cmd === 'resume_audio') {
         getAudioContext();
         if (video) {
             video.muted = false;
             attachAudioPipeline(video);
+            if (userWantsPlaying && video.paused) {
+                video.play().catch(() => {});
+            }
         }
     } else if (cmd === 'next') {
         document.querySelector('.next-button')?.click();
@@ -417,7 +450,7 @@ function postNativeMessage(data) {
 }
 
 function syncPlaybackProgress() {
-    const video = currentMediaElement || document.querySelector('video');
+    const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
     if (video && !isNaN(video.duration) && video.duration > 0) {
         postNativeMessage({
             type: "progress",

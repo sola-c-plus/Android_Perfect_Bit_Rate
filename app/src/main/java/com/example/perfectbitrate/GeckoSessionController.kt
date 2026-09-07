@@ -53,11 +53,13 @@ class GeckoSessionController(
 
         geckoRuntime = GeckoRuntime.getDefault(activity)
 
+        // ★ suspendMediaWhenInactive(false) を設定し、画面消灯・非表示時のGeckoViewメディア停止を完全阻止！
         val sessionSettings = GeckoSessionSettings.Builder()
             .usePrivateMode(false)
             .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
             .allowJavascript(true)
+            .suspendMediaWhenInactive(false)
             .build()
 
         geckoSession = GeckoSession(sessionSettings)
@@ -177,11 +179,17 @@ class GeckoSessionController(
     fun onPause() {
         geckoSession.setActive(true)
         geckoSession.setFocused(true)
+        try {
+            geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
+        } catch (e: Throwable) {}
     }
 
     fun onStop() {
         geckoSession.setActive(true)
         geckoSession.setFocused(true)
+        try {
+            geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
+        } catch (e: Throwable) {}
     }
 
     fun onDestroy() {
