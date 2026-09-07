@@ -1,4 +1,4 @@
-﻿plugins {
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
@@ -58,14 +58,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
-
-    // Media3 (ExoPlayer)
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-common:1.3.1")
-
-    // 笘・JitPack 豁｣蠑乗欠螳壼ｽ｢蠑・(TeamNewPipe.NewPipeExtractor:extractor)
-    implementation("com.github.TeamNewPipe.NewPipeExtractor:extractor:v0.24.6")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
