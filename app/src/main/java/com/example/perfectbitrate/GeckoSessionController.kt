@@ -61,6 +61,7 @@ class GeckoSessionController(
             .build()
 
         geckoSession = GeckoSession(sessionSettings)
+        geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
 
         geckoSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
@@ -85,6 +86,9 @@ class GeckoSessionController(
         geckoRuntime?.let { runtime ->
             geckoSession.open(runtime)
             geckoView.setSession(geckoSession)
+            geckoSession.setActive(true)
+            geckoSession.setFocused(true)
+            geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
 
             val extensionLocation = "resource://android/assets/yt_capture_extension/"
             val extensionId = "yt_capture@example.com"
@@ -177,11 +181,13 @@ class GeckoSessionController(
     fun onPause() {
         geckoSession.setActive(true)
         geckoSession.setFocused(true)
+        geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
     }
 
     fun onStop() {
         geckoSession.setActive(true)
         geckoSession.setFocused(true)
+        geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
     }
 
     fun onDestroy() {
