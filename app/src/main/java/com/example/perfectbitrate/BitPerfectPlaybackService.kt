@@ -709,10 +709,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun initAudioTrack(
-        bitMode: String,
+        bitMode: String = currentBitMode,
         baseRate: Int = baseSampleRate,
         factor: Int = effectiveFactor,
-        targetDevice: AudioDeviceInfo? = null
+        targetDevice: AudioDeviceInfo? = activeOutputDevice
     ) {
         if (isInitializingTrack.getAndSet(true)) {
             hasPendingInit.set(true)
@@ -722,7 +722,7 @@ class BitPerfectPlaybackService : Service() {
         try {
             do {
                 hasPendingInit.set(false)
-                doInitAudioTrackInternal(bitMode, baseRate, factor, targetDevice)
+                doInitAudioTrackInternal(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
@@ -760,23 +760,7 @@ class BitPerfectPlaybackService : Service() {
                 baseSampleRate = baseRate
 
                 val factorToApply = factor
-                var targetRate = baseRate * factorToApply
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
-                    val supportedMixers = try {
-                        audioManager.getSupportedMixerAttributes(targetDevice!!)
-                    } catch (e: Exception) {
-                        emptyList<AudioMixerAttributes>()
-                    }
-
-                    val supportedRates = supportedMixers.map { it.format.sampleRate }.toSet()
-                    if (supportedRates.isNotEmpty() && !supportedRates.contains(targetRate)) {
-                        val safeClampedRate = supportedRates.filter { it <= targetRate }.maxOrNull()
-                            ?: supportedRates.maxOrNull()
-                            ?: targetRate
-                        targetRate = safeClampedRate
-                    }
-                }
+                val targetRate = baseRate * factorToApply
 
                 effectiveSampleRate = targetRate
                 NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
@@ -814,6 +798,7 @@ class BitPerfectPlaybackService : Service() {
                         )
                     }
 
+                    // --- Step 1: supportedMixers から BIT_PERFECT (優先) を探索 ---
                     for (tryEnc in preferredEncList) {
                         val bpMatch = supportedMixers.firstOrNull {
                             it.format.sampleRate == effectiveSampleRate &&
@@ -833,23 +818,28 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
+                    // --- Step 2: 96k/384k等で BIT_PERFECT が未定義の場合、supportedMixers の DEFAULT 動作を探索 ---
                     if (!lockSuccess) {
-                        val rateBpMatch = supportedMixers.firstOrNull {
-                            it.format.sampleRate == effectiveSampleRate &&
-                            it.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT
-                        }
-                        if (rateBpMatch != null) {
-                            try {
-                                val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice!!, rateBpMatch)
-                                if (ok) {
-                                    lastConfiguredMixerDevice = targetDevice
-                                    finalEncoding = rateBpMatch.format.encoding
-                                    lockSuccess = true
-                                }
-                            } catch (e: Exception) {}
+                        for (tryEnc in preferredEncList) {
+                            val defMatch = supportedMixers.firstOrNull {
+                                it.format.sampleRate == effectiveSampleRate &&
+                                it.format.encoding == tryEnc
+                            }
+                            if (defMatch != null) {
+                                try {
+                                    val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice!!, defMatch)
+                                    if (ok) {
+                                        lastConfiguredMixerDevice = targetDevice
+                                        finalEncoding = defMatch.format.encoding
+                                        lockSuccess = true
+                                        break
+                                    }
+                                } catch (e: Exception) {}
+                            }
                         }
                     }
 
+                    // --- Step 3: supportedMixers に無くても、DAC に対して targetRate の BIT_PERFECT を要求 ---
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val forcedBp = AudioMixerAttributes.Builder(
@@ -862,6 +852,29 @@ class BitPerfectPlaybackService : Service() {
 
                             try {
                                 val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice!!, forcedBp)
+                                if (ok) {
+                                    lastConfiguredMixerDevice = targetDevice
+                                    finalEncoding = tryEnc
+                                    lockSuccess = true
+                                    break
+                                }
+                            } catch (e: Exception) {}
+                        }
+                    }
+
+                    // --- Step 4: 最後の手段として targetRate の DEFAULT クロック切り替えを要求 (96k/384k 物理クロック固定用) ---
+                    if (!lockSuccess) {
+                        for (tryEnc in preferredEncList) {
+                            val forcedDef = AudioMixerAttributes.Builder(
+                                AudioFormat.Builder()
+                                    .setSampleRate(effectiveSampleRate)
+                                    .setEncoding(tryEnc)
+                                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                    .build()
+                            ).setMixerBehavior(AudioMixerAttributes.MIXER_BEHAVIOR_DEFAULT).build()
+
+                            try {
+                                val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice!!, forcedDef)
                                 if (ok) {
                                     lastConfiguredMixerDevice = targetDevice
                                     finalEncoding = tryEnc
