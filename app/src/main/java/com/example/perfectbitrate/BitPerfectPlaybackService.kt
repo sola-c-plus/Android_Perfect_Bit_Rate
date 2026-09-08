@@ -709,10 +709,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun initAudioTrack(
-        bitMode: String,
+        bitMode: String = currentBitMode,
         baseRate: Int = baseSampleRate,
         factor: Int = effectiveFactor,
-        targetDevice: AudioDeviceInfo? = null
+        targetDevice: AudioDeviceInfo? = activeOutputDevice
     ) {
         if (isInitializingTrack.getAndSet(true)) {
             hasPendingInit.set(true)
@@ -722,7 +722,7 @@ class BitPerfectPlaybackService : Service() {
         try {
             do {
                 hasPendingInit.set(false)
-                doInitAudioTrackInternal(bitMode, baseRate, factor, targetDevice)
+                doInitAudioTrackInternal(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
@@ -779,7 +779,8 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 effectiveSampleRate = targetRate
-                NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
+                val actualDspFactor = if (baseSampleRate > 0) (targetRate / baseSampleRate).coerceIn(1, 8) else factorToApply
+                NativeAudioEngine.nativeConfigureUpsampler(actualDspFactor, baseSampleRate)
 
                 val mediaAttr = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)

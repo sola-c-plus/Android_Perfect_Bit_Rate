@@ -414,7 +414,7 @@ class DspSettingsDialog(
 
         spinnerEqPreset?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                if (position !in spinnerItemList.indices) return
+                if (position !in spinnerItemList.indices || isApplyingPreset) return
                 val item = spinnerItemList[position]
 
                 when (item) {
@@ -470,6 +470,24 @@ class DspSettingsDialog(
                     if (targetCustom != null) {
                         for (i in 0..9) targetCustom.gains[i] = allGains[i]
                         appPrefs.saveCustomEqPresets(customPresetsList)
+                    }
+                } else {
+                    // ★ ビルトインプリセット（Flat, Rock等）変更時に Custom スロットへ自動シフト
+                    var targetCustom = customPresetsList.firstOrNull()
+                    if (targetCustom == null) {
+                        targetCustom = CustomEqPreset(id = "custom_1", name = "Custom 1", gains = allGains.copyOf())
+                        customPresetsList.add(targetCustom)
+                    } else {
+                        for (i in 0..9) targetCustom.gains[i] = allGains[i]
+                    }
+                    appPrefs.saveCustomEqPresets(customPresetsList)
+                    appPrefs.selectedEqPresetId = "custom:${targetCustom.id}"
+
+                    isApplyingPreset = true
+                    try {
+                        rebuildSpinnerItems("custom:${targetCustom.id}")
+                    } finally {
+                        isApplyingPreset = false
                     }
                 }
             }
