@@ -263,7 +263,6 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
-    // ★ OS のスピーカー切り替え遅延（50ms〜300ms）を考慮し、多段階で確実に消音リセット
     fun forceResetSpeakerVolume() {
         muteVolumeToZero()
         trackExecutor.execute {
@@ -373,7 +372,8 @@ class BitPerfectPlaybackService : Service() {
 
         updateVolumeControlMode()
 
-        if (changed && device != null) {
+        // 再生中であれば即時ストリーム再構築、停止中であれば PCM 到着時に初期化
+        if (changed && device != null && isCurrentlyPlaying) {
             switchStreamConfiguration()
         }
     }
@@ -382,7 +382,9 @@ class BitPerfectPlaybackService : Service() {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
         NativeAudioEngine.nativeSetDirectSource(isDirect)
-        switchStreamConfiguration()
+        if (isCurrentlyPlaying) {
+            switchStreamConfiguration()
+        }
     }
 
     fun setUpsampling(factor: Int) {
@@ -393,13 +395,17 @@ class BitPerfectPlaybackService : Service() {
             else -> 1
         }
         upsampleFactor = validFactor
-        switchStreamConfiguration()
+        if (isCurrentlyPlaying) {
+            switchStreamConfiguration()
+        }
     }
 
     fun updateBaseSampleRate(newRate: Int) {
         if (baseSampleRate == newRate) return
         baseSampleRate = newRate
-        switchStreamConfiguration()
+        if (isCurrentlyPlaying) {
+            switchStreamConfiguration()
+        }
     }
 
     private fun switchStreamConfiguration() {
@@ -436,14 +442,12 @@ class BitPerfectPlaybackService : Service() {
         val factorToApply = effectiveFactor
         val targetEffectiveRate = actualInputRate * factorToApply
 
-        if (actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate) {
-            baseSampleRate = actualInputRate
-            switchStreamConfiguration()
-            return
-        }
+        // サンプリングレート不一致または AudioTrack 未生成の場合は即時オンデマンド構築
+        val needsRecreate = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED ||
+                             actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate)
 
-        val needsRecreate = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED)
         if (needsRecreate) {
+            baseSampleRate = actualInputRate
             switchStreamConfiguration()
             return
         }
