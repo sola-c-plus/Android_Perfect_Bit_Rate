@@ -33,7 +33,7 @@
             android:textColor="#E5A93C"
             android:textSize="13.5sp"
             android:textStyle="bold"
-            android:fontFamily="sans-serif-black"
+            android:fontFamily="@font/font_dap_condensed"
             android:letterSpacing="0.05" />
 
         <ImageButton
@@ -88,7 +88,7 @@
                         android:textColor="#E5A93C"
                         android:textSize="12sp"
                         android:textStyle="bold"
-                        android:fontFamily="sans-serif-black" />
+                        android:fontFamily="@font/font_dap_condensed" />
 
                     <TextView
                         android:id="@+id/textDirectSourceSub"
@@ -145,7 +145,8 @@
                             android:text="10-BAND EQUALIZER"
                             android:textColor="#FFFFFF"
                             android:textSize="11.5sp"
-                            android:textStyle="bold" />
+                            android:textStyle="bold"
+                            android:fontFamily="@font/font_dap_heading" />
 
                         <TextView
                             android:id="@+id/textEqSub"
@@ -175,8 +176,9 @@
                                 android:layout_height="wrap_content"
                                 android:text="EQ"
                                 android:textColor="#CCCCCC"
-                                android:textSize="9sp"
+                                android:textSize="9.5sp"
                                 android:textStyle="bold"
+                                android:fontFamily="@font/font_dap_condensed"
                                 android:layout_marginEnd="6dp" />
 
                             <androidx.appcompat.widget.SwitchCompat
@@ -202,8 +204,9 @@
                                 android:layout_height="wrap_content"
                                 android:text="SPEC"
                                 android:textColor="#E5A93C"
-                                android:textSize="9sp"
+                                android:textSize="9.5sp"
                                 android:textStyle="bold"
+                                android:fontFamily="@font/font_dap_condensed"
                                 android:layout_marginEnd="6dp" />
 
                             <androidx.appcompat.widget.SwitchCompat
@@ -217,7 +220,6 @@
                                 android:checked="true" />
                         </LinearLayout>
 
-                        <!-- ★ SPEC SW の直下に配置された EQ プリセットスピナー -->
                         <Spinner
                             android:id="@+id/dialogSpinnerEqPreset"
                             android:layout_width="wrap_content"
@@ -269,6 +271,7 @@
                             android:textColor="#888888"
                             android:textSize="9sp"
                             android:textStyle="bold"
+                            android:fontFamily="@font/font_dap_condensed"
                             android:background="@drawable/bg_btn_dap_outline"
                             android:padding="0dp"
                             android:layout_marginBottom="8dp" />
@@ -287,9 +290,9 @@
                                 android:layout_height="wrap_content"
                                 android:text="4K Hz"
                                 android:textColor="#CCCCCC"
-                                android:textSize="10.5sp"
+                                android:textSize="11sp"
                                 android:textStyle="bold"
-                                android:fontFamily="sans-serif-condensed" />
+                                android:fontFamily="@font/font_dap_condensed" />
 
                             <TextView
                                 android:id="@+id/textEqGainValue"
@@ -297,9 +300,9 @@
                                 android:layout_height="wrap_content"
                                 android:text="+0.0 dB"
                                 android:textColor="#FFFFFF"
-                                android:textSize="11.5sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold"
-                                android:fontFamily="sans-serif-medium"
+                                android:fontFamily="@font/font_dap_condensed"
                                 android:layout_marginBottom="4dp" />
 
                             <LinearLayout
@@ -353,7 +356,8 @@
                         android:text="BIT DEPTH FORMAT"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textBitDepthSub"
@@ -401,7 +405,8 @@
                         android:text="DITHERING ALGORITHM"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textDitherSub"
@@ -449,7 +454,8 @@
                         android:text="DC PHASE LINEARIZER"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textDcPhaseSub"
@@ -497,7 +503,8 @@
                         android:text="FREQ ENGINE (倍音復元)"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textDseeSub"
@@ -538,7 +545,8 @@
                         android:text="PERFORMANCE PROFILE (動作モード)"
                         android:textColor="#E5A93C"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textPerfModeSub"
@@ -586,7 +594,8 @@
                         android:text="RICH HARMONICS (ふくよか倍音)"
                         android:textColor="#E5A93C"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textRichHarmonicsSub"
@@ -637,7 +646,8 @@
                         android:text="ULTRA HQ UPSAMPLING"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textUpsampleSub"
@@ -678,7 +688,8 @@
                         android:text="MULTISTAGE CASCADE FIR"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textCascadeFirSub"
@@ -728,7 +739,8 @@
                         android:text="0dB VOLUME LOCK"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textVolLockSub"
@@ -807,11 +819,11 @@
                     android:layout_height="wrap_content"
                     android:text="YouTube Music"
                     android:textColor="#FFFFFF"
-                    android:textSize="15sp"
+                    android:textSize="14sp"
                     android:textStyle="bold"
                     android:ellipsize="end"
                     android:maxLines="1"
-                    android:fontFamily="sans-serif-medium" />
+                    android:fontFamily="@font/font_dap_heading" />
 
                 <TextView
                     android:id="@+id/dialogTextTrackArtist"
@@ -819,7 +831,7 @@
                     android:layout_height="wrap_content"
                     android:text=""
                     android:textColor="#BDBDBD"
-                    android:textSize="12.5sp"
+                    android:textSize="12sp"
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:layout_marginTop="1dp" />
@@ -838,7 +850,7 @@
                         android:text="0:00"
                         android:textColor="#888888"
                         android:textSize="10.5sp"
-                        android:fontFamily="monospace" />
+                        android:fontFamily="@font/font_dap_mono" />
 
                     <SeekBar
                         android:id="@+id/dialogSeekBar"
@@ -859,7 +871,7 @@
                         android:text="0:00"
                         android:textColor="#888888"
                         android:textSize="10.5sp"
-                        android:fontFamily="monospace" />
+                        android:fontFamily="@font/font_dap_mono" />
                 </LinearLayout>
             </LinearLayout>
 

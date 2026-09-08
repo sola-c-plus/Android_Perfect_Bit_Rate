@@ -1,10 +1,11 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.content.res.ResourcesCompat
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -114,19 +115,16 @@ class WalkmanEqView @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 8.0f * density
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textSize = 8.5f * density
         textAlign = Paint.Align.CENTER
     }
     private val hiResLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#E5A93C")
-        textSize = 8.0f * density
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textSize = 8.5f * density
         textAlign = Paint.Align.CENTER
     }
     private val selectedLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 8.5f * density
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textSize = 9.0f * density
         textAlign = Paint.Align.CENTER
     }
 
@@ -146,6 +144,14 @@ class WalkmanEqView @JvmOverloads constructor(
     private val spectrumFillPath = Path()
 
     init {
+        try {
+            val condensedTf = ResourcesCompat.getFont(context, R.font.roboto_condensed_bold)
+            if (condensedTf != null) {
+                labelPaint.typeface = condensedTf
+                hiResLabelPaint.typeface = condensedTf
+                selectedLabelPaint.typeface = condensedTf
+            }
+        } catch (e: Exception) {}
         updatePaintsForTheme()
     }
 
@@ -162,7 +168,6 @@ class WalkmanEqView @JvmOverloads constructor(
             selectedLabelPaint.color = Color.parseColor("#1C1C1E")
             pointPaint.color = Color.parseColor("#1C1C1E")
         } else {
-            // ダークモードは100%元の色を保持
             gridPaint.color = Color.parseColor("#1C1C1C")
             gridPaint.strokeWidth = 0.75f * density
             centerLinePaint.color = Color.parseColor("#3C3C3C")

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/uiDialogRoot"
@@ -33,7 +33,7 @@
             android:textColor="#E5A93C"
             android:textSize="13.5sp"
             android:textStyle="bold"
-            android:fontFamily="sans-serif-black"
+            android:fontFamily="@font/font_dap_condensed"
             android:letterSpacing="0.05" />
 
         <ImageButton
@@ -85,7 +85,7 @@
                         android:textColor="#E5A93C"
                         android:textSize="12sp"
                         android:textStyle="bold"
-                        android:fontFamily="sans-serif-black" />
+                        android:fontFamily="@font/font_dap_condensed" />
 
                     <TextView
                         android:id="@+id/textThemeSub"
@@ -121,7 +121,8 @@
                     android:text="BACKGROUND PROTECTION"
                     android:textColor="#FFFFFF"
                     android:textSize="11.5sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:fontFamily="@font/font_dap_heading" />
 
                 <TextView
                     android:id="@+id/textBatterySub"
@@ -171,7 +172,8 @@
                         android:text="AD CUT (広告自動カット)"
                         android:textColor="#FFFFFF"
                         android:textSize="11.5sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
 
                     <TextView
                         android:id="@+id/textAdBlockSub"
@@ -251,11 +253,11 @@
                     android:layout_height="wrap_content"
                     android:text="YouTube Music"
                     android:textColor="#FFFFFF"
-                    android:textSize="15sp"
+                    android:textSize="14sp"
                     android:textStyle="bold"
                     android:ellipsize="end"
                     android:maxLines="1"
-                    android:fontFamily="sans-serif-medium" />
+                    android:fontFamily="@font/font_dap_heading" />
 
                 <TextView
                     android:id="@+id/dialogTextTrackArtistUi"
@@ -263,7 +265,7 @@
                     android:layout_height="wrap_content"
                     android:text=""
                     android:textColor="#BDBDBD"
-                    android:textSize="12.5sp"
+                    android:textSize="12sp"
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:layout_marginTop="1dp" />
@@ -282,7 +284,7 @@
                         android:text="0:00"
                         android:textColor="#888888"
                         android:textSize="10.5sp"
-                        android:fontFamily="monospace" />
+                        android:fontFamily="@font/font_dap_mono" />
 
                     <SeekBar
                         android:id="@+id/dialogSeekBarUi"
@@ -303,7 +305,7 @@
                         android:text="0:00"
                         android:textColor="#888888"
                         android:textSize="10.5sp"
-                        android:fontFamily="monospace" />
+                        android:fontFamily="@font/font_dap_mono" />
                 </LinearLayout>
             </LinearLayout>
 
