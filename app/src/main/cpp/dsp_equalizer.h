@@ -61,13 +61,11 @@ private:
     double hp_xR_ = 0.0, hp_yR_ = 0.0;
     double hpCoeff_ = 0.997;
 
-    // ★ ハイレゾ 192k/384k に完全対応する 2048 サンプル先読みバッファ
     static constexpr size_t MAX_LOOKAHEAD = 2048;
     size_t lookaheadFrames_ = 192;
     std::vector<double> delayBufL_;
     std::vector<double> delayBufR_;
-    // ★ 先読み遅延と完全に同期したピークホールドバッファ (早期減衰バグを根絶)
-    std::vector<double> delayPeakBuf_;
+    std::vector<double> delayGainBuf_;
     size_t bufWritePos_ = 0;
     size_t bufReadPos_ = 0;
     bool isPrimed_ = false;

@@ -19,10 +19,8 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
 
     fExtract_ = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : (isRichHarmonics_ ? 12000.0 : 13000.0);
 
-    // ★ RICH HARMONICS: 15.8kHz〜 (ざらつきのない澄んだ帯域から滑らかに立ち上げ)
     double fOutHp = isRichHarmonics_ ? 15800.0 : 19800.0;
     
-    // ふくよかモード時はざらつきの原因となる奇数次(3次)を徹底排除し、純粋で温かい2次倍音を 96% に集中
     evenRatio_ = isRichHarmonics_ ? 0.96 : 0.65;
     oddRatio_  = isRichHarmonics_ ? 0.04 : 0.35;
     modeGainScale_ = isRichHarmonics_ ? 1.32 : 1.15;
@@ -90,7 +88,6 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     out_hp_a1_ = out_a1 * inv_out_a0;
     out_hp_a2_ = out_a2 * inv_out_a0;
 
-    // ふくよかモード時は高域端をシルキーにロールオフさせてデジタル感を払拭
     double fSilk = isRichHarmonics_ ? std::min(26000.0, sampleRate_ * 0.42) : std::min(32000.0, sampleRate_ * 0.44);
     double w0_silk = 2.0 * DSP_PI * fSilk / sampleRate_;
     double alpha_silk = std::sin(w0_silk) / (2.0 * 0.70710678);
@@ -128,6 +125,8 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     formant_bp_b2_ = f_b2 * inv_f_a0;
     formant_bp_a1_ = f_a1 * inv_f_a0;
     formant_bp_a2_ = f_a2 * inv_f_a0;
+
+    dcCutCoeff_ = std::exp(-2.0 * DSP_PI * 120.0 / sampleRate_);
 }
 
 void DspFreqEngine::reset() {
@@ -139,6 +138,8 @@ void DspFreqEngine::reset() {
     silk_s1_R_ = 0.0; silk_s2_R_ = 0.0;
     formant_s1_L_ = 0.0; formant_s2_L_ = 0.0;
     formant_s1_R_ = 0.0; formant_s2_R_ = 0.0;
+    dc_xL_ = 0.0; dc_yL_ = 0.0;
+    dc_xR_ = 0.0; dc_yR_ = 0.0;
     r0_Mid_ = 1e-4; r0_Side_ = 1e-4;
     smoothedGainMid_ = 0.0; smoothedGainSide_ = 0.0;
     prevPowMid_ = 0.0; prevPowSide_ = 0.0;
@@ -239,7 +240,6 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         double targetGainSide = std::min(rmsSide * (isRichHarmonics_ ? 1.00 : 0.90), static_cast<double>(targetGain_ * modeGainScale_ * baseSideGain)) * floorGateSide;
         smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.045 : 0.005);
 
-        // ★ ソフトサチュレーション型非線形カーブ（スパイクとざらつきを物理阻止）
         double normMid = std::clamp(hiMid / (rmsMid * 1.414 + 1e-5), -2.5, 2.5);
         double softNormMid = normMid / (1.0 + 0.25 * std::abs(normMid));
         double normSqMid = softNormMid * softNormMid;
@@ -276,8 +276,15 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         silk_s1_R_ = silk_lp_b1_ * outHarmR - silk_lp_a1_ * silkHarmR + silk_s2_R_;
         silk_s2_R_ = silk_lp_b2_ * outHarmR - silk_lp_a2_ * silkHarmR;
 
-        double totalL = inL + silkHarmL;
-        double totalR = inR + silkHarmR;
+        // ★ DC除去フィルター (120Hz 1次ハイパス): 2次倍音合成による直流バイアスとウーファー偏流を完全遮断
+        double cleanHarmL = silkHarmL - dc_xL_ + dcCutCoeff_ * dc_yL_;
+        dc_xL_ = silkHarmL; dc_yL_ = cleanHarmL;
+
+        double cleanHarmR = silkHarmR - dc_xR_ + dcCutCoeff_ * dc_yR_;
+        dc_xR_ = silkHarmR; dc_yR_ = cleanHarmR;
+
+        double totalL = inL + cleanHarmL;
+        double totalR = inR + cleanHarmR;
 
         left[i] = static_cast<float>(std::clamp(totalL, -1.0, 1.0));
         right[i] = static_cast<float>(std::clamp(totalR, -1.0, 1.0));

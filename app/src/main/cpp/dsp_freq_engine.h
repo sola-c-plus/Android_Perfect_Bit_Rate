@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "dsp_types.h"
 
 class DspFreqEngine {
@@ -9,7 +9,6 @@ public:
     void processStereo(float* left, float* right, size_t numFrames);
     void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
     
-    // ★ ふくよか倍音スイッチ (ON: 16kHz〜偶数次倍音ブレンド / OFF: 19.8kHz〜リアルHi-Res)
     void setRichHarmonics(bool enabled) {
         if (isRichHarmonics_ != enabled) {
             isRichHarmonics_ = enabled;
@@ -46,6 +45,10 @@ private:
     double formant_bp_a1_ = 0.0, formant_bp_a2_ = 0.0;
     double formant_s1_L_ = 0.0, formant_s2_L_ = 0.0;
     double formant_s1_R_ = 0.0, formant_s2_R_ = 0.0;
+
+    double dcCutCoeff_ = 0.985;
+    double dc_xL_ = 0.0, dc_yL_ = 0.0;
+    double dc_xR_ = 0.0, dc_yR_ = 0.0;
 
     double evenRatio_ = 0.65;
     double oddRatio_ = 0.35;

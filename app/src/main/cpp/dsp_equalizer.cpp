@@ -50,7 +50,7 @@ DspEqualizer::DspEqualizer() {
     gainsDb_.fill(0.0f);
     delayBufL_.assign(MAX_LOOKAHEAD, 0.0);
     delayBufR_.assign(MAX_LOOKAHEAD, 0.0);
-    delayPeakBuf_.assign(MAX_LOOKAHEAD, 0.0);
+    delayGainBuf_.assign(MAX_LOOKAHEAD, 1.0);
     setSampleRate(48000.0);
 }
 
@@ -73,7 +73,7 @@ void DspEqualizer::setSampleRate(double sampleRate) {
         filters_[i].update(FREQUENCIES[i], gainsDb_[i], getBandQ(i), sampleRate_);
     }
 
-    lookaheadFrames_ = std::min(static_cast<size_t>(sampleRate_ * 0.0040), MAX_LOOKAHEAD - 1);
+    lookaheadFrames_ = std::min(static_cast<size_t>(sampleRate_ * 0.0035), MAX_LOOKAHEAD - 1);
     releaseCoeff_ = std::exp(-1.0 / (0.085 * sampleRate_));
     hpCoeff_ = std::exp(-2.0 * PI * 18.0 / sampleRate_);
 
@@ -110,7 +110,7 @@ void DspEqualizer::reset() {
     }
     std::fill(delayBufL_.begin(), delayBufL_.end(), 0.0);
     std::fill(delayBufR_.begin(), delayBufR_.end(), 0.0);
-    std::fill(delayPeakBuf_.begin(), delayPeakBuf_.end(), 0.0);
+    std::fill(delayGainBuf_.begin(), delayGainBuf_.end(), 1.0);
     bufWritePos_ = 0;
     bufReadPos_ = 0;
     isPrimed_ = false;
@@ -125,6 +125,7 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
     const size_t la = lookaheadFrames_;
     const size_t cap = MAX_LOOKAHEAD;
     const double hrGain = adaptiveHeadroomGain_;
+    const double threshold = 0.985;
 
     for (size_t i = 0; i < numFrames; ++i) {
         double l = static_cast<double>(left[i]);
@@ -145,18 +146,22 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
         l *= hrGain;
         r *= hrGain;
 
+        // ★ 真の先読みリミッター: 入力時点 (未来) のピークから前もって減衰カーブを算出
         double instantPeak = std::max(std::abs(l), std::abs(r));
-
-        // 3. ピークエンベロープの更新 (先読み遅延バッファに同期格納)
         if (instantPeak > peakEnv_) {
             peakEnv_ = instantPeak;
         } else {
             peakEnv_ = instantPeak + releaseCoeff_ * (peakEnv_ - instantPeak);
         }
 
+        double targetGain = 1.0;
+        if (peakEnv_ > threshold) {
+            targetGain = threshold / peakEnv_;
+        }
+
         delayBufL_[bufWritePos_] = l;
         delayBufR_[bufWritePos_] = r;
-        delayPeakBuf_[bufWritePos_] = peakEnv_;
+        delayGainBuf_[bufWritePos_] = targetGain;
         bufWritePos_ = (bufWritePos_ + 1) % cap;
 
         if (!isPrimed_) {
@@ -166,17 +171,14 @@ void DspEqualizer::processStereo(float* left, float* right, size_t numFrames) {
             continue;
         }
 
+        // 遅延バッファから出てくるサンプルに対し、先読み計算されたリミッターゲインを適用
         double delayedL = delayBufL_[bufReadPos_];
         double delayedR = delayBufR_[bufReadPos_];
-        // ★ 先読み遅延から出てくるまさにそのサンプルのエンベロープ値を使用 (早期減衰を物理阻止)
-        double delayedPeak = delayPeakBuf_[bufReadPos_];
+        double applyGain = delayGainBuf_[bufReadPos_];
         bufReadPos_ = (bufReadPos_ + 1) % cap;
 
-        if (delayedPeak > 0.988) {
-            double limitGain = 0.988 / delayedPeak;
-            delayedL *= limitGain;
-            delayedR *= limitGain;
-        }
+        delayedL *= applyGain;
+        delayedR *= applyGain;
 
         left[i] = static_cast<float>(std::clamp(delayedL, -1.0, 1.0));
         right[i] = static_cast<float>(std::clamp(delayedR, -1.0, 1.0));
