@@ -1,4 +1,4 @@
-﻿#include "dsp_freq_engine.h"
+#include "dsp_freq_engine.h"
 #include <algorithm>
 
 DspFreqEngine::DspFreqEngine() {
@@ -17,35 +17,35 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     }
     isBypass_ = false;
 
-    fExtract_ = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : 13000.0;
+    fExtract_ = (extractFreq > 6000.0f) ? static_cast<double>(extractFreq) : (isRichHarmonics_ ? 12000.0 : 13000.0);
 
-    // ★ RICH HARMONICS: ONなら 16.0kHz (可聴域のふくよかな艶)、OFFなら 19.8kHz (リアルHi-Res)
-    double fOutHp = isRichHarmonics_ ? 17200.0 : 19800.0;
+    // ★ RICH HARMONICS: 15.8kHz〜 (ざらつきのない澄んだ帯域から滑らかに立ち上げ)
+    double fOutHp = isRichHarmonics_ ? 15800.0 : 19800.0;
     
-    // ふくよかモード時は温かみを与える偶数次倍音(2次/4次)を78%まで引き上げ、ゲインも厚めに
-    evenRatio_ = isRichHarmonics_ ? 0.78 : 0.65;
-    oddRatio_  = isRichHarmonics_ ? 0.22 : 0.35;
-    modeGainScale_ = isRichHarmonics_ ? 1.18 : 1.15;
+    // ふくよかモード時はざらつきの原因となる奇数次(3次)を徹底排除し、純粋で温かい2次倍音を 96% に集中
+    evenRatio_ = isRichHarmonics_ ? 0.96 : 0.65;
+    oddRatio_  = isRichHarmonics_ ? 0.04 : 0.35;
+    modeGainScale_ = isRichHarmonics_ ? 1.32 : 1.15;
 
     switch (mode_) {
         case FreqMode::AUTO_AI:
-            fOutHp = isRichHarmonics_ ? 16000.0 : 19800.0;
+            fOutHp = isRichHarmonics_ ? 15600.0 : 19800.0;
             break;
         case FreqMode::STUDIO_VOCAL:
-            fOutHp = isRichHarmonics_ ? 15500.0 : 19850.0;
-            evenRatio_ = isRichHarmonics_ ? 0.82 : 0.72;
-            oddRatio_  = isRichHarmonics_ ? 0.18 : 0.28;
+            fOutHp = isRichHarmonics_ ? 15200.0 : 19850.0;
+            evenRatio_ = isRichHarmonics_ ? 0.98 : 0.72;
+            oddRatio_  = isRichHarmonics_ ? 0.02 : 0.28;
             break;
         case FreqMode::ACOUSTIC_INSTRUMENT:
-            fOutHp = isRichHarmonics_ ? 15800.0 : 19800.0;
-            evenRatio_ = isRichHarmonics_ ? 0.75 : 0.60;
-            oddRatio_  = isRichHarmonics_ ? 0.25 : 0.40;
+            fOutHp = isRichHarmonics_ ? 15400.0 : 19800.0;
+            evenRatio_ = isRichHarmonics_ ? 0.95 : 0.60;
+            oddRatio_  = isRichHarmonics_ ? 0.05 : 0.40;
             break;
         case FreqMode::DYNAMIC_PERCUSSION:
-            fOutHp = isRichHarmonics_ ? 16500.0 : 19700.0;
+            fOutHp = isRichHarmonics_ ? 16200.0 : 19700.0;
             break;
         case FreqMode::AIR_EXPANDER:
-            fOutHp = isRichHarmonics_ ? 16800.0 : 19900.0;
+            fOutHp = isRichHarmonics_ ? 16400.0 : 19900.0;
             break;
         default:
             break;
@@ -90,7 +90,8 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     out_hp_a1_ = out_a1 * inv_out_a0;
     out_hp_a2_ = out_a2 * inv_out_a0;
 
-    double fSilk = std::min(32000.0, sampleRate_ * 0.44);
+    // ふくよかモード時は高域端をシルキーにロールオフさせてデジタル感を払拭
+    double fSilk = isRichHarmonics_ ? std::min(26000.0, sampleRate_ * 0.42) : std::min(32000.0, sampleRate_ * 0.44);
     double w0_silk = 2.0 * DSP_PI * fSilk / sampleRate_;
     double alpha_silk = std::sin(w0_silk) / (2.0 * 0.70710678);
     double cosw0_silk = std::cos(w0_silk);
@@ -226,29 +227,35 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         double tonalityMid = std::clamp(1.0 - (transientFluxMid_ / (rmsMid * 2.0 + 1e-5)), 0.0, 1.0);
         if (isBreathContext) tonalityMid = std::max(tonalityMid, 0.65);
 
-        double effEven = (mode_ == FreqMode::AUTO_AI) ? (0.45 + 0.35 * tonalityMid) : evenRatio_;
-        double effOdd  = (mode_ == FreqMode::AUTO_AI) ? (0.55 - 0.35 * tonalityMid) : oddRatio_;
+        double effEven = (mode_ == FreqMode::AUTO_AI) ? (isRichHarmonics_ ? (0.75 + 0.20 * tonalityMid) : (0.45 + 0.35 * tonalityMid)) : evenRatio_;
+        double effOdd  = (mode_ == FreqMode::AUTO_AI) ? (1.0 - effEven) : oddRatio_;
 
-        double targetGainMid = std::min(rmsMid * 0.70, static_cast<double>(targetGain_ * modeGainScale_ * 0.18f)) * floorGateMid;
-        smoothedGainMid_ += (targetGainMid - smoothedGainMid_) * ((targetGainMid > smoothedGainMid_) ? 0.035 : 0.004);
+        double baseMidGain = isRichHarmonics_ ? 0.24f : 0.18f;
+        double baseSideGain = isRichHarmonics_ ? 0.28f : 0.22f;
 
-        double targetGainSide = std::min(rmsSide * 0.90, static_cast<double>(targetGain_ * modeGainScale_ * 0.22f)) * floorGateSide;
-        smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.040 : 0.005);
+        double targetGainMid = std::min(rmsMid * (isRichHarmonics_ ? 0.85 : 0.70), static_cast<double>(targetGain_ * modeGainScale_ * baseMidGain)) * floorGateMid;
+        smoothedGainMid_ += (targetGainMid - smoothedGainMid_) * ((targetGainMid > smoothedGainMid_) ? 0.040 : 0.004);
 
-        double normMid = std::clamp(hiMid / (rmsMid * 1.414 + 1e-5), -3.0, 3.0);
-        double normSqMid = normMid * normMid;
-        double h2_Mid = (normSqMid - 0.70) * rmsMid;
-        double h3_Mid = (normSqMid * normMid - 0.75 * normMid) * (rmsMid * 0.42);
-        double h4_Mid = (normSqMid * normSqMid - 1.5 * normSqMid + 0.35) * (rmsMid * 0.18);
-        double airWeightMid = isBreathContext ? 0.22 : 0.14;
+        double targetGainSide = std::min(rmsSide * (isRichHarmonics_ ? 1.00 : 0.90), static_cast<double>(targetGain_ * modeGainScale_ * baseSideGain)) * floorGateSide;
+        smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.045 : 0.005);
+
+        // ★ ソフトサチュレーション型非線形カーブ（スパイクとざらつきを物理阻止）
+        double normMid = std::clamp(hiMid / (rmsMid * 1.414 + 1e-5), -2.5, 2.5);
+        double softNormMid = normMid / (1.0 + 0.25 * std::abs(normMid));
+        double normSqMid = softNormMid * softNormMid;
+        double h2_Mid = (normSqMid - 0.42) * (rmsMid * (isRichHarmonics_ ? 1.35 : 1.0));
+        double h3_Mid = (softNormMid * normSqMid - 0.60 * softNormMid) * (rmsMid * (isRichHarmonics_ ? 0.08 : 0.42));
+        double h4_Mid = (normSqMid * normSqMid - 0.90 * normSqMid + 0.15) * (rmsMid * (isRichHarmonics_ ? 0.12 : 0.18));
+        double airWeightMid = isBreathContext ? 0.16 : 0.08;
         double harmMid = (effEven * h2_Mid + effOdd * h3_Mid + airWeightMid * h4_Mid);
 
-        double normSide = std::clamp(hiSide / (rmsSide * 1.414 + 1e-5), -3.0, 3.0);
-        double normSqSide = normSide * normSide;
-        double h2_Side = (normSqSide - 0.70) * rmsSide;
-        double h3_Side = (normSqSide * normSide - 0.75 * normSide) * (rmsSide * 0.44);
-        double h4_Side = (normSqSide * normSqSide - 1.5 * normSqSide + 0.35) * (rmsSide * 0.20);
-        double harmSide = (effEven * 0.90 * h2_Side + effOdd * 1.10 * h3_Side + 0.25 * h4_Side);
+        double normSide = std::clamp(hiSide / (rmsSide * 1.414 + 1e-5), -2.5, 2.5);
+        double softNormSide = normSide / (1.0 + 0.25 * std::abs(normSide));
+        double normSqSide = softNormSide * softNormSide;
+        double h2_Side = (normSqSide - 0.42) * (rmsSide * (isRichHarmonics_ ? 1.35 : 1.0));
+        double h3_Side = (softNormSide * normSqSide - 0.60 * softNormSide) * (rmsSide * (isRichHarmonics_ ? 0.08 : 0.44));
+        double h4_Side = (normSqSide * normSqSide - 0.90 * normSqSide + 0.15) * (rmsSide * (isRichHarmonics_ ? 0.12 : 0.20));
+        double harmSide = (effEven * 0.95 * h2_Side + effOdd * 0.80 * h3_Side + 0.15 * h4_Side);
 
         double harmL = (harmMid * smoothedGainMid_) + (harmSide * smoothedGainSide_);
         double harmR = (harmMid * smoothedGainMid_) - (harmSide * smoothedGainSide_);
