@@ -230,12 +230,26 @@ function attachAudioPipeline(mediaEl) {
         currentMediaElement = mediaEl;
 
         const onTrackChanged = () => {
+            userWantsPlaying = !mediaEl.paused && !mediaEl.ended;
             scanStreamCodec();
             postNativeMessage({ type: "flush" });
+            const ctx = getAudioContext();
+            if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
+                ctx.resume().catch(() => {});
+            }
         };
         mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
         mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
         mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
+
+        mediaEl.addEventListener('playing', () => {
+            userWantsPlaying = true;
+            postNativeMessage({ type: "state", playing: true });
+            const ctx = getAudioContext();
+            if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
+                ctx.resume().catch(() => {});
+            }
+        }, { passive: true });
 
         mediaEl.addEventListener('pause', () => {
             userWantsPlaying = false;
@@ -250,7 +264,7 @@ function attachAudioPipeline(mediaEl) {
 
     try {
         const ctx = getAudioContext();
-        if (ctx.state === 'suspended') {
+        if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
             ctx.resume().catch(() => {});
         }
 
@@ -268,8 +282,14 @@ function attachAudioPipeline(mediaEl) {
         if (!processor || processor.context !== ctx) {
             processor = ctx.createScriptProcessor(4096, 2, 2);
             processor.onaudioprocess = function(e) {
-                if (mediaEl.paused || mediaEl.ended || !userWantsPlaying) return;
-                if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+                if (mediaEl.paused || mediaEl.ended) return;
+                if (!userWantsPlaying) {
+                    userWantsPlaying = true;
+                    postNativeMessage({ type: "state", playing: true });
+                }
+                if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                    ctx.resume().catch(() => {});
+                }
 
                 const inL = e.inputBuffer.getChannelData(0);
                 const inR = e.inputBuffer.getChannelData(1);
