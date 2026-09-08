@@ -365,7 +365,6 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    // ★ Direct Source 切り替え時も upsampleFactor は一切破壊せず維持
     fun setDirectSourceMode(isDirect: Boolean) {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
@@ -384,14 +383,12 @@ class BitPerfectPlaybackService : Service() {
         switchStreamConfiguration()
     }
 
-    // ★ ベース周波数の変更時も upsampleFactor を壊さず再構成
     fun updateBaseSampleRate(newRate: Int) {
         if (baseSampleRate == newRate) return
         baseSampleRate = newRate
         switchStreamConfiguration()
     }
 
-    // ★ 常に effectiveFactor (Direct時は1x、OFF時は4x等) を使って自動計算
     private fun switchStreamConfiguration() {
         val factorToApply = effectiveFactor
         val targetRate = baseSampleRate * factorToApply
@@ -414,7 +411,12 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        if (!isCurrentlyPlaying || isSwitchingRate.get()) {
+        // ★ キュー遷移等で一時的に pause 状態になっていても PCM 受信で即座に再生状態に自己復帰
+        if (!isCurrentlyPlaying) {
+            isCurrentlyPlaying = true
+        }
+
+        if (isSwitchingRate.get()) {
             return
         }
 
@@ -744,8 +746,6 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
 
-                // ★ 渡された factor (Direct時は1、OFF時は4等) を使ってターゲットレートを決定
-                // ※ upsampleFactor (ユーザー希望値) には絶対に代入破壊しない！
                 val factorToApply = factor
                 var targetRate = baseRate * factorToApply
 
