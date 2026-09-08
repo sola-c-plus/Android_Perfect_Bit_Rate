@@ -155,12 +155,17 @@ function keepPlayingInBackground() {
         audioCtx.resume().catch(() => {});
     }
 }
-setInterval(keepPlayingInBackground, 1500);
+setInterval(keepPlayingInBackground, 1000);
 
 function getAudioContext() {
     if (!audioCtx || audioCtx.state === 'closed') {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioContextClass({ latencyHint: 'playback' });
+        audioCtx.onstatechange = () => {
+            if (userWantsPlaying && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
+                audioCtx.resume().catch(() => {});
+            }
+        };
     }
     if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
         audioCtx.resume().catch(() => {});
@@ -369,8 +374,11 @@ function handleNativeMessage(msg) {
 
     if (cmd === 'setWebTheme') {
         updateWebWhiteTheme(msg.theme === 'light');
-    } else if (cmd === 'heartbeat') {
+    } else if (cmd === 'heartbeat' || cmd === 'resume_audio') {
         keepPlayingInBackground();
+        if (video && video.paused && userWantsPlaying) {
+            video.play().catch(() => {});
+        }
     } else if (cmd === 'play') {
         userWantsPlaying = true;
         getAudioContext();
@@ -385,12 +393,6 @@ function handleNativeMessage(msg) {
         userWantsPlaying = false;
         if (video && !video.paused) {
             video.pause();
-        }
-    } else if (cmd === 'resume_audio') {
-        getAudioContext();
-        if (video) {
-            video.muted = false;
-            attachAudioPipeline(video);
         }
     } else if (cmd === 'next') {
         document.querySelector('.next-button')?.click();

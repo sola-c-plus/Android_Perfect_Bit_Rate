@@ -36,6 +36,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
@@ -94,6 +95,7 @@ class BitPerfectPlaybackService : Service() {
 
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
+    private var heartbeatScheduler: ScheduledExecutorService? = null
 
     var onPeakListener: ((Float, Float, Int) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
@@ -214,8 +216,20 @@ class BitPerfectPlaybackService : Service() {
         setupMediaSession()
 
         startPlaybackLoop()
+        startHeartbeatLoop()
         updateNotification()
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isCurrentlyPlaying, currentPosition, currentDuration)
+    }
+
+    private fun startHeartbeatLoop() {
+        heartbeatScheduler = Executors.newSingleThreadScheduledExecutor()
+        heartbeatScheduler?.scheduleWithFixedDelay({
+            try {
+                if (isCurrentlyPlaying) {
+                    onCommandListener?.invoke("heartbeat")
+                }
+            } catch (e: Exception) {}
+        }, 1000, 1000, TimeUnit.MILLISECONDS)
     }
 
     fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
@@ -411,7 +425,6 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun pushPcm(pcmBytes: ByteArray, sampleRate: Int, inBitMode: String) {
-        // ★ キュー遷移等で一時的に pause 状態になっていても PCM 受信で即座に再生状態に自己復帰
         if (!isCurrentlyPlaying) {
             isCurrentlyPlaying = true
         }
@@ -932,17 +945,8 @@ class BitPerfectPlaybackService : Service() {
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
-            var heartbeatCounter = 0
             while (isRunning) {
                 try {
-                    heartbeatCounter++
-                    if (heartbeatCounter >= 20) {
-                        heartbeatCounter = 0
-                        try {
-                            onCommandListener?.invoke("heartbeat")
-                        } catch (e: Exception) {}
-                    }
-
                     if (isSwitchingRate.get() || !isCurrentlyPlaying) {
                         Thread.sleep(15)
                         continue
@@ -1087,6 +1091,9 @@ class BitPerfectPlaybackService : Service() {
     private fun stopServiceCleanly() {
         isRunning = false
         playbackThread?.interrupt()
+        heartbeatScheduler?.shutdownNow()
+        heartbeatScheduler = null
+
         try {
             unregisterReceiver(volumeReceiver)
             unregisterReceiver(noisyReceiver)
