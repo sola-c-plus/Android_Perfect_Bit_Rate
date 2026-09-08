@@ -263,6 +263,19 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
+    // ★ OS のスピーカー切り替え遅延（50ms〜300ms）を考慮し、多段階で確実に消音リセット
+    fun forceResetSpeakerVolume() {
+        muteVolumeToZero()
+        trackExecutor.execute {
+            try {
+                Thread.sleep(100)
+                muteVolumeToZero()
+                Thread.sleep(200)
+                muteVolumeToZero()
+            } catch (e: Exception) {}
+        }
+    }
+
     fun restoreVolumeForDevice(device: AudioDeviceInfo?) {
         try {
             if (isUsbDevice(device)) {
@@ -278,7 +291,7 @@ class BitPerfectPlaybackService : Service() {
                     audioTrack?.setVolume(1.0f)
                 }
             } else if (device == null) {
-                setSafeSpeakerVolume()
+                forceResetSpeakerVolume()
             }
         } catch (e: Exception) {}
     }
@@ -286,6 +299,7 @@ class BitPerfectPlaybackService : Service() {
     fun handleBecomingNoisyOrDisconnected() {
         isVolumeLocked = false
         isCurrentlyPlaying = false
+        updateVolumeControlMode()
 
         try {
             audioTrack?.setVolume(0f)
@@ -298,7 +312,7 @@ class BitPerfectPlaybackService : Service() {
         NativeAudioEngine.nativeResetUpsampler()
         onPeakListener?.invoke(-60f, -60f, 0)
 
-        muteVolumeToZero()
+        forceResetSpeakerVolume()
         onCommandListener?.invoke("pause")
 
         trackExecutor.execute {
@@ -350,8 +364,7 @@ class BitPerfectPlaybackService : Service() {
 
         if (device == null) {
             isVolumeLocked = false
-            muteVolumeToZero()
-            setSafeSpeakerVolume()
+            forceResetSpeakerVolume()
             if (isUsbDevice(prevDev)) {
                 handleBecomingNoisyOrDisconnected()
                 return

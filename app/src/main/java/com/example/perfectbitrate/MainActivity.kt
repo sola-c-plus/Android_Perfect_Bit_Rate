@@ -560,8 +560,21 @@ class MainActivity : AppCompatActivity() {
             outputDeviceName = "内蔵スピーカー"
             updateStatus()
             updateDialogPlayerUi()
+
+            // ★ OS のスピーカー切り替え完了タイミングに合わせて遅延消音リセット
+            uiHandler.postDelayed({
+                playbackService?.forceResetSpeakerVolume()
+                try {
+                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                } catch (e: Exception) {}
+            }, 150)
+            uiHandler.postDelayed({
+                try {
+                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                } catch (e: Exception) {}
+            }, 350)
         } finally {
-            uiHandler.postDelayed({ isHandlingDisconnect = false }, 300)
+            uiHandler.postDelayed({ isHandlingDisconnect = false }, 500)
         }
     }
 
@@ -616,8 +629,7 @@ class MainActivity : AppCompatActivity() {
             activeOutputDevice = null
             outputDeviceName = "内蔵スピーカー"
             playbackService?.isVolumeLocked = false
-            playbackService?.muteVolumeToZero()
-            playbackService?.setSafeSpeakerVolume()
+            playbackService?.forceResetSpeakerVolume()
         }
 
         updateStatus()
