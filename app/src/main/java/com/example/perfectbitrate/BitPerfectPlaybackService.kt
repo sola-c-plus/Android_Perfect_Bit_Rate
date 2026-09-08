@@ -95,9 +95,13 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    var onPeakListener: ((Float, Float, Int) -> Unit)? = null
+    // ★ (peakDbL, peakDbR, bitMask, queueSize, clipCount)
+    var onPeakListener: ((Float, Float, Int, Int, Long) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
+
+    private var lastWasClipping = false
+    private var totalClipCounter = 0L
 
     var isVolumeLocked = false
         set(value) {
@@ -309,7 +313,7 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
-        onPeakListener?.invoke(-60f, -60f, 0)
+        onPeakListener?.invoke(-60f, -60f, 0, 0, totalClipCounter)
 
         forceResetSpeakerVolume()
         onCommandListener?.invoke("pause")
@@ -372,7 +376,6 @@ class BitPerfectPlaybackService : Service() {
 
         updateVolumeControlMode()
 
-        // 再生中であれば即時ストリーム再構築、停止中であれば PCM 到着時に初期化
         if (changed && device != null && isCurrentlyPlaying) {
             switchStreamConfiguration()
         }
@@ -442,7 +445,6 @@ class BitPerfectPlaybackService : Service() {
         val factorToApply = effectiveFactor
         val targetEffectiveRate = actualInputRate * factorToApply
 
-        // サンプリングレート不一致または AudioTrack 未生成の場合は即時オンデマンド構築
         val needsRecreate = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED ||
                              actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate)
 
@@ -477,7 +479,8 @@ class BitPerfectPlaybackService : Service() {
             audioLock.unlock()
         }
         NativeAudioEngine.nativeResetUpsampler()
-        onPeakListener?.invoke(-60f, -60f, 0)
+        lastWasClipping = false
+        onPeakListener?.invoke(-60f, -60f, 0, 0, totalClipCounter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -563,7 +566,8 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        onPeakListener?.invoke(-60f, -60f, 0)
+        lastWasClipping = false
+        onPeakListener?.invoke(-60f, -60f, 0, 0, totalClipCounter)
 
         try {
             audioTrack?.setVolume(0f)
@@ -1098,7 +1102,15 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask)
+        // ★ 真の 0dBFS 到達・超過判定 (エッジトリガーで過剰暴走カウントを完全阻止)
+        val isClippingNow = (instantPeakL >= -0.01f || instantPeakR >= -0.01f)
+        if (isClippingNow && !lastWasClipping) {
+            totalClipCounter++
+        }
+        lastWasClipping = isClippingNow
+
+        val queueSize = pcmQueue.size
+        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, queueSize, totalClipCounter)
     }
 
     private fun createNotificationChannel() {

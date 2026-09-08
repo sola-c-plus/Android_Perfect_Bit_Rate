@@ -19,6 +19,7 @@
         android:paddingBottom="6dp"
         android:elevation="8dp">
 
+        <!-- 段 1: ステータスバッジ + DAC機器名 + CPU/RAMモニター + アクションボタン群 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -55,6 +56,18 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:fontFamily="@font/font_dap_heading" />
+
+            <!-- ★ CPU / RAM モニター (SW連動で一括表示/非表示) -->
+            <TextView
+                android:id="@+id/textCpuRamMonitor"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="CPU: 0%  RAM: 0M"
+                android:textColor="#888888"
+                android:textSize="9.5sp"
+                android:fontFamily="@font/font_dap_mono"
+                android:layout_marginEnd="6dp"
+                android:visibility="gone" />
 
             <ImageButton
                 android:id="@+id/btnReload"
@@ -94,6 +107,7 @@
             android:layout_marginTop="5dp"
             android:layout_marginBottom="4dp" />
 
+        <!-- 段 2: レート & ビット + コーデック + 転送量 (シンプル表示) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -135,6 +149,7 @@
                 android:fontFamily="@font/font_dap_mono" />
         </LinearLayout>
 
+        <!-- 段 3: PEAK L/R + バッファ健全度(BUF) & クリップ(CLIP) + 有効ビット深度(BIT ACTIVE) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -147,10 +162,22 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="PEAK  L: 0.0 dB  /  R: 0.0 dB"
+                android:text="PEAK  L: -inf / R: -inf"
                 android:textColor="#B0B0B0"
                 android:textSize="9.5sp"
                 android:fontFamily="@font/font_dap_mono" />
+
+            <!-- ★ バッファ健全度 & True Peak クリップカウンター (SW連動で一括表示/非表示) -->
+            <TextView
+                android:id="@+id/textBufferClip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="BUF:100% CLIP:0"
+                android:textColor="#888888"
+                android:textSize="9.5sp"
+                android:fontFamily="@font/font_dap_mono"
+                android:layout_marginEnd="8dp"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/textBitDepth"
@@ -163,6 +190,7 @@
                 android:fontFamily="@font/font_dap_mono" />
         </LinearLayout>
 
+        <!-- 段 4: SONY WALKMAN 風対数アナログピークレベルメーター -->
         <com.example.perfectbitrate.WalkmanLevelMeterView
             android:id="@+id/walkmanLevelMeter"
             android:layout_width="match_parent"
