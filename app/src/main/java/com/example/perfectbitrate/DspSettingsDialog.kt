@@ -233,7 +233,13 @@ class DspSettingsDialog(
 
         switchDirectSource.isChecked = appPrefs.isDirectSource
         updateDspSectionsState(appPrefs.isDirectSource, if (appPrefs.isDirectSource) 1 else appPrefs.selectedUpsampleFactor)
-        switchDirectSource.setOnCheckedChangeListener { _, isChecked ->
+        switchDirectSource.setOnCheckedChangeListener { buttonView, isChecked ->
+            // ★ ダウンタイム中の連打による AudioTrack / DSP パイプライン破綻を防止
+            buttonView.isEnabled = false
+            buttonView.postDelayed({
+                buttonView.isEnabled = true
+            }, 700L)
+
             appPrefs.isDirectSource = isChecked
             NativeAudioEngine.nativeSetDirectSource(isChecked)
             val effectiveFactor = if (isChecked) 1 else appPrefs.selectedUpsampleFactor
@@ -447,7 +453,6 @@ class DspSettingsDialog(
             }
         })
 
-        // ★ 下部ミニプレイヤーの領域（操作ボタン・シークバー以外）を押すと DSP 設定画面が閉じるように設定
         val dismissClickListener = View.OnClickListener {
             bottomSheetDialog.dismiss()
         }
