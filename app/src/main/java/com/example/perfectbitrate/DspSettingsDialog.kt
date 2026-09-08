@@ -10,16 +10,20 @@ import android.view.WindowManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import java.util.UUID
 
 class DspSettingsDialog(
     private val activity: Activity,
@@ -78,19 +82,28 @@ class DspSettingsDialog(
 
     private val perfModeOptions = arrayOf("Eco (省電力)", "普通 (標準)", "超高音質 (フルスペック)")
 
-    data class EqPreset(val name: String, val gains: FloatArray)
+    data class BuiltinEqPreset(val id: String, val name: String, val gains: FloatArray)
 
-    private val eqPresets = listOf(
-        EqPreset("Custom", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
-        EqPreset("Flat", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
-        EqPreset("Rock", floatArrayOf(3.5f, 2.0f, 1.0f, -0.5f, -1.5f, -1.0f, 0.5f, 2.0f, 3.0f, 3.5f)),
-        EqPreset("Pop", floatArrayOf(-1.0f, 0.0f, 1.5f, 2.5f, 3.0f, 2.0f, 1.0f, 0.5f, 1.5f, 2.0f)),
-        EqPreset("Jazz", floatArrayOf(2.5f, 1.5f, 0.5f, 1.0f, -1.0f, -1.0f, 0.0f, 1.0f, 2.0f, 2.5f)),
-        EqPreset("Classical", floatArrayOf(3.0f, 2.0f, 1.5f, 1.0f, -1.0f, -1.0f, 0.0f, 1.5f, 2.5f, 3.0f)),
-        EqPreset("Bass Boost", floatArrayOf(4.5f, 3.5f, 2.0f, 0.5f, -0.5f, -1.0f, -1.0f, -0.5f, 0.0f, 0.0f)),
-        EqPreset("Vocal", floatArrayOf(-2.0f, -1.5f, -0.5f, 1.5f, 3.0f, 3.0f, 2.0f, 0.5f, -0.5f, -1.5f)),
-        EqPreset("Treble Boost", floatArrayOf(-1.0f, -1.0f, -0.5f, 0.0f, 0.0f, 0.5f, 1.5f, 2.5f, 3.5f, 4.5f))
+    private val builtinPresets = listOf(
+        BuiltinEqPreset("builtin:Flat", "Flat", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
+        BuiltinEqPreset("builtin:Rock", "Rock", floatArrayOf(3.5f, 2.0f, 1.0f, -0.5f, -1.5f, -1.0f, 0.5f, 2.0f, 3.0f, 3.5f)),
+        BuiltinEqPreset("builtin:Pop", "Pop", floatArrayOf(-1.0f, 0.0f, 1.5f, 2.5f, 3.0f, 2.0f, 1.0f, 0.5f, 1.5f, 2.0f)),
+        BuiltinEqPreset("builtin:Jazz", "Jazz", floatArrayOf(2.5f, 1.5f, 0.5f, 1.0f, -1.0f, -1.0f, 0.0f, 1.0f, 2.0f, 2.5f)),
+        BuiltinEqPreset("builtin:Classical", "Classical", floatArrayOf(3.0f, 2.0f, 1.5f, 1.0f, -1.0f, -1.0f, 0.0f, 1.5f, 2.5f, 3.0f)),
+        BuiltinEqPreset("builtin:BassBoost", "Bass Boost", floatArrayOf(4.5f, 3.5f, 2.0f, 0.5f, -0.5f, -1.0f, -1.0f, -0.5f, 0.0f, 0.0f)),
+        BuiltinEqPreset("builtin:Vocal", "Vocal", floatArrayOf(-2.0f, -1.5f, -0.5f, 1.5f, 3.0f, 3.0f, 2.0f, 0.5f, -0.5f, -1.5f)),
+        BuiltinEqPreset("builtin:TrebleBoost", "Treble Boost", floatArrayOf(-1.0f, -1.0f, -0.5f, 0.0f, 0.0f, 0.5f, 1.5f, 2.5f, 3.5f, 4.5f))
     )
+
+    private var customPresetsList = mutableListOf<CustomEqPreset>()
+
+    sealed class EqSpinnerItem(val displayName: String) {
+        class Builtin(val preset: BuiltinEqPreset) : EqSpinnerItem(preset.name)
+        class Custom(val preset: CustomEqPreset) : EqSpinnerItem(preset.name)
+        object AddNew : EqSpinnerItem("➕ 新規カスタム保存...")
+    }
+
+    private var spinnerItemList = mutableListOf<EqSpinnerItem>()
 
     fun show() {
         val bottomSheetDialog = BottomSheetDialog(activity, R.style.CustomBottomSheetDialogTheme).apply {
@@ -118,6 +131,7 @@ class DspSettingsDialog(
         val btnEqMinus = view.findViewById<ImageButton>(R.id.btnEqMinus)
         val btnEqFlat = view.findViewById<Button>(R.id.btnEqFlat)
         val btnEqEdit = view.findViewById<Button>(R.id.btnEqEdit)
+        val btnEqSave = view.findViewById<Button>(R.id.btnEqSave)
 
         walkmanEqView = view.findViewById(R.id.walkmanEqView)
         val textEqBandFreq = view.findViewById<TextView>(R.id.textEqBandFreq)
@@ -149,11 +163,12 @@ class DspSettingsDialog(
         textTotalTime = view.findViewById(R.id.dialogTextTotalTime)
 
         val appPrefs = AppPreferences.get()
+        customPresetsList = appPrefs.getCustomEqPresets()
 
         if (!isDarkTheme) {
             applyLightModeStyle(
                 view, btnClose, switchDirectSource, switchEqEnable, switchSpectrumEnable,
-                switchCascadeFir, switchVolLock, btnEqEdit, btnEqFlat, btnEqPlus, btnEqMinus,
+                switchCascadeFir, switchVolLock, btnEqEdit, btnEqSave, btnEqFlat, btnEqPlus, btnEqMinus,
                 textEqBandFreq, textEqGainValue, spinnerBitDepth, spinnerDither, spinnerDcPhase,
                 spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!
             )
@@ -196,6 +211,8 @@ class DspSettingsDialog(
             val isPresetActive = !isDirect && eqEnabled
             spinnerEqPreset?.isEnabled = isPresetActive
             spinnerEqPreset?.alpha = if (isPresetActive) 1.0f else 0.35f
+            btnEqSave?.isEnabled = isPresetActive
+            btnEqSave?.alpha = if (isPresetActive) 1.0f else 0.35f
         }
 
         fun updateDspSectionsState(isDirect: Boolean, factor: Int) {
@@ -215,6 +232,7 @@ class DspSettingsDialog(
             switchSpectrumEnable.isEnabled = dspEnabled
             btnEqEdit.isEnabled = dspEnabled
             btnEqFlat.isEnabled = dspEnabled
+            btnEqSave?.isEnabled = dspEnabled
             btnEqPlus.isEnabled = dspEnabled
             btnEqMinus.isEnabled = dspEnabled
             walkmanEqView?.isEnabled = dspEnabled
@@ -234,11 +252,8 @@ class DspSettingsDialog(
         switchDirectSource.isChecked = appPrefs.isDirectSource
         updateDspSectionsState(appPrefs.isDirectSource, if (appPrefs.isDirectSource) 1 else appPrefs.selectedUpsampleFactor)
         switchDirectSource.setOnCheckedChangeListener { buttonView, isChecked ->
-            // ★ ダウンタイム中の連打による AudioTrack / DSP パイプライン破綻を防止
             buttonView.isEnabled = false
-            buttonView.postDelayed({
-                buttonView.isEnabled = true
-            }, 700L)
+            buttonView.postDelayed({ buttonView.isEnabled = true }, 700L)
 
             appPrefs.isDirectSource = isChecked
             NativeAudioEngine.nativeSetDirectSource(isChecked)
@@ -283,18 +298,162 @@ class DspSettingsDialog(
             textEqGainValue.text = String.format(java.util.Locale.US, "%+.1f dB", gain)
         }
 
-        for (i in 0..9) walkmanEqView?.gains?.set(i, appPrefs.getEqGain(i))
+        val savedGains = appPrefs.getAllEqGains()
+        for (i in 0..9) walkmanEqView?.gains?.set(i, savedGains[i])
         walkmanEqView?.isDirectBypass = !appPrefs.isEqEnabled
         switchEqEnable.isChecked = appPrefs.isEqEnabled
         setEditMode(false)
         updateEqHeader(walkmanEqView?.selectedBandIndex ?: 7, walkmanEqView?.gains?.getOrNull(walkmanEqView?.selectedBandIndex ?: 7) ?: 0f)
 
-        fun markCustomPreset() {
-            if (isApplyingPreset) return
-            if (spinnerEqPreset?.selectedItemPosition != 0) {
-                spinnerEqPreset?.setSelection(0)
-                appPrefs.selectedEqPresetIndex = 0
+        // --- イコライザープリセットスピナーの再構成 ---
+        val spinnerLayout = if (isDarkTheme) R.layout.item_spinner_dap else R.layout.item_spinner_dap_light
+
+        fun rebuildSpinnerItems(targetSelectId: String? = null) {
+            spinnerItemList.clear()
+            builtinPresets.forEach { spinnerItemList.add(EqSpinnerItem.Builtin(it)) }
+            customPresetsList.forEach { spinnerItemList.add(EqSpinnerItem.Custom(it)) }
+            spinnerItemList.add(EqSpinnerItem.AddNew)
+
+            val displayNames = spinnerItemList.map { it.displayName }.toTypedArray()
+            val adapter = ArrayAdapter(activity, spinnerLayout, displayNames).apply { setDropDownViewResource(spinnerLayout) }
+            spinnerEqPreset?.adapter = adapter
+
+            val selId = targetSelectId ?: appPrefs.selectedEqPresetId
+            var selectedIdx = 0
+            for (i in spinnerItemList.indices) {
+                val item = spinnerItemList[i]
+                if (item is EqSpinnerItem.Builtin && item.preset.id == selId) { selectedIdx = i; break }
+                if (item is EqSpinnerItem.Custom && "custom:${item.preset.id}" == selId) { selectedIdx = i; break }
             }
+            spinnerEqPreset?.setSelection(selectedIdx)
+        }
+
+        rebuildSpinnerItems()
+
+        fun showSaveCustomDialog(existingPreset: CustomEqPreset? = null) {
+            val input = EditText(activity).apply {
+                setText(existingPreset?.name ?: "Custom ${customPresetsList.size + 1}")
+                setSingleLine()
+                selectAll()
+            }
+            val title = if (existingPreset != null) "カスタムプリセット名の変更" else "新規カスタムEQの保存"
+
+            AlertDialog.Builder(activity)
+                .setTitle(title)
+                .setView(input)
+                .setPositiveButton("保存") { _, _ ->
+                    val newName = input.text.toString().trim().ifEmpty { "Custom ${customPresetsList.size + 1}" }
+                    val currentGains = walkmanEqView?.gains?.copyOf() ?: FloatArray(10)
+
+                    if (existingPreset != null) {
+                        existingPreset.name = newName
+                        for (i in 0..9) existingPreset.gains[i] = currentGains[i]
+                        appPrefs.saveCustomEqPresets(customPresetsList)
+                        rebuildSpinnerItems("custom:${existingPreset.id}")
+                        Toast.makeText(activity, "「$newName」を保存しました", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val newCustom = CustomEqPreset(
+                            id = UUID.randomUUID().toString().take(8),
+                            name = newName,
+                            gains = currentGains
+                        )
+                        customPresetsList.add(newCustom)
+                        appPrefs.saveCustomEqPresets(customPresetsList)
+                        appPrefs.selectedEqPresetId = "custom:${newCustom.id}"
+                        rebuildSpinnerItems("custom:${newCustom.id}")
+                        Toast.makeText(activity, "「$newName」を作成・保存しました", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("キャンセル") { _, _ ->
+                    rebuildSpinnerItems()
+                }
+                .show()
+        }
+
+        fun showManageCustomPresetsDialog() {
+            if (customPresetsList.isEmpty()) {
+                Toast.makeText(activity, "管理可能なカスタムプリセットがありません", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val names = customPresetsList.map { it.name }.toTypedArray()
+            AlertDialog.Builder(activity)
+                .setTitle("カスタムプリセットの管理 (タップで操作)")
+                .setItems(names) { _, which ->
+                    val selected = customPresetsList[which]
+                    val actions = arrayOf("名前を変更", "現在の設定で上書き保存", "削除")
+                    AlertDialog.Builder(activity)
+                        .setTitle("「${selected.name}」の操作")
+                        .setItems(actions) { _, actionIdx ->
+                            when (actionIdx) {
+                                0 -> showSaveCustomDialog(selected)
+                                1 -> {
+                                    val currentGains = walkmanEqView?.gains?.copyOf() ?: FloatArray(10)
+                                    for (i in 0..9) selected.gains[i] = currentGains[i]
+                                    appPrefs.saveCustomEqPresets(customPresetsList)
+                                    rebuildSpinnerItems("custom:${selected.id}")
+                                    Toast.makeText(activity, "「${selected.name}」を現在のEQで上書き保存しました", Toast.LENGTH_SHORT).show()
+                                }
+                                2 -> {
+                                    if (customPresetsList.size <= 1) {
+                                        Toast.makeText(activity, "最後のカスタムプリセットは削除できません", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        customPresetsList.removeAt(which)
+                                        appPrefs.saveCustomEqPresets(customPresetsList)
+                                        appPrefs.selectedEqPresetId = "builtin:Flat"
+                                        rebuildSpinnerItems("builtin:Flat")
+                                        Toast.makeText(activity, "削除しました", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                        .show()
+                }
+                .setNegativeButton("閉じる", null)
+                .show()
+        }
+
+        spinnerEqPreset?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                if (position !in spinnerItemList.indices) return
+                val item = spinnerItemList[position]
+
+                when (item) {
+                    is EqSpinnerItem.Builtin -> {
+                        isApplyingPreset = true
+                        try {
+                            appPrefs.selectedEqPresetId = item.preset.id
+                            for (i in 0..9) walkmanEqView?.gains?.set(i, item.preset.gains[i])
+                            walkmanEqView?.invalidate()
+                            val gains = walkmanEqView?.gains ?: FloatArray(10)
+                            NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, gains)
+                            appPrefs.setAllEqGains(gains)
+                            val curBand = walkmanEqView?.selectedBandIndex ?: 7
+                            updateEqHeader(curBand, gains.getOrNull(curBand) ?: 0f)
+                        } finally {
+                            isApplyingPreset = false
+                        }
+                    }
+                    is EqSpinnerItem.Custom -> {
+                        isApplyingPreset = true
+                        try {
+                            appPrefs.selectedEqPresetId = "custom:${item.preset.id}"
+                            for (i in 0..9) walkmanEqView?.gains?.set(i, item.preset.gains[i])
+                            walkmanEqView?.invalidate()
+                            val gains = walkmanEqView?.gains ?: FloatArray(10)
+                            NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, gains)
+                            appPrefs.setAllEqGains(gains)
+                            val curBand = walkmanEqView?.selectedBandIndex ?: 7
+                            updateEqHeader(curBand, gains.getOrNull(curBand) ?: 0f)
+                        } finally {
+                            isApplyingPreset = false
+                        }
+                    }
+                    is EqSpinnerItem.AddNew -> {
+                        showSaveCustomDialog()
+                    }
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         walkmanEqView?.onBandSelectedListener = { bandIdx, gain -> updateEqHeader(bandIdx, gain) }
@@ -302,10 +461,61 @@ class DspSettingsDialog(
             updateEqHeader(bandIdx, gain)
             NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, allGains)
             appPrefs.setAllEqGains(allGains)
-            markCustomPreset()
+
+            if (!isApplyingPreset) {
+                val curSelId = appPrefs.selectedEqPresetId
+                if (curSelId.startsWith("custom:")) {
+                    val customId = curSelId.removePrefix("custom:")
+                    val targetCustom = customPresetsList.firstOrNull { it.id == customId }
+                    if (targetCustom != null) {
+                        for (i in 0..9) targetCustom.gains[i] = allGains[i]
+                        appPrefs.saveCustomEqPresets(customPresetsList)
+                    }
+                }
+            }
         }
 
         btnEqEdit.setOnClickListener { setEditMode(!(walkmanEqView?.isEditMode ?: false)) }
+
+        btnEqSave.setOnClickListener {
+            val curId = appPrefs.selectedEqPresetId
+            if (curId.startsWith("custom:")) {
+                val customId = curId.removePrefix("custom:")
+                val activeCustom = customPresetsList.firstOrNull { it.id == customId }
+                val options = arrayOf(
+                    "「${activeCustom?.name ?: "Custom"}」に上書き保存",
+                    "新しい名前で新規保存",
+                    "カスタムプリセットの管理 (名前変更/削除)"
+                )
+                AlertDialog.Builder(activity)
+                    .setTitle("イコライザー設定の保存")
+                    .setItems(options) { _, which ->
+                        when (which) {
+                            0 -> {
+                                activeCustom?.let {
+                                    val currentGains = walkmanEqView?.gains?.copyOf() ?: FloatArray(10)
+                                    for (i in 0..9) it.gains[i] = currentGains[i]
+                                    appPrefs.saveCustomEqPresets(customPresetsList)
+                                    Toast.makeText(activity, "「${it.name}」に上書き保存しました", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            1 -> showSaveCustomDialog(null)
+                            2 -> showManageCustomPresetsDialog()
+                        }
+                    }
+                    .setNegativeButton("キャンセル", null)
+                    .show()
+            } else {
+                showSaveCustomDialog(null)
+            }
+        }
+
+        btnEqFlat.setOnClickListener {
+            walkmanEqView?.resetAllFlat()
+            appPrefs.selectedEqPresetId = "builtin:Flat"
+            rebuildSpinnerItems("builtin:Flat")
+        }
+
         switchEqEnable.setOnCheckedChangeListener { _, isChecked ->
             appPrefs.isEqEnabled = isChecked
             walkmanEqView?.isDirectBypass = !isChecked
@@ -314,53 +524,10 @@ class DspSettingsDialog(
             updateEqPresetState(appPrefs.isDirectSource, isChecked)
         }
 
-        btnEqPlus.setOnClickListener {
-            walkmanEqView?.stepGain(+0.5f)
-            markCustomPreset()
-        }
-        btnEqMinus.setOnClickListener {
-            walkmanEqView?.stepGain(-0.5f)
-            markCustomPreset()
-        }
-        btnEqFlat.setOnClickListener {
-            walkmanEqView?.resetAllFlat()
-            spinnerEqPreset?.setSelection(1)
-            appPrefs.selectedEqPresetIndex = 1
-        }
+        btnEqPlus.setOnClickListener { walkmanEqView?.stepGain(+0.5f) }
+        btnEqMinus.setOnClickListener { walkmanEqView?.stepGain(-0.5f) }
 
-        val spinnerLayout = if (isDarkTheme) R.layout.item_spinner_dap else R.layout.item_spinner_dap_light
-
-        val eqPresetNames = eqPresets.map { it.name }.toTypedArray()
-        val eqPresetAdapter = ArrayAdapter(activity, spinnerLayout, eqPresetNames).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerEqPreset?.adapter = eqPresetAdapter
-        spinnerEqPreset?.setSelection(appPrefs.selectedEqPresetIndex.coerceIn(0, eqPresets.size - 1))
-        spinnerEqPreset?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                if (position != appPrefs.selectedEqPresetIndex) {
-                    appPrefs.selectedEqPresetIndex = position
-                }
-                if (position != 0) {
-                    isApplyingPreset = true
-                    try {
-                        val selectedPreset = eqPresets[position]
-                        for (i in 0..9) {
-                            walkmanEqView?.gains?.set(i, selectedPreset.gains[i])
-                        }
-                        walkmanEqView?.invalidate()
-                        val currentGains = walkmanEqView?.gains ?: FloatArray(10)
-                        NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, currentGains)
-                        appPrefs.setAllEqGains(currentGains)
-                        val curBand = walkmanEqView?.selectedBandIndex ?: 7
-                        updateEqHeader(curBand, currentGains.getOrNull(curBand) ?: 0f)
-                    } finally {
-                        isApplyingPreset = false
-                    }
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        updateEqPresetState(appPrefs.isDirectSource, appPrefs.isEqEnabled)
-
+        // --- 他の DSP スピナー群の設定 ---
         val bitAdapter = ArrayAdapter(activity, spinnerLayout, bitOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerBitDepth.adapter = bitAdapter
         spinnerBitDepth.setSelection(bitModeValues.indexOf(appPrefs.selectedBitMode).coerceAtLeast(0))
@@ -431,7 +598,6 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // ミニプレイヤーの操作系
         btnPlayPause?.setOnClickListener { onPlayerCommand("play_pause") }
         btnPrev.setOnClickListener { onPlayerCommand("prev") }
         btnNext.setOnClickListener { onPlayerCommand("next") }
@@ -453,9 +619,7 @@ class DspSettingsDialog(
             }
         })
 
-        val dismissClickListener = View.OnClickListener {
-            bottomSheetDialog.dismiss()
-        }
+        val dismissClickListener = View.OnClickListener { bottomSheetDialog.dismiss() }
         view.findViewById<View>(R.id.dspDialogPlayerControl)?.setOnClickListener(dismissClickListener)
         view.findViewById<View>(R.id.dspPlayerCard)?.setOnClickListener(dismissClickListener)
         imageArtwork?.setOnClickListener(dismissClickListener)
@@ -556,6 +720,7 @@ class DspSettingsDialog(
         switchCascadeFir: SwitchCompat,
         switchVolLock: SwitchCompat,
         btnEqEdit: Button,
+        btnEqSave: Button,
         btnEqFlat: Button,
         btnEqPlus: ImageButton,
         btnEqMinus: ImageButton,
@@ -629,8 +794,10 @@ class DspSettingsDialog(
         btnClose.setColorFilter(Color.parseColor("#1C1C1E"))
 
         btnEqEdit.setBackgroundResource(R.drawable.bg_btn_dap_outline_light)
+        btnEqSave.setBackgroundResource(R.drawable.bg_btn_dap_outline_light)
         btnEqFlat.setBackgroundResource(R.drawable.bg_btn_dap_outline_light)
         btnEqEdit.setTextColor(Color.parseColor("#1C1C1E"))
+        btnEqSave.setTextColor(Color.parseColor("#1C1C1E"))
         btnEqFlat.setTextColor(Color.parseColor("#636366"))
         btnEqPlus.setBackgroundResource(R.drawable.bg_btn_circle_light)
         btnEqMinus.setBackgroundResource(R.drawable.bg_btn_circle_light)

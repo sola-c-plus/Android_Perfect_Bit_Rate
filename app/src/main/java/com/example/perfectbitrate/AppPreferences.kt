@@ -3,6 +3,23 @@ package com.example.perfectbitrate
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class CustomEqPreset(
+    val id: String,
+    var name: String,
+    val gains: FloatArray
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as CustomEqPreset
+        return id == other.id
+    }
+
+    override fun hashCode(): Int = id.hashCode()
+}
 
 class AppPreferences private constructor(context: Context) {
 
@@ -26,8 +43,9 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SELECTED_PRESET_INDEX = "selected_preset_index"
         private const val KEY_RICH_HARMONICS_ENABLED = "rich_harmonics_enabled"
         private const val KEY_EQ_ENABLED = "eq_enabled"
-        private const val KEY_EQ_PRESET_INDEX = "eq_preset_index"
-        private const val KEY_EQ_GAIN_PREFIX = "eq_gain_"
+        private const val KEY_SELECTED_EQ_ID = "selected_eq_id"
+        private const val KEY_CURRENT_EQ_GAIN_PREFIX = "current_eq_gain_"
+        private const val KEY_CUSTOM_EQ_PRESETS_JSON = "custom_eq_presets_json"
 
         @Volatile
         private var instance: AppPreferences? = null
@@ -103,23 +121,72 @@ class AppPreferences private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_EQ_ENABLED, false)
         set(value) = prefs.edit { putBoolean(KEY_EQ_ENABLED, value) }
 
-    var selectedEqPresetIndex: Int
-        get() = prefs.getInt(KEY_EQ_PRESET_INDEX, 1)
-        set(value) = prefs.edit { putInt(KEY_EQ_PRESET_INDEX, value) }
+    var selectedEqPresetId: String
+        get() = prefs.getString(KEY_SELECTED_EQ_ID, "builtin:Flat") ?: "builtin:Flat"
+        set(value) = prefs.edit { putString(KEY_SELECTED_EQ_ID, value) }
 
     fun getEqGain(bandIndex: Int): Float {
-        return prefs.getFloat("$KEY_EQ_GAIN_PREFIX$bandIndex", 0.0f)
+        return prefs.getFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$bandIndex", 0.0f)
     }
 
     fun setEqGain(bandIndex: Int, gain: Float) {
-        prefs.edit { putFloat("$KEY_EQ_GAIN_PREFIX$bandIndex", gain) }
+        prefs.edit { putFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$bandIndex", gain) }
+    }
+
+    fun getAllEqGains(): FloatArray {
+        return FloatArray(10) { i -> prefs.getFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$i", 0.0f) }
     }
 
     fun setAllEqGains(gains: FloatArray) {
         prefs.edit {
             for (i in 0 until minOf(gains.size, 10)) {
-                putFloat("$KEY_EQ_GAIN_PREFIX$i", gains[i])
+                putFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$i", gains[i])
             }
         }
+    }
+
+    fun getCustomEqPresets(): MutableList<CustomEqPreset> {
+        val jsonStr = prefs.getString(KEY_CUSTOM_EQ_PRESETS_JSON, null)
+        if (jsonStr.isNullOrEmpty()) {
+            val initialGains = FloatArray(10) { i -> prefs.getFloat("eq_gain_$i", 0.0f) }
+            val defaultPreset = CustomEqPreset(id = "custom_1", name = "Custom 1", gains = initialGains)
+            val list = mutableListOf(defaultPreset)
+            saveCustomEqPresets(list)
+            return list
+        }
+        val list = mutableListOf<CustomEqPreset>()
+        try {
+            val arr = JSONArray(jsonStr)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val id = obj.getString("id")
+                val name = obj.getString("name")
+                val gainsArr = obj.getJSONArray("gains")
+                val gains = FloatArray(10) { idx ->
+                    if (idx < gainsArr.length()) gainsArr.getDouble(idx).toFloat() else 0.0f
+                }
+                list.add(CustomEqPreset(id, name, gains))
+            }
+        } catch (e: Exception) {
+            list.clear()
+            list.add(CustomEqPreset("custom_1", "Custom 1", FloatArray(10)))
+        }
+        return list
+    }
+
+    fun saveCustomEqPresets(list: List<CustomEqPreset>) {
+        val arr = JSONArray()
+        for (p in list) {
+            val obj = JSONObject()
+            obj.put("id", p.id)
+            obj.put("name", p.name)
+            val gainsArr = JSONArray()
+            for (g in p.gains) {
+                gainsArr.put(g.toDouble())
+            }
+            obj.put("gains", gainsArr)
+            arr.put(obj)
+        }
+        prefs.edit { putString(KEY_CUSTOM_EQ_PRESETS_JSON, arr.toString()) }
     }
 }
