@@ -709,10 +709,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun initAudioTrack(
-        bitMode: String,
+        bitMode: String = currentBitMode,
         baseRate: Int = baseSampleRate,
         factor: Int = effectiveFactor,
-        targetDevice: AudioDeviceInfo? = null
+        targetDevice: AudioDeviceInfo? = activeOutputDevice
     ) {
         if (isInitializingTrack.getAndSet(true)) {
             hasPendingInit.set(true)
@@ -722,7 +722,7 @@ class BitPerfectPlaybackService : Service() {
         try {
             do {
                 hasPendingInit.set(false)
-                doInitAudioTrackInternal(bitMode, baseRate, factor, targetDevice)
+                doInitAudioTrackInternal(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
@@ -759,24 +759,9 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
 
+                // ★ ユーザー選択の倍率 (1x/2x/4x/8x) に基づくサンプリングレートを無加工で正確に反映
                 val factorToApply = factor
-                var targetRate = baseRate * factorToApply
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isUsbDevice(targetDevice)) {
-                    val supportedMixers = try {
-                        audioManager.getSupportedMixerAttributes(targetDevice!!)
-                    } catch (e: Exception) {
-                        emptyList<AudioMixerAttributes>()
-                    }
-
-                    val supportedRates = supportedMixers.map { it.format.sampleRate }.toSet()
-                    if (supportedRates.isNotEmpty() && !supportedRates.contains(targetRate)) {
-                        val safeClampedRate = supportedRates.filter { it <= targetRate }.maxOrNull()
-                            ?: supportedRates.maxOrNull()
-                            ?: targetRate
-                        targetRate = safeClampedRate
-                    }
-                }
+                val targetRate = baseRate * factorToApply
 
                 effectiveSampleRate = targetRate
                 NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
@@ -814,6 +799,7 @@ class BitPerfectPlaybackService : Service() {
                         )
                     }
 
+                    // 1. supportedMixers からターゲットレートに完全一致する設定を探索
                     for (tryEnc in preferredEncList) {
                         val bpMatch = supportedMixers.firstOrNull {
                             it.format.sampleRate == effectiveSampleRate &&
@@ -833,23 +819,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    if (!lockSuccess) {
-                        val rateBpMatch = supportedMixers.firstOrNull {
-                            it.format.sampleRate == effectiveSampleRate &&
-                            it.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT
-                        }
-                        if (rateBpMatch != null) {
-                            try {
-                                val ok = audioManager.setPreferredMixerAttributes(mediaAttr, targetDevice!!, rateBpMatch)
-                                if (ok) {
-                                    lastConfiguredMixerDevice = targetDevice
-                                    finalEncoding = rateBpMatch.format.encoding
-                                    lockSuccess = true
-                                }
-                            } catch (e: Exception) {}
-                        }
-                    }
-
+                    // 2. supportedMixers に無いレート (96k, 384k等) でも DAC に対して直接ターゲットレートの BIT_PERFECT を要求
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val forcedBp = AudioMixerAttributes.Builder(
