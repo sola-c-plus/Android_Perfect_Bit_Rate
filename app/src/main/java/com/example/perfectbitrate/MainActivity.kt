@@ -118,10 +118,7 @@ class MainActivity : AppCompatActivity() {
         detectAudioOutputDevice()
         playbackService?.setOutputDevice(activeOutputDevice)
         btCodecTracker.fetchCurrentCodec()
-
-        if (activeOutputDevice != null && isPlayingState) {
-            geckoController.sendCommand("resume_audio")
-        }
+        geckoController.sendCommand("resume_audio")
     }
 
     private val requestMultiplePermissionsLauncher =
@@ -143,7 +140,6 @@ class MainActivity : AppCompatActivity() {
             playbackService?.currentBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
 
-            // ★ ユーザーの希望設定倍率 (4x など) をサービスへ正しく同期
             playbackService?.upsampleFactor = upsampleFactor
             playbackService?.setDirectSourceMode(isDirectSource)
 
@@ -155,7 +151,7 @@ class MainActivity : AppCompatActivity() {
             NativeAudioEngine.nativeSetDcPhaseType(appPrefs.selectedDcPhaseType)
             
             FreqPresetManager.applyCurrentPresetToNative()
-            val eqGains = FloatArray(10) { appPrefs.getEqGain(it) }
+            val eqGains = appPrefs.getAllEqGains()
             NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, eqGains)
 
             playbackService?.onActualBitModeChanged = { actualMode ->
@@ -184,6 +180,8 @@ class MainActivity : AppCompatActivity() {
 
             playbackService?.onCommandListener = { cmd -> geckoController.sendCommand(cmd) }
             playbackService?.onSeekListener = { pos -> geckoController.sendSeek(pos) }
+
+            geckoController.sendCommand("resume_audio")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             playbackService = null
@@ -229,7 +227,7 @@ class MainActivity : AppCompatActivity() {
             activeDspDialog?.updatePerfModeState(upsampleFactor >= 2 && !isDirectSource)
         }
 
-        val eqGains = FloatArray(10) { appPrefs.getEqGain(it) }
+        val eqGains = appPrefs.getAllEqGains()
         NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, eqGains)
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -257,7 +255,6 @@ class MainActivity : AppCompatActivity() {
                     if (rate > 0 && rate != baseSampleRate) {
                         playbackService?.resetBuffer()
                         baseSampleRate = rate
-                        // ★ upsampleFactor を壊さず、新ベースレートだけを安全にサービスへ反映
                         playbackService?.updateBaseSampleRate(rate)
                     }
                     playbackService?.updateCodec(codec)
@@ -432,6 +429,7 @@ class MainActivity : AppCompatActivity() {
             },
             onUpsampleFactorChanged = { newFactor ->
                 upsampleFactor = newFactor
+                appPrefs.selectedUpsampleFactor = newFactor
                 playbackService?.setUpsampling(newFactor)
                 updateStatus()
             },
@@ -629,7 +627,6 @@ class MainActivity : AppCompatActivity() {
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
         
-        // ★ サービス側の実効倍率 (Direct時は1x、OFF時は4x等) を直接取得して表示
         val activeFactor = playbackService?.effectiveFactor ?: (if (isDirectSource) 1 else upsampleFactor)
         val dspTag = if (isDirectSource) " [DIRECT]" else (if (activeFactor > 1) " [DSP ${activeFactor}x]" else "")
 

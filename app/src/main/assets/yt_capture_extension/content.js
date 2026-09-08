@@ -146,9 +146,8 @@ function forceFullVolume() {
 setInterval(forceFullVolume, 2000);
 
 function keepPlayingInBackground() {
-    if (!userWantsPlaying) return;
     const video = currentMediaElement || document.querySelector('video') || document.querySelector('audio');
-    if (video && video.paused && !video.ended) {
+    if (video && video.paused && userWantsPlaying && !video.ended) {
         video.play().catch(() => {});
     }
     if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
@@ -162,7 +161,7 @@ function getAudioContext() {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioContextClass({ latencyHint: 'playback' });
         audioCtx.onstatechange = () => {
-            if (userWantsPlaying && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
+            if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
                 audioCtx.resume().catch(() => {});
             }
         };
@@ -230,42 +229,7 @@ function bytesToBase64(bytes) {
 }
 
 function attachAudioPipeline(mediaEl) {
-    if (!mediaEl) return;
-    if (currentMediaElement !== mediaEl) {
-        currentMediaElement = mediaEl;
-
-        const onTrackChanged = () => {
-            userWantsPlaying = !mediaEl.paused && !mediaEl.ended;
-            scanStreamCodec();
-            postNativeMessage({ type: "flush" });
-            const ctx = getAudioContext();
-            if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
-                ctx.resume().catch(() => {});
-            }
-        };
-        mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
-        mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
-        mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
-
-        mediaEl.addEventListener('playing', () => {
-            userWantsPlaying = true;
-            postNativeMessage({ type: "state", playing: true });
-            const ctx = getAudioContext();
-            if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
-                ctx.resume().catch(() => {});
-            }
-        }, { passive: true });
-
-        mediaEl.addEventListener('pause', () => {
-            userWantsPlaying = false;
-            postNativeMessage({ type: "state", playing: false });
-        }, { passive: true });
-
-        mediaEl.addEventListener('play', () => {
-            userWantsPlaying = true;
-            postNativeMessage({ type: "state", playing: true });
-        }, { passive: true });
-    }
+    if (!mediaEl) return false;
 
     try {
         const ctx = getAudioContext();
@@ -277,12 +241,12 @@ function attachAudioPipeline(mediaEl) {
             try {
                 mediaEl._bpSourceNode = ctx.createMediaElementSource(mediaEl);
             } catch(e) {
-                return;
+                return false;
             }
         }
 
         const sourceNode = mediaEl._bpSourceNode;
-        if (!sourceNode) return;
+        if (!sourceNode) return false;
 
         if (!processor || processor.context !== ctx) {
             processor = ctx.createScriptProcessor(4096, 2, 2);
@@ -329,8 +293,47 @@ function attachAudioPipeline(mediaEl) {
         sourceNode.connect(processor);
         processor.connect(virtualDest);
 
+        if (!mediaEl._bpListenersAttached) {
+            mediaEl._bpListenersAttached = true;
+
+            const onTrackChanged = () => {
+                userWantsPlaying = !mediaEl.paused && !mediaEl.ended;
+                scanStreamCodec();
+                postNativeMessage({ type: "flush" });
+                if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                    ctx.resume().catch(() => {});
+                }
+            };
+            mediaEl.addEventListener('loadstart', onTrackChanged, { passive: true });
+            mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
+            mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
+
+            mediaEl.addEventListener('playing', () => {
+                userWantsPlaying = true;
+                postNativeMessage({ type: "state", playing: true });
+                if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                    ctx.resume().catch(() => {});
+                }
+            }, { passive: true });
+
+            mediaEl.addEventListener('pause', () => {
+                userWantsPlaying = false;
+                postNativeMessage({ type: "state", playing: false });
+            }, { passive: true });
+
+            mediaEl.addEventListener('play', () => {
+                userWantsPlaying = true;
+                postNativeMessage({ type: "state", playing: true });
+            }, { passive: true });
+        }
+
+        currentMediaElement = mediaEl;
+        mediaEl._bpPipelineReady = true;
+        return true;
+
     } catch(e) {
         console.error("[BitPerfect] Attach error", e);
+        return false;
     }
 }
 
@@ -340,6 +343,7 @@ HTMLMediaElement.prototype.play = function() {
     userWantsPlaying = true;
     scanStreamCodec();
     attachAudioPipeline(mediaEl);
+    getAudioContext();
     postNativeMessage({ type: "state", playing: true });
     return origPlay.apply(this, arguments);
 };
@@ -353,12 +357,14 @@ HTMLMediaElement.prototype.pause = function() {
 
 function findAndAttachVideo() {
     const video = document.querySelector('video') || document.querySelector('audio');
-    if (video && video !== currentMediaElement) {
-        attachAudioPipeline(video);
-        scanStreamCodec();
+    if (video) {
+        if (!video._bpPipelineReady || video !== currentMediaElement) {
+            attachAudioPipeline(video);
+            scanStreamCodec();
+        }
     }
 }
-setInterval(findAndAttachVideo, 1000);
+setInterval(findAndAttachVideo, 500);
 
 const observer = new MutationObserver(() => {
     findAndAttachVideo();
@@ -375,9 +381,12 @@ function handleNativeMessage(msg) {
     if (cmd === 'setWebTheme') {
         updateWebWhiteTheme(msg.theme === 'light');
     } else if (cmd === 'heartbeat' || cmd === 'resume_audio') {
-        keepPlayingInBackground();
-        if (video && video.paused && userWantsPlaying) {
-            video.play().catch(() => {});
+        getAudioContext();
+        if (video) {
+            attachAudioPipeline(video);
+            if (video.paused && userWantsPlaying) {
+                video.play().catch(() => {});
+            }
         }
     } else if (cmd === 'play') {
         userWantsPlaying = true;
@@ -385,6 +394,7 @@ function handleNativeMessage(msg) {
         if (video) {
             video.muted = false;
             video.volume = 1.0;
+            attachAudioPipeline(video);
             if (video.paused) {
                 video.play().catch(() => {});
             }
