@@ -33,6 +33,7 @@ class UiSettingsDialog(
     private val topPanelHeight: Int,
     private val onThemeChanged: (String) -> Unit,
     private val onAdBlockChanged: (Boolean) -> Unit,
+    private val onSysMonitorChanged: (Boolean) -> Unit,
     private val onPlayerCommand: (String) -> Unit,
     private val onSeekTo: (Long) -> Unit,
     private val onDismiss: () -> Unit
@@ -60,6 +61,7 @@ class UiSettingsDialog(
 
         val btnClose = view.findViewById<ImageButton>(R.id.btnUiDialogClose)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
+        val switchSysMonitor = view.findViewById<SwitchCompat>(R.id.dialogSwitchSysMonitor)
         val spinnerTheme = view.findViewById<Spinner>(R.id.dialogSpinnerTheme)
         val btnBatteryIgnore = view.findViewById<Button>(R.id.btnBatteryIgnore)
 
@@ -74,8 +76,10 @@ class UiSettingsDialog(
         textCurrentTime = view.findViewById(R.id.dialogTextCurrentTimeUi)
         textTotalTime = view.findViewById(R.id.dialogTextTotalTimeUi)
 
+        val appPrefs = AppPreferences.get()
+
         if (!isDarkTheme) {
-            applyLightModeStyle(view, btnClose, switchAdBlock, spinnerTheme, btnPrev, btnNext, btnPlayPause!!)
+            applyLightModeStyle(view, btnClose, switchAdBlock, switchSysMonitor, spinnerTheme, btnPrev, btnNext, btnPlayPause!!)
         }
 
         bottomSheetDialog.setOnShowListener {
@@ -104,7 +108,6 @@ class UiSettingsDialog(
             setDropDownViewResource(spinnerLayout)
         }
         spinnerTheme.adapter = themeAdapter
-        val appPrefs = AppPreferences.get()
         spinnerTheme.setSelection(themeValues.indexOf(appPrefs.uiThemeMode).coerceAtLeast(0))
 
         spinnerTheme.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -121,6 +124,12 @@ class UiSettingsDialog(
 
         btnBatteryIgnore.setOnClickListener {
             requestIgnoreBatteryOptimizations()
+        }
+
+        switchSysMonitor.isChecked = appPrefs.isSysMonitorEnabled
+        switchSysMonitor.setOnCheckedChangeListener { _, isChecked ->
+            appPrefs.isSysMonitorEnabled = isChecked
+            onSysMonitorChanged(isChecked)
         }
 
         switchAdBlock.isChecked = appPrefs.isAdBlockEnabled
@@ -242,6 +251,7 @@ class UiSettingsDialog(
         view: View,
         btnClose: ImageButton,
         switchAdBlock: SwitchCompat,
+        switchSysMonitor: SwitchCompat,
         spinnerTheme: Spinner,
         btnPrev: ImageButton,
         btnNext: ImageButton,
@@ -252,14 +262,19 @@ class UiSettingsDialog(
         view.findViewById<View>(R.id.layoutSectionBattery)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
         view.findViewById<TextView>(R.id.textBatteryTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textBatterySub)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<TextView>(R.id.textSysMonitorTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+        view.findViewById<TextView>(R.id.textSysMonitorSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<TextView>(R.id.textAdBlockTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textAdBlockSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<View>(R.id.dividerUi1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+        view.findViewById<View>(R.id.dividerUi2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
         val swTrackLight = ContextCompat.getDrawable(activity, R.drawable.switch_track_walkman_outline_light)
         val swThumbLight = ContextCompat.getDrawable(activity, R.drawable.switch_thumb_light)
         switchAdBlock.trackDrawable = swTrackLight
         switchAdBlock.thumbDrawable = swThumbLight
+        switchSysMonitor.trackDrawable = swTrackLight
+        switchSysMonitor.thumbDrawable = swThumbLight
 
         btnClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
         btnClose.setColorFilter(Color.parseColor("#1C1C1E"))

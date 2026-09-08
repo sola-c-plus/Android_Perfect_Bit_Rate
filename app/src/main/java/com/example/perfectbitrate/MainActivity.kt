@@ -573,6 +573,7 @@ class MainActivity : AppCompatActivity() {
             bitActivityMask = 0
             peakDbL = -60f
             peakDbR = -60f
+            totalClipCount = 0L
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
             val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
@@ -619,6 +620,7 @@ class MainActivity : AppCompatActivity() {
             peakDbL = -60f
             peakDbR = -60f
             bitActivityMask = 0
+            totalClipCount = 0L
             walkmanLevelMeter?.reset()
 
             activeOutputDevice = null
@@ -738,10 +740,10 @@ class MainActivity : AppCompatActivity() {
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
         
-        // 転送量 (MB) をクリーンに表示
+        // 転送量 (MB) のシンプル表示
         textTransfer.text = String.format(java.util.Locale.US, "%.1f MB", mb)
 
-        // ★ SW連動: ONなら全追加テレメトリ (CPU/RAM, BUF, CLIP) を表示、OFFなら完全に非表示
+        // ★ SW 連動: ONなら全追加テレメトリ (CPU/RAM, BUF, CLIP) を表示、OFFなら完全に非表示
         if (appPrefs.isSysMonitorEnabled) {
             textCpuRamMonitor.visibility = View.VISIBLE
             textCpuRamMonitor.text = "CPU:${currentCpuUsagePercent}%  RAM:${currentRamUsageMb}M"

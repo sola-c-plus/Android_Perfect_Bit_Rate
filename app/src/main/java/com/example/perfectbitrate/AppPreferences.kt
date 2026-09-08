@@ -43,6 +43,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SELECTED_PRESET_INDEX = "selected_preset_index"
         private const val KEY_RICH_HARMONICS_ENABLED = "rich_harmonics_enabled"
         private const val KEY_EQ_ENABLED = "eq_enabled"
+        private const val KEY_SYS_MONITOR_ENABLED = "sys_monitor_enabled"
         private const val KEY_SELECTED_EQ_ID = "selected_eq_id"
         private const val KEY_CURRENT_EQ_GAIN_PREFIX = "current_eq_gain_"
         private const val KEY_WORKING_CUSTOM_GAIN_PREFIX = "working_custom_gain_"
@@ -81,6 +82,10 @@ class AppPreferences private constructor(context: Context) {
     var isAdBlockEnabled: Boolean
         get() = prefs.getBoolean(KEY_AD_BLOCK_ENABLED, true)
         set(value) = prefs.edit { putBoolean(KEY_AD_BLOCK_ENABLED, value) }
+
+    var isSysMonitorEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SYS_MONITOR_ENABLED, false)
+        set(value) = prefs.edit { putBoolean(KEY_SYS_MONITOR_ENABLED, value) }
 
     var uiThemeMode: String
         get() = prefs.getString(KEY_UI_THEME_MODE, "dark") ?: "dark"
