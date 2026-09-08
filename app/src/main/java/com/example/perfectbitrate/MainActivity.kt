@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textCodec: TextView
     private lateinit var textTransfer: TextView
     private lateinit var textPeak: TextView
-    private lateinit var textBufferClip: TextView
+    private lateinit var textBufferLatency: TextView
     private lateinit var textBitDepth: TextView
     private lateinit var textCpuRamMonitor: TextView
     private var walkmanLevelMeter: WalkmanLevelMeterView? = null
@@ -94,7 +94,7 @@ class MainActivity : AppCompatActivity() {
     private var lastPcmTime = 0L
 
     private var currentQueueSize = 0
-    private var totalClipCount = 0L
+    private var currentLatencyMs = 0
 
     private var lastCpuSampleTime = 0L
     private var lastAppCpuTime = 0L
@@ -112,6 +112,7 @@ class MainActivity : AppCompatActivity() {
                 peakDbR = -60f
                 bitActivityMask = 0
                 currentQueueSize = 0
+                currentLatencyMs = 0
                 walkmanLevelMeter?.setLevels(-60f, -60f)
             }
 
@@ -215,13 +216,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            playbackService?.onPeakListener = { dbL, dbR, mask, queueSize, clips ->
+            playbackService?.onPeakListener = { dbL, dbR, mask, queueSize, latencyMs ->
                 lastPcmTime = System.currentTimeMillis()
                 peakDbL = dbL
                 peakDbR = dbR
                 bitActivityMask = bitActivityMask or mask
                 currentQueueSize = queueSize
-                totalClipCount = clips
+                currentLatencyMs = latencyMs
                 walkmanLevelMeter?.setLevels(dbL, dbR)
             }
 
@@ -259,7 +260,7 @@ class MainActivity : AppCompatActivity() {
         textCodec = findViewById(R.id.textCodec)
         textTransfer = findViewById(R.id.textTransfer)
         textPeak = findViewById(R.id.textPeak)
-        textBufferClip = findViewById(R.id.textBufferClip)
+        textBufferLatency = findViewById(R.id.textBufferLatency)
         textBitDepth = findViewById(R.id.textBitDepth)
         textCpuRamMonitor = findViewById(R.id.textCpuRamMonitor)
         walkmanLevelMeter = findViewById(R.id.walkmanLevelMeter)
@@ -347,6 +348,7 @@ class MainActivity : AppCompatActivity() {
                         peakDbR = -60f
                         bitActivityMask = 0
                         currentQueueSize = 0
+                        currentLatencyMs = 0
                         walkmanLevelMeter?.reset()
                     }
                     playbackService?.updatePlaybackState(isPlaying)
@@ -418,7 +420,7 @@ class MainActivity : AppCompatActivity() {
             textCodec.setTextColor(Color.parseColor("#A0A0A0"))
             textTransfer.setTextColor(Color.parseColor("#666666"))
             textPeak.setTextColor(Color.parseColor("#B0B0B0"))
-            textBufferClip.setTextColor(Color.parseColor("#888888"))
+            textBufferLatency.setTextColor(Color.parseColor("#888888"))
             textCpuRamMonitor.setTextColor(Color.parseColor("#888888"))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
@@ -435,7 +437,7 @@ class MainActivity : AppCompatActivity() {
             textCodec.setTextColor(Color.parseColor("#636366"))
             textTransfer.setTextColor(Color.parseColor("#636366"))
             textPeak.setTextColor(Color.parseColor("#48484A"))
-            textBufferClip.setTextColor(Color.parseColor("#636366"))
+            textBufferLatency.setTextColor(Color.parseColor("#636366"))
             textCpuRamMonitor.setTextColor(Color.parseColor("#636366"))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
@@ -527,9 +529,9 @@ class MainActivity : AppCompatActivity() {
             },
             onAdBlockChanged = { isEnabled -> geckoController.sendAdBlock(isEnabled) },
             onSysMonitorChanged = { isEnabled ->
-                // ★ スイッチ ON/OFF で追加項目 (CPU/RAM, BUF, CLIP) を一括表示/非表示切り替え
+                // ★ スイッチ ON/OFF で追加項目 (CPU/RAM, BUF/LAT) を一括表示/非表示切り替え
                 textCpuRamMonitor.visibility = if (isEnabled) View.VISIBLE else View.GONE
-                textBufferClip.visibility = if (isEnabled) View.VISIBLE else View.GONE
+                textBufferLatency.visibility = if (isEnabled) View.VISIBLE else View.GONE
                 updateStatus()
             },
             onPlayerCommand = { cmd ->
@@ -573,7 +575,7 @@ class MainActivity : AppCompatActivity() {
             bitActivityMask = 0
             peakDbL = -60f
             peakDbR = -60f
-            totalClipCount = 0L
+            currentLatencyMs = 0
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
             val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
@@ -620,7 +622,7 @@ class MainActivity : AppCompatActivity() {
             peakDbL = -60f
             peakDbR = -60f
             bitActivityMask = 0
-            totalClipCount = 0L
+            currentLatencyMs = 0
             walkmanLevelMeter?.reset()
 
             activeOutputDevice = null
@@ -740,25 +742,22 @@ class MainActivity : AppCompatActivity() {
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
         
-        // 転送量 (MB) のシンプル表示
+        // 転送量 (MB) をクリーンに表示
         textTransfer.text = String.format(java.util.Locale.US, "%.1f MB", mb)
 
-        // ★ SW 連動: ONなら全追加テレメトリ (CPU/RAM, BUF, CLIP) を表示、OFFなら完全に非表示
+        // ★ SW連動: ONなら全追加テレメトリ (CPU/RAM, BUF, LAT) を表示、OFFなら完全に非表示
         if (appPrefs.isSysMonitorEnabled) {
             textCpuRamMonitor.visibility = View.VISIBLE
             textCpuRamMonitor.text = "CPU:${currentCpuUsagePercent}%  RAM:${currentRamUsageMb}M"
 
-            textBufferClip.visibility = View.VISIBLE
+            textBufferLatency.visibility = View.VISIBLE
             val bufPercent = if (isPlayingState) ((currentQueueSize * 100) / 64).coerceIn(0, 100) else 100
-            textBufferClip.text = "BUF:${bufPercent}%  CLIP:${totalClipCount}"
-            if (totalClipCount > 0L) {
-                textBufferClip.setTextColor(Color.parseColor("#FF5252"))
-            } else {
-                textBufferClip.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
-            }
+            val latStr = if (isPlayingState && currentLatencyMs > 0) "${currentLatencyMs}ms" else "--"
+            textBufferLatency.text = "BUF:${bufPercent}%  LAT:${latStr}"
+            textBufferLatency.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
         } else {
             textCpuRamMonitor.visibility = View.GONE
-            textBufferClip.visibility = View.GONE
+            textBufferLatency.visibility = View.GONE
         }
 
         val peakTextL = if (peakDbL > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbL) else "-inf"

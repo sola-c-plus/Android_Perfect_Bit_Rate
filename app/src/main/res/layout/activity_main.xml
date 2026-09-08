@@ -149,7 +149,7 @@
                 android:fontFamily="@font/font_dap_mono" />
         </LinearLayout>
 
-        <!-- 段 3: PEAK L/R + バッファ健全度(BUF) & クリップ(CLIP) + 有効ビット深度(BIT ACTIVE) -->
+        <!-- 段 3: PEAK L/R + バッファ健全度(BUF) & レンダリング遅延(LAT) + 有効ビット深度(BIT ACTIVE) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -167,12 +167,12 @@
                 android:textSize="9.5sp"
                 android:fontFamily="@font/font_dap_mono" />
 
-            <!-- ★ バッファ健全度 & True Peak クリップカウンター (SW連動で一括表示/非表示) -->
+            <!-- ★ バッファ健全度 & 真のDAC出力遅延 LAT (SW連動で一括表示/非表示) -->
             <TextView
-                android:id="@+id/textBufferClip"
+                android:id="@+id/textBufferLatency"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="BUF:100% CLIP:0"
+                android:text="BUF:100% LAT:0ms"
                 android:textColor="#888888"
                 android:textSize="9.5sp"
                 android:fontFamily="@font/font_dap_mono"

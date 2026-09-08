@@ -151,7 +151,7 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
-            <!-- ★ EXTENDED TELEMETRY MONITOR (全追加テレメトリの一括表示/非表示スイッチ) -->
+            <!-- ★ EXTENDED TELEMETRY MONITOR (CPU/RAM, BUF, LAT 一括スイッチ) -->
             <LinearLayout
                 android:id="@+id/layoutSectionSysMonitor"
                 android:layout_width="match_parent"
@@ -180,7 +180,7 @@
                         android:id="@+id/textSysMonitorSub"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="CPU/RAM・バッファ占有率・クリップ監視の表示"
+                        android:text="CPU/RAM負荷・バッファ健全度・出力遅延(LAT)の表示"
                         android:textColor="#777777"
                         android:textSize="9.5sp" />
                 </LinearLayout>

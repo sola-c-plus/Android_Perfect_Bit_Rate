@@ -95,13 +95,12 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
-    // ★ (peakDbL, peakDbR, bitMask, queueSize, clipCount)
-    var onPeakListener: ((Float, Float, Int, Int, Long) -> Unit)? = null
+    // ★ (peakDbL, peakDbR, bitMask, queueSize, latencyMs)
+    var onPeakListener: ((Float, Float, Int, Int, Int) -> Unit)? = null
     var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
 
-    private var lastWasClipping = false
-    private var totalClipCounter = 0L
+    private var totalWrittenFrames = 0L
 
     var isVolumeLocked = false
         set(value) {
@@ -313,7 +312,8 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
-        onPeakListener?.invoke(-60f, -60f, 0, 0, totalClipCounter)
+        totalWrittenFrames = 0L
+        onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
 
         forceResetSpeakerVolume()
         onCommandListener?.invoke("pause")
@@ -479,8 +479,8 @@ class BitPerfectPlaybackService : Service() {
             audioLock.unlock()
         }
         NativeAudioEngine.nativeResetUpsampler()
-        lastWasClipping = false
-        onPeakListener?.invoke(-60f, -60f, 0, 0, totalClipCounter)
+        totalWrittenFrames = 0L
+        onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -566,8 +566,8 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
-        lastWasClipping = false
-        onPeakListener?.invoke(-60f, -60f, 0, 0, totalClipCounter)
+        totalWrittenFrames = 0L
+        onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
 
         try {
             audioTrack?.setVolume(0f)
@@ -944,6 +944,7 @@ class BitPerfectPlaybackService : Service() {
                 }
 
                 audioTrack = createdTrack
+                totalWrittenFrames = 0L
 
                 val actualModeStr = when (finalEncoding) {
                     AudioFormat.ENCODING_PCM_32BIT -> "32bit"
@@ -1013,7 +1014,15 @@ class BitPerfectPlaybackService : Service() {
                             try { track.play() } catch (e: Exception) {}
                         }
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
-                        if (written < 0) {
+                        if (written > 0) {
+                            val bytesPerSample = when (currentBitMode) {
+                                "32bit" -> 4
+                                "24bit" -> 3
+                                else -> 2
+                            }
+                            val framesWritten = written / (bytesPerSample * 2)
+                            totalWrittenFrames += framesWritten
+                        } else if (written < 0) {
                             handleBecomingNoisyOrDisconnected()
                         }
                     }
@@ -1102,15 +1111,19 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        // ★ 真の 0dBFS 到達・超過判定 (エッジトリガーで過剰暴走カウントを完全阻止)
-        val isClippingNow = (instantPeakL >= -0.01f || instantPeakR >= -0.01f)
-        if (isClippingNow && !lastWasClipping) {
-            totalClipCounter++
-        }
-        lastWasClipping = isClippingNow
-
         val queueSize = pcmQueue.size
-        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, queueSize, totalClipCounter)
+        val playedFrames = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        val hardwareBufferedFrames = (totalWrittenFrames - playedFrames).coerceAtLeast(0L)
+        val queueBufferedFrames = queueSize * 4096L
+        val totalBufferedFrames = hardwareBufferedFrames + queueBufferedFrames
+
+        val latencyMs = if (effectiveSampleRate > 0) {
+            ((totalBufferedFrames * 1000L) / effectiveSampleRate).toInt().coerceIn(0, 999)
+        } else {
+            0
+        }
+
+        onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, queueSize, latencyMs)
     }
 
     private fun createNotificationChannel() {
