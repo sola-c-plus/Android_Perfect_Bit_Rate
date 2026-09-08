@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
@@ -41,7 +42,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textCodec: TextView
     private lateinit var textTransfer: TextView
     private lateinit var textPeak: TextView
+    private lateinit var textBufferClip: TextView
     private lateinit var textBitDepth: TextView
+    private lateinit var textCpuRamMonitor: TextView
     private var walkmanLevelMeter: WalkmanLevelMeterView? = null
     private var topInfoPanel: View? = null
     private var panelDividerLine: View? = null
@@ -90,6 +93,17 @@ class MainActivity : AppCompatActivity() {
     private var lastBitResetTime = 0L
     private var lastPcmTime = 0L
 
+    private var currentQueueSize = 0
+    private var totalClipCount = 0L
+    private var lastThroughputCalcTime = 0L
+    private var lastThroughputBytes = 0L
+    private var currentThroughputKbps = 0
+
+    private var lastCpuSampleTime = 0L
+    private var lastAppCpuTime = 0L
+    private var currentCpuUsagePercent = 0
+    private var currentRamUsageMb = 0
+
     private val uiSpectrumBands = FloatArray(32) { -60f }
 
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -100,6 +114,8 @@ class MainActivity : AppCompatActivity() {
                 peakDbL = -60f
                 peakDbR = -60f
                 bitActivityMask = 0
+                currentQueueSize = 0
+                currentThroughputKbps = 0
                 walkmanLevelMeter?.setLevels(-60f, -60f)
             }
 
@@ -108,9 +124,55 @@ class MainActivity : AppCompatActivity() {
                 activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
             }
 
+            if (appPrefs.isSysMonitorEnabled) {
+                sampleSystemResources()
+            }
+
+            // リアルタイム通信スループット (kbps) の算出
+            val elapsed = SystemClock.elapsedRealtime()
+            val timeDelta = elapsed - lastThroughputCalcTime
+            if (timeDelta >= 1000L) {
+                val bytesDelta = pcmPacketCount - lastThroughputBytes
+                currentThroughputKbps = if (isPlayingState) (((bytesDelta * 8.0) / (timeDelta / 1000.0)) / 1000.0).toInt().coerceAtLeast(0) else 0
+                lastThroughputCalcTime = elapsed
+                lastThroughputBytes = pcmPacketCount
+            }
+
             updateStatus()
             updateDialogPlayerUi()
             uiHandler.postDelayed(this, 30)
+        }
+    }
+
+    private fun sampleSystemResources() {
+        val now = SystemClock.elapsedRealtime()
+        val timeDiff = now - lastCpuSampleTime
+        if (timeDiff >= 500L) {
+            try {
+                val stat = java.io.File("/proc/self/stat").readText().split(" ")
+                val utime = stat[13].toLong()
+                val stime = stat[14].toLong()
+                val appCpuTime = utime + stime
+
+                if (lastCpuSampleTime > 0L && timeDiff > 0L) {
+                    val cpuDiff = appCpuTime - lastAppCpuTime
+                    val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+                    val usage = ((cpuDiff * 1000.0 / timeDiff) / cores).toInt().coerceIn(0, 100)
+                    currentCpuUsagePercent = usage
+                }
+                lastCpuSampleTime = now
+                lastAppCpuTime = appCpuTime
+            } catch (e: Exception) {
+                currentCpuUsagePercent = 0
+            }
+
+            try {
+                val runtime = Runtime.getRuntime()
+                val usedMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+                currentRamUsageMb = usedMem.toInt().coerceAtLeast(1)
+            } catch (e: Exception) {
+                currentRamUsageMb = 0
+            }
         }
     }
 
@@ -167,11 +229,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            playbackService?.onPeakListener = { dbL, dbR, mask ->
+            playbackService?.onPeakListener = { dbL, dbR, mask, queueSize, clips ->
                 lastPcmTime = System.currentTimeMillis()
                 peakDbL = dbL
                 peakDbR = dbR
                 bitActivityMask = bitActivityMask or mask
+                currentQueueSize = queueSize
+                totalClipCount = clips
                 walkmanLevelMeter?.setLevels(dbL, dbR)
             }
 
@@ -209,7 +273,9 @@ class MainActivity : AppCompatActivity() {
         textCodec = findViewById(R.id.textCodec)
         textTransfer = findViewById(R.id.textTransfer)
         textPeak = findViewById(R.id.textPeak)
+        textBufferClip = findViewById(R.id.textBufferClip)
         textBitDepth = findViewById(R.id.textBitDepth)
+        textCpuRamMonitor = findViewById(R.id.textCpuRamMonitor)
         walkmanLevelMeter = findViewById(R.id.walkmanLevelMeter)
 
         btnReload = findViewById(R.id.btnReload)
@@ -244,7 +310,10 @@ class MainActivity : AppCompatActivity() {
             activity = this,
             geckoView = findViewById(R.id.geckoview),
             listener = object : GeckoSessionController.Listener {
-                override fun onFlush() { playbackService?.resetBuffer() }
+                override fun onFlush() {
+                    playbackService?.resetBuffer()
+                    totalClipCount = 0L
+                }
                 override fun onPcm(pcmBytes: ByteArray, inBitMode: String) {
                     pcmPacketCount += pcmBytes.size
                     isPlayingState = true
@@ -292,6 +361,7 @@ class MainActivity : AppCompatActivity() {
                         peakDbL = -60f
                         peakDbR = -60f
                         bitActivityMask = 0
+                        currentQueueSize = 0
                         walkmanLevelMeter?.reset()
                     }
                     playbackService?.updatePlaybackState(isPlaying)
@@ -363,6 +433,8 @@ class MainActivity : AppCompatActivity() {
             textCodec.setTextColor(Color.parseColor("#A0A0A0"))
             textTransfer.setTextColor(Color.parseColor("#666666"))
             textPeak.setTextColor(Color.parseColor("#B0B0B0"))
+            textBufferClip.setTextColor(Color.parseColor("#888888"))
+            textCpuRamMonitor.setTextColor(Color.parseColor("#888888"))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
@@ -378,6 +450,8 @@ class MainActivity : AppCompatActivity() {
             textCodec.setTextColor(Color.parseColor("#636366"))
             textTransfer.setTextColor(Color.parseColor("#636366"))
             textPeak.setTextColor(Color.parseColor("#48484A"))
+            textBufferClip.setTextColor(Color.parseColor("#636366"))
+            textCpuRamMonitor.setTextColor(Color.parseColor("#636366"))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
@@ -467,6 +541,10 @@ class MainActivity : AppCompatActivity() {
                 showUiSettingsDialog()
             },
             onAdBlockChanged = { isEnabled -> geckoController.sendAdBlock(isEnabled) },
+            onSysMonitorChanged = { isEnabled ->
+                textCpuRamMonitor.visibility = if (isEnabled) View.VISIBLE else View.GONE
+                updateStatus()
+            },
             onPlayerCommand = { cmd ->
                 if (cmd == "play_pause") {
                     geckoController.sendCommand(if (isPlayingState) "pause" else "play")
@@ -508,6 +586,8 @@ class MainActivity : AppCompatActivity() {
             bitActivityMask = 0
             peakDbL = -60f
             peakDbR = -60f
+            totalClipCount = 0L
+            currentThroughputKbps = 0
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
             val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
@@ -554,6 +634,8 @@ class MainActivity : AppCompatActivity() {
             peakDbL = -60f
             peakDbR = -60f
             bitActivityMask = 0
+            totalClipCount = 0L
+            currentThroughputKbps = 0
             walkmanLevelMeter?.reset()
 
             activeOutputDevice = null
@@ -561,7 +643,6 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
             updateDialogPlayerUi()
 
-            // ★ OS のスピーカー切り替え完了タイミングに合わせて遅延消音リセット
             uiHandler.postDelayed({
                 playbackService?.forceResetSpeakerVolume()
                 try {
@@ -673,11 +754,31 @@ class MainActivity : AppCompatActivity() {
         val effectiveRate = playbackService?.effectiveSampleRate ?: (baseSampleRate * activeFactor)
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
-        textTransfer.text = String.format("%.1f MB", mb)
+        
+        // ★ 転送量 & リアルタイム通信スループット (kbps)
+        val tpText = if (isPlayingState && currentThroughputKbps > 0) " (${currentThroughputKbps}k)" else ""
+        textTransfer.text = String.format(java.util.Locale.US, "%.1f MB%s", mb, tpText)
+
+        // ★ CPU / RAM モニター
+        if (appPrefs.isSysMonitorEnabled) {
+            textCpuRamMonitor.visibility = View.VISIBLE
+            textCpuRamMonitor.text = "CPU:${currentCpuUsagePercent}%  RAM:${currentRamUsageMb}M"
+        } else {
+            textCpuRamMonitor.visibility = View.GONE
+        }
 
         val peakTextL = if (peakDbL > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbL) else "-inf"
         val peakTextR = if (peakDbR > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbR) else "-inf"
-        textPeak.text = "PEAK  L: ${peakTextL} dB  /  R: ${peakTextR} dB"
+        textPeak.text = "PEAK  L: ${peakTextL} / R: ${peakTextR} dB"
+
+        // ★ オーディオバッファ健全度 & クリップカウンター
+        val bufPercent = if (isPlayingState) ((currentQueueSize * 100) / 64).coerceIn(0, 100) else 100
+        textBufferClip.text = "BUF:${bufPercent}%  CLIP:${totalClipCount}"
+        if (totalClipCount > 0L) {
+            textBufferClip.setTextColor(Color.parseColor("#FF5252"))
+        } else {
+            textBufferClip.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
+        }
 
         val maxBits = if (currentBitMode == "32bit") 32 else (if (currentBitMode == "24bit") 24 else 16)
         val activeBits = if (!isPlayingState || (peakDbL <= -50f && peakDbR <= -50f)) 0 else Integer.bitCount(bitActivityMask).coerceIn(0, maxBits)
