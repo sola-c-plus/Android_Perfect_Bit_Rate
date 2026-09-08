@@ -745,7 +745,6 @@ class BitPerfectPlaybackService : Service() {
                 activeOutputDevice = targetDevice
                 baseSampleRate = baseRate
 
-                // ★ ユーザー選択の倍率 (1x/2x/4x/8x) に基づくサンプリングレートを正確に設定
                 val factorToApply = factor
                 val targetRate = baseRate * factorToApply
 
@@ -785,7 +784,7 @@ class BitPerfectPlaybackService : Service() {
                         )
                     }
 
-                    // --- Step 1: supportedMixers から BIT_PERFECT (優先) を探索 ---
+                    // 1. supportedMixers から BIT_PERFECT を探索
                     for (tryEnc in preferredEncList) {
                         val bpMatch = supportedMixers.firstOrNull {
                             it.format.sampleRate == effectiveSampleRate &&
@@ -805,7 +804,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    // --- Step 2: 96k/384k等で BIT_PERFECT が未定義の場合、supportedMixers の DEFAULT 動作を探索 ---
+                    // 2. 96k等で BIT_PERFECT が未定義の場合、supportedMixers の DEFAULT 動作を探索
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val defMatch = supportedMixers.firstOrNull {
@@ -826,7 +825,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    // --- Step 3: supportedMixers に無くても、DAC に対して targetRate の BIT_PERFECT を要求 ---
+                    // 3. supportedMixers に無くても、DAC に対して targetRate の BIT_PERFECT を要求
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val forcedBp = AudioMixerAttributes.Builder(
@@ -849,7 +848,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                     }
 
-                    // --- Step 4: 最後の手段として targetRate の DEFAULT クロック切り替えを要求 (96k/384k 物理クロック固定用) ---
+                    // 4. 最後の手段として targetRate の DEFAULT クロック切り替えを要求 (96k/384k 物理クロック用)
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val forcedDef = AudioMixerAttributes.Builder(
