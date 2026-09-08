@@ -1,4 +1,4 @@
-﻿package com.example.perfectbitrate
+package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.Canvas
@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.content.res.ResourcesCompat
 import kotlin.math.max
 
 class WalkmanLevelMeterView @JvmOverloads constructor(
@@ -27,19 +28,16 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 8.0f * density
-        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val infinityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 9.5f * density
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 7.5f * density
-        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
 
@@ -105,12 +103,22 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     private var rCenterY = 0f
 
     init {
+        try {
+            val monoTf = ResourcesCompat.getFont(context, R.font.roboto_mono_bold)
+            val condensedTf = ResourcesCompat.getFont(context, R.font.roboto_condensed_bold)
+            if (monoTf != null) {
+                textPaint.typeface = monoTf
+                labelPaint.typeface = monoTf
+            }
+            if (condensedTf != null) {
+                infinityPaint.typeface = condensedTf
+            }
+        } catch (e: Exception) {}
         updatePaintsForTheme()
     }
 
     private fun updatePaintsForTheme() {
         if (isLightMode) {
-            // ★ ライトモード: 白背景で鮮明に見える黒/チャコールのアクティブバー
             segActivePaint.color = Color.parseColor("#1C1C1E")
             segInactivePaint.color = Color.parseColor("#E5E5EA")
             segPeakPaint.color = Color.parseColor("#D49B28")
@@ -119,7 +127,6 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
             infinityPaint.color = Color.parseColor("#636366")
             scaleLinePaint.color = Color.parseColor("#C7C7CC")
         } else {
-            // ★ ダークモード: 1ミリも変えず原型のまま100%保持
             segActivePaint.color = Color.parseColor("#FFFFFF")
             segInactivePaint.color = Color.parseColor("#161616")
             segPeakPaint.color = Color.parseColor("#E5A93C")
