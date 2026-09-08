@@ -45,6 +45,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_EQ_ENABLED = "eq_enabled"
         private const val KEY_SELECTED_EQ_ID = "selected_eq_id"
         private const val KEY_CURRENT_EQ_GAIN_PREFIX = "current_eq_gain_"
+        private const val KEY_WORKING_CUSTOM_GAIN_PREFIX = "working_custom_gain_"
         private const val KEY_CUSTOM_EQ_PRESETS_JSON = "custom_eq_presets_json"
 
         @Volatile
@@ -145,14 +146,22 @@ class AppPreferences private constructor(context: Context) {
         }
     }
 
-    fun getCustomEqPresets(): MutableList<CustomEqPreset> {
+    fun getWorkingCustomGains(): FloatArray {
+        return FloatArray(10) { i -> prefs.getFloat("$KEY_WORKING_CUSTOM_GAIN_PREFIX$i", 0.0f) }
+    }
+
+    fun setWorkingCustomGains(gains: FloatArray) {
+        prefs.edit {
+            for (i in 0 until minOf(gains.size, 10)) {
+                putFloat("$KEY_WORKING_CUSTOM_GAIN_PREFIX$i", gains[i])
+            }
+        }
+    }
+
+    fun getSavedCustomEqPresets(): MutableList<CustomEqPreset> {
         val jsonStr = prefs.getString(KEY_CUSTOM_EQ_PRESETS_JSON, null)
         if (jsonStr.isNullOrEmpty()) {
-            val initialGains = FloatArray(10) { i -> prefs.getFloat("eq_gain_$i", 0.0f) }
-            val defaultPreset = CustomEqPreset(id = "custom_1", name = "Custom 1", gains = initialGains)
-            val list = mutableListOf(defaultPreset)
-            saveCustomEqPresets(list)
-            return list
+            return mutableListOf()
         }
         val list = mutableListOf<CustomEqPreset>()
         try {
@@ -169,7 +178,6 @@ class AppPreferences private constructor(context: Context) {
             }
         } catch (e: Exception) {
             list.clear()
-            list.add(CustomEqPreset("custom_1", "Custom 1", FloatArray(10)))
         }
         return list
     }
