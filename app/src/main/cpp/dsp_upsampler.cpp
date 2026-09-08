@@ -38,7 +38,7 @@ double DspUpsampler::besselI0(double x) {
 
 void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     int fftSize = 512;
-    while (fftSize < totalTaps * 2) fftSize *= 2;
+    while (fftSize < totalTaps * 4) fftSize *= 2;
 
     std::vector<double> logMag(fftSize, 0.0);
     const double eps = 1e-12;
@@ -71,7 +71,6 @@ void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) 
     causalCepstrum[half] = cepstrum[half];
 
     std::vector<double> minReal(fftSize, 0.0), minImag(fftSize, 0.0);
-    // ★ 因果的ケプストラム全領域 [0, half] を積算 (打ち切りバグ修正)
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
         for (int n = 0; n <= half; ++n) {
@@ -126,13 +125,20 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         protoFilter[i] = sincVal * window;
     }
 
+    double origSum = 0.0;
+    for (int i = 0; i < totalTaps; ++i) origSum += protoFilter[i];
+
     if (filterType_ == FirFilterType::MINIMUM_PHASE_SHARP || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW) {
         convertToMinimumPhase(protoFilter, totalTaps);
     }
 
     double sumGain = 0.0;
     for (int i = 0; i < totalTaps; ++i) sumGain += protoFilter[i];
-    double scale = static_cast<double>(factor) / (sumGain != 0.0 ? sumGain : 1.0);
+    
+    // ★ 爆音クリップ防止: 安全なスケール正規化
+    double effectiveSum = (std::abs(sumGain) > 0.1) ? sumGain : (std::abs(origSum) > 0.1 ? origSum : 1.0);
+    double scale = static_cast<double>(factor) / effectiveSum;
+    scale = std::clamp(scale, 0.5 * factor, 3.0 * factor);
 
     polyCoeffs_.resize(factor);
     for (int p = 0; p < factor; ++p) {
@@ -232,8 +238,6 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(currentFs));
     transientRestorer_.configure(transientMode_, static_cast<double>(currentFs), customUseGroupDelay_, customUseLattice_);
     freqEngine_.configure(freqMode_, static_cast<double>(currentFs), customFreqGain_, customFreqExtractFreq_);
-    antiPreecho_.configure(static_cast<double>(currentFs));
-    bitContinuity_.reset();
     reset();
 }
 
@@ -250,13 +254,10 @@ void DspUpsampler::reset() {
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     std::fill(std::begin(spectrumDb_), std::end(spectrumDb_), -60.0f);
     prevSideL_ = 0.0f; prevSideR_ = 0.0f;
-    sbrPhaseL_ = 0.0f; sbrPhaseR_ = 0.0f;
     equalizer_.reset();
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
     freqEngine_.reset();
-    antiPreecho_.reset();
-    bitContinuity_.reset();
 }
 
 void DspUpsampler::executeFftAnalysis() {
@@ -493,72 +494,33 @@ size_t DspUpsampler::process(
         return outTotalBytes;
     }
 
-    bool is441Base = (std::abs(inSampleRate_ - 44100.0f) < 100.0f);
-    double speedRatio = is441Base ? (44100.0 / 48000.0) : 1.0;
-
     int currentFactor = factor_;
-    size_t numOutFrames = static_cast<size_t>(std::round(numInFrames * speedRatio * currentFactor));
+    size_t numOutFrames = numInFrames * currentFactor;
     if (numOutFrames == 0) return 0;
 
     tempOutL_.resize(numOutFrames);
     tempOutR_.resize(numOutFrames);
 
+    // ★ 44.1k/48k ともに純粋な Sinc FIR 整数倍リサンプリングで直接処理 (粗末な線形補間を全廃)
     if (currentFactor > 1) {
         if (isCascadeFir_) {
             if (currentFactor == 2) {
                 cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
-                if (!is441Base) {
-                    std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
-                    std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
-                } else {
-                    double step = (double)(numInFrames * 2) / (double)numOutFrames;
-                    for (size_t i = 0; i < numOutFrames; ++i) {
-                        double p = i * step; int idx = (int)p; double f = p - idx;
-                        int i1 = std::min((int)(numInFrames * 2) - 1, idx);
-                        int i2 = std::min((int)(numInFrames * 2) - 1, idx + 1);
-                        tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
-                        tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
-                    }
-                }
+                std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
+                std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
             } else if (currentFactor == 4) {
                 cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
                 cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
-                if (!is441Base) {
-                    std::memcpy(tempOutL_.data(), stageBuf2_L_.data(), numOutFrames * sizeof(float));
-                    std::memcpy(tempOutR_.data(), stageBuf2_R_.data(), numOutFrames * sizeof(float));
-                } else {
-                    double step = (double)(numInFrames * 4) / (double)numOutFrames;
-                    for (size_t i = 0; i < numOutFrames; ++i) {
-                        double p = i * step; int idx = (int)p; double f = p - idx;
-                        int i1 = std::min((int)(numInFrames * 4) - 1, idx);
-                        int i2 = std::min((int)(numInFrames * 4) - 1, idx + 1);
-                        tempOutL_[i] = static_cast<float>(stageBuf2_L_[i1] * (1.0 - f) + stageBuf2_L_[i2] * f);
-                        tempOutR_[i] = static_cast<float>(stageBuf2_R_[i1] * (1.0 - f) + stageBuf2_R_[i2] * f);
-                    }
-                }
+                std::memcpy(tempOutL_.data(), stageBuf2_L_.data(), numOutFrames * sizeof(float));
+                std::memcpy(tempOutR_.data(), stageBuf2_R_.data(), numOutFrames * sizeof(float));
             } else if (currentFactor == 8) {
                 cascadeStages_[0].processStereo(tempInL_.data(), tempInR_.data(), numInFrames, stageBuf1_L_, stageBuf1_R_);
                 cascadeStages_[1].processStereo(stageBuf1_L_.data(), stageBuf1_R_.data(), numInFrames * 2, stageBuf2_L_, stageBuf2_R_);
                 cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, stageBuf1_L_, stageBuf1_R_);
-                if (!is441Base) {
-                    std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
-                    std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
-                } else {
-                    double step = (double)(numInFrames * 8) / (double)numOutFrames;
-                    for (size_t i = 0; i < numOutFrames; ++i) {
-                        double p = i * step; int idx = (int)p; double f = p - idx;
-                        int i1 = std::min((int)(numInFrames * 8) - 1, idx);
-                        int i2 = std::min((int)(numInFrames * 8) - 1, idx + 1);
-                        tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
-                        tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
-                    }
-                }
+                std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
+                std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
             }
         } else {
-            size_t factorFrames = numInFrames * currentFactor;
-            stageBuf1_L_.resize(factorFrames);
-            stageBuf1_R_.resize(factorFrames);
-
             const int tpp = tapsPerPhase_;
             const int hLen = historyLen_;
 
@@ -579,45 +541,19 @@ size_t DspUpsampler::process(
                     }
 
                     size_t outIdx = n * currentFactor + p;
-                    stageBuf1_L_[outIdx] = sumL;
-                    stageBuf1_R_[outIdx] = sumR;
+                    tempOutL_[outIdx] = sumL;
+                    tempOutR_[outIdx] = sumR;
                 }
 
                 historyWritePos_++;
                 if (historyWritePos_ >= hLen) historyWritePos_ = 0;
             }
-
-            if (!is441Base) {
-                std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
-                std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
-            } else {
-                double step = (double)factorFrames / (double)numOutFrames;
-                for (size_t i = 0; i < numOutFrames; ++i) {
-                    double p = i * step; int idx = (int)p; double f = p - idx;
-                    int i1 = std::min((int)factorFrames - 1, idx);
-                    int i2 = std::min((int)factorFrames - 1, idx + 1);
-                    tempOutL_[i] = static_cast<float>(stageBuf1_L_[i1] * (1.0 - f) + stageBuf1_L_[i2] * f);
-                    tempOutR_[i] = static_cast<float>(stageBuf1_R_[i1] * (1.0 - f) + stageBuf1_R_[i2] * f);
-                }
-            }
         }
     } else {
-        if (is441Base) {
-            double step = (double)numInFrames / (double)numOutFrames;
-            for (size_t i = 0; i < numOutFrames; ++i) {
-                double p = i * step; int idx = (int)p; double f = p - idx;
-                int i1 = std::min((int)numInFrames - 1, idx);
-                int i2 = std::min((int)numInFrames - 1, idx + 1);
-                tempOutL_[i] = static_cast<float>(tempInL_[i1] * (1.0 - f) + tempInL_[i2] * f);
-                tempOutR_[i] = static_cast<float>(tempInR_[i1] * (1.0 - f) + tempInR_[i2] * f);
-            }
-        } else {
-            std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
-            std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
-        }
+        std::memcpy(tempOutL_.data(), tempInL_.data(), numInFrames * sizeof(float));
+        std::memcpy(tempOutR_.data(), tempInR_.data(), numInFrames * sizeof(float));
     }
 
-    // ★ ⑧ 修正: 過渡応答復元と M/S 空間処理は 1x (48kHz) でもフル稼働させる！
     if (transientMode_ != TransientMode::OFF) {
         transientRestorer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
@@ -625,18 +561,12 @@ size_t DspUpsampler::process(
         processMsSpatial(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     }
 
-    // ハイレゾ空間 (2x 以上) のみ動作するモジュール
     if (currentFactor >= 2) {
-        if (perfMode_ == PerformanceMode::ULTRA_HQ) {
-            antiPreecho_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-            bitContinuity_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
-        }
         if (freqMode_ != FreqMode::OFF) {
             freqEngine_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
         }
     }
 
-    // ★ ① 修正: DC Phase による低域ブーストを先にかけ、EQ の先読みリミッターで安全に包括制御
     dcPhaseLinearizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
     equalizer_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
 

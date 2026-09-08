@@ -15,7 +15,7 @@ double FirStage2x::besselI0(double x) {
 
 void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     int fftSize = 512;
-    while (fftSize < totalTaps * 2) fftSize *= 2;
+    while (fftSize < totalTaps * 4) fftSize *= 2;
 
     std::vector<double> logMag(fftSize, 0.0);
     const double eps = 1e-12;
@@ -48,7 +48,6 @@ void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     causalCepstrum[half] = cepstrum[half];
 
     std::vector<double> minReal(fftSize, 0.0), minImag(fftSize, 0.0);
-    // ★ 因果的ケプストラムの全領域 [0, half] を余さず積算 (高次成分の切り捨てを解消)
     for (int k = 0; k < fftSize; ++k) {
         double real = 0.0, imag = 0.0;
         for (int n = 0; n <= half; ++n) {
@@ -83,7 +82,6 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
     double i0Beta = besselI0(beta);
     double center = static_cast<double>(numTaps_ - 1) * 0.5;
     std::vector<double> design(numTaps_, 0.0);
-    double sum = 0.0;
 
     for (size_t i = 0; i < numTaps_; ++i) {
         double offset = static_cast<double>(i) - center;
@@ -92,16 +90,22 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
         double arg = std::max(0.0, 1.0 - rel * rel);
         double window = besselI0(beta * std::sqrt(arg)) / i0Beta;
         design[i] = 2.0 * normalizedCutoff * sincVal * window;
-        sum += design[i];
     }
+
+    double origSum = 0.0;
+    for (double d : design) origSum += d;
 
     if (filterType == FirFilterType::MINIMUM_PHASE_SHARP || filterType == FirFilterType::MINIMUM_PHASE_SLOW) {
         convertToMinimumPhase(design, static_cast<int>(numTaps_));
-        sum = 0.0;
-        for (double d : design) sum += d;
     }
 
-    double scale = 2.0 / (std::abs(sum) > 1e-12 ? sum : 1.0);
+    double sum = 0.0;
+    for (double d : design) sum += d;
+
+    // ★ 爆音クリップ防止: DC総和が小さすぎる場合は変換前のゲインを採用し、scale に安全リミッター (0.5〜4.0) を適用
+    double effectiveSum = (std::abs(sum) > 0.1) ? sum : (std::abs(origSum) > 0.1 ? origSum : 1.0);
+    double scale = 2.0 / effectiveSum;
+    scale = std::clamp(scale, 0.5, 4.0);
 
     poly0_.clear();
     poly1_.clear();
