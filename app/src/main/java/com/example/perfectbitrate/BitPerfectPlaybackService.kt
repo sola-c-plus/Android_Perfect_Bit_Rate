@@ -284,12 +284,8 @@ class BitPerfectPlaybackService : Service() {
                 if (isVolumeLocked) {
                     lockSystemVolumeToMax()
                 } else {
-                    val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                    val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    if (currentVol == 0 || currentVol < (maxVol * 0.5f).toInt()) {
-                        val defaultVol = (maxVol * 0.90f).toInt().coerceAtLeast(1)
-                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, defaultVol, 0)
-                    }
+                    // ★ DAC接続時は安全のため音量0から開始
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
                     audioTrack?.setVolume(1.0f)
                 }
             } else if (device == null) {
