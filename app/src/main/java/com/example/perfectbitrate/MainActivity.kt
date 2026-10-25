@@ -226,12 +226,6 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(dbL, dbR)
             }
 
-            playbackService?.onDeviceDisconnectedListener = {
-                runOnUiThread {
-                    handleEmergencyUsbDacCutoff()
-                }
-            }
-
             playbackService?.onCommandListener = { cmd -> geckoController.sendCommand(cmd) }
             playbackService?.onSeekListener = { pos -> geckoController.sendSeek(pos) }
         }

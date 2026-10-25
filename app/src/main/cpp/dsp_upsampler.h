@@ -3,7 +3,6 @@
 #include "dsp_types.h"
 #include "dsp_equalizer.h"
 #include "dsp_fir_stage.h"
-#include "dsp_preecho.h"
 #include "dsp_transient.h"
 #include "dsp_freq_engine.h"
 #include "dsp_dc_phase.h"
@@ -115,8 +114,6 @@ private:
     DspDcPhaseLinearizer dcPhaseLinearizer_;
     DspTransientRestorer transientRestorer_;
     DspFreqEngine freqEngine_;
-    DspAntiPreecho antiPreecho_;
-    DspBitContinuity bitContinuity_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;

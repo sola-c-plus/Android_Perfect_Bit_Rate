@@ -97,7 +97,6 @@ class BitPerfectPlaybackService : Service() {
 
     // ★ (peakDbL, peakDbR, bitMask, queueSize, latencyMs)
     var onPeakListener: ((Float, Float, Int, Int, Int) -> Unit)? = null
-    var onDeviceDisconnectedListener: (() -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
 
     private var totalWrittenFrames = 0L
@@ -255,17 +254,6 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
-    fun setSafeSpeakerVolume() {
-        try {
-            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val safeVol = (maxVol * 0.25f).toInt().coerceAtLeast(1)
-            val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (currentVol > safeVol) {
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, safeVol, 0)
-            }
-        } catch (e: Exception) {}
-    }
-
     fun forceResetSpeakerVolume() {
         muteVolumeToZero()
         trackExecutor.execute {
@@ -380,7 +368,6 @@ class BitPerfectPlaybackService : Service() {
     fun setDirectSourceMode(isDirect: Boolean) {
         if (isDirectSource == isDirect) return
         isDirectSource = isDirect
-        NativeAudioEngine.nativeSetDirectSource(isDirect)
         if (isCurrentlyPlaying) {
             switchStreamConfiguration()
         }

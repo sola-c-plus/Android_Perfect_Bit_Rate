@@ -81,13 +81,6 @@ void DspEqualizer::setSampleRate(double sampleRate) {
     reset();
 }
 
-void DspEqualizer::setBandGain(int band, float gainDb) {
-    if (band < 0 || band >= NUM_BANDS) return;
-    gainsDb_[band] = std::clamp(gainDb, -10.0f, 10.0f);
-    filters_[band].update(FREQUENCIES[band], gainsDb_[band], getBandQ(band), sampleRate_);
-    updateAdaptiveHeadroom();
-}
-
 void DspEqualizer::setAllGains(const float* gains) {
     if (!gains) return;
     for (int i = 0; i < NUM_BANDS; ++i) {

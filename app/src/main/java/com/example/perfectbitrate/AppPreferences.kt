@@ -131,14 +131,6 @@ class AppPreferences private constructor(context: Context) {
         get() = prefs.getString(KEY_SELECTED_EQ_ID, "builtin:Flat") ?: "builtin:Flat"
         set(value) = prefs.edit { putString(KEY_SELECTED_EQ_ID, value) }
 
-    fun getEqGain(bandIndex: Int): Float {
-        return prefs.getFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$bandIndex", 0.0f)
-    }
-
-    fun setEqGain(bandIndex: Int, gain: Float) {
-        prefs.edit { putFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$bandIndex", gain) }
-    }
-
     fun getAllEqGains(): FloatArray {
         return FloatArray(10) { i -> prefs.getFloat("$KEY_CURRENT_EQ_GAIN_PREFIX$i", 0.0f) }
     }

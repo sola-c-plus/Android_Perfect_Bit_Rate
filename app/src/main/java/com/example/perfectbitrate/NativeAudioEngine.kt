@@ -1,7 +1,5 @@
 ﻿package com.example.perfectbitrate
 
-import java.nio.ByteBuffer
-
 object NativeAudioEngine {
     init {
         try {
@@ -26,8 +24,6 @@ object NativeAudioEngine {
     external fun nativeSetFreqCustomParams(gain: Float, extractFreq: Float)
     external fun nativeSetRichHarmonics(enabled: Boolean)
 
-    external fun nativeSetDseeMode(mode: Int)
-    external fun nativeSetDseeCustomParams(lpcAlgo: Int, gain: Float, extractFreq: Float, useQmf: Boolean)
     external fun nativeSetTransientMode(mode: Int)
     external fun nativeSetTransientCustomParams(useGroupDelay: Boolean, useLattice: Boolean)
 
@@ -46,12 +42,4 @@ object NativeAudioEngine {
         outBitMode: String,
         factor: Int
     ): ByteArray?
-
-    external fun nativeOpen(sampleRate: Int, channelCount: Int, encoding: Int, deviceId: Int): Int
-    external fun nativeStart(): Boolean
-    external fun nativeStop(): Boolean
-    external fun nativeFlush()
-    external fun nativeClose()
-    external fun nativeWriteByteArray(byteArray: ByteArray, offset: Int, length: Int): Int
-    external fun nativeWriteDirect(byteBuffer: ByteBuffer, offset: Int, length: Int): Int
 }
