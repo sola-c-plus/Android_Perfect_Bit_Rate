@@ -113,6 +113,7 @@ void DspUpsampler::convertToMinimumPhase(std::vector<double>& h, int totalTaps) 
 void DspUpsampler::generateFilterCoefficients(int factor) {
     if (factor <= 1) {
         polyCoeffs_.clear();
+        polyCoeffsD_.clear();
         return;
     }
 
@@ -128,6 +129,14 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
     if (filterType_ == FirFilterType::LINEAR_PHASE_SLOW || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW) {
         cutoff = 0.80 / (2.0 * factor);
         beta = 6.0;
+    }
+
+    // ULTRA_HQ: Kaiser β を深化させる (SHARP 10.5→16 で阻止域 -160dB 級、SLOW 6→9)。カットオフは不変。
+    // カスケード段 (FirStage2x) の β は元々 16/10 のため、ここはポリフェーズ経路専用の深化。
+    const bool isSlowType = (filterType_ == FirFilterType::LINEAR_PHASE_SLOW || filterType_ == FirFilterType::MINIMUM_PHASE_SLOW);
+    const bool ultraHq = (perfMode_ == PerformanceMode::ULTRA_HQ);
+    if (ultraHq) {
+        beta = isSlowType ? 9.0 : 16.0;
     }
 
     double i0Beta = besselI0(beta);
@@ -165,6 +174,20 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
             int protoIdx = k * factor + p;
             polyCoeffs_[p][k] = (protoIdx < totalTaps) ? static_cast<float>(protoFilter[protoIdx] * scale) : 0.0f;
         }
+    }
+
+    // ULTRA_HQ: 倍精度係数も保持し、process の倍精度蓄積経路で使う。それ以外では破棄する。
+    if (ultraHq) {
+        polyCoeffsD_.resize(factor);
+        for (int p = 0; p < factor; ++p) {
+            polyCoeffsD_[p].resize(tapsPerPhase_);
+            for (int k = 0; k < tapsPerPhase_; ++k) {
+                int protoIdx = k * factor + p;
+                polyCoeffsD_[p][k] = (protoIdx < totalTaps) ? protoFilter[protoIdx] * scale : 0.0;
+            }
+        }
+    } else {
+        polyCoeffsD_.clear();
     }
 
     historyLen_ = tapsPerPhase_ * 4;
@@ -256,9 +279,10 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
     generateFilterCoefficients(factor_);
 
     const size_t* cascadeTaps = kCascadeTaps[static_cast<int>(perfMode_)];
-    cascadeStages_[0].configure(cascadeTaps[0], inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_);
-    cascadeStages_[1].configure(cascadeTaps[1], inSampleRate_, inSampleRate_ * 4.0, filterType_);
-    cascadeStages_[2].configure(cascadeTaps[2], inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_);
+    const bool highPrecision = (perfMode_ == PerformanceMode::ULTRA_HQ);
+    cascadeStages_[0].configure(cascadeTaps[0], inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_, highPrecision);
+    cascadeStages_[1].configure(cascadeTaps[1], inSampleRate_, inSampleRate_ * 4.0, filterType_, highPrecision);
+    cascadeStages_[2].configure(cascadeTaps[2], inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_, highPrecision);
 
     float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
     equalizer_.setSampleRate(static_cast<double>(currentFs));
@@ -571,6 +595,35 @@ size_t DspUpsampler::process(
                 cascadeStages_[2].processStereo(stageBuf2_L_.data(), stageBuf2_R_.data(), numInFrames * 4, stageBuf1_L_, stageBuf1_R_);
                 std::memcpy(tempOutL_.data(), stageBuf1_L_.data(), numOutFrames * sizeof(float));
                 std::memcpy(tempOutR_.data(), stageBuf1_R_.data(), numOutFrames * sizeof(float));
+            }
+        } else if (!polyCoeffsD_.empty()) {
+            // ULTRA_HQ 倍精度経路: double 係数 + double 蓄積。履歴は入力由来の float のまま。
+            const int tpp = tapsPerPhase_;
+            const int hLen = historyLen_;
+
+            for (size_t n = 0; n < numInFrames; ++n) {
+                historyL_[historyWritePos_] = tempInL_[n];
+                historyR_[historyWritePos_] = tempInR_[n];
+
+                for (int p = 0; p < currentFactor; ++p) {
+                    const double* coeff = polyCoeffsD_[p].data();
+                    double sumL = 0.0;
+                    double sumR = 0.0;
+
+                    for (int k = 0; k < tpp; ++k) {
+                        int hIdx = historyWritePos_ - k;
+                        if (hIdx < 0) hIdx += hLen;
+                        sumL += coeff[k] * static_cast<double>(historyL_[hIdx]);
+                        sumR += coeff[k] * static_cast<double>(historyR_[hIdx]);
+                    }
+
+                    size_t outIdx = n * currentFactor + p;
+                    tempOutL_[outIdx] = static_cast<float>(sumL);
+                    tempOutR_[outIdx] = static_cast<float>(sumR);
+                }
+
+                historyWritePos_++;
+                if (historyWritePos_ >= hLen) historyWritePos_ = 0;
             }
         } else {
             const int tpp = tapsPerPhase_;

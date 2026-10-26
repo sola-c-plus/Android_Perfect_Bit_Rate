@@ -113,6 +113,8 @@ private:
     DspFreqEngine freqEngine_;
 
     std::vector<std::vector<float, AlignedAllocator<float, 16>>> polyCoeffs_;
+    // ULTRA_HQ 用の倍精度ポリフェーズ係数。ULTRA_HQ 以外では空 (未使用)。
+    std::vector<std::vector<double>> polyCoeffsD_;
     std::vector<float, AlignedAllocator<float, 16>> historyL_;
     std::vector<float, AlignedAllocator<float, 16>> historyR_;
 
