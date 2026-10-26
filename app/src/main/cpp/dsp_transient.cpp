@@ -11,14 +11,15 @@ void DspTransientRestorer::configure(TransientMode mode, double sampleRate, bool
     useGroupDelay_ = useGroupDelay;
     useLattice_ = useLattice;
 
-    // 群遅延補正オールパスの係数 (標準の強さ): 1次オールパス
+    // 群遅延補正オールパスの係数 (標準の強さ・ユーザー調整済み): 1次オールパス
     // H(z) = (a + z^-1) / (1 + a*z^-1) の群遅延は
     // τ(ω) = (1 - a^2) / (1 + a^2 + 2a*cos ω) で、DC では τ(0) = (1-a)/(1+a)。
-    // 1段あたり τ(0) = 2.0 サンプルを目標に a = (1-τ0)/(1+τ0) = -1/3 とする。
-    // 分散は τ(0) - τ(π) = 1.5 サンプル/段 (2段で約3サンプル)。
+    // 1段あたり τ(0) = 3.0 サンプルを目標に a = (1-τ0)/(1+τ0) = -0.5 とする。
+    // τ(π/2) = 0.6、τ(π) = 1/3 ≈ 0.333 で、分散は τ(0) - τ(π) ≈ 2.67 サンプル/段
+    // (2段で約5.33サンプル、DC の合計は6.0サンプル)。
     // 振幅特性は平坦で位相のみが変わる。固定係数では群遅延 (サンプル数) は
     // サンプルレートに依存しないため、レートによらず同じ係数を使う。
-    static constexpr double kGroupDelayTau0 = 2.0;
+    static constexpr double kGroupDelayTau0 = 3.0;
     gdA_ = (1.0 - kGroupDelayTau0) / (1.0 + kGroupDelayTau0);
 
     reset();
