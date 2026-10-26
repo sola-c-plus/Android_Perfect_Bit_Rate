@@ -430,25 +430,27 @@ size_t DspUpsampler::process(
 
     // 入力フォーマットは inBitMode で分岐する。送信側は現状 "float32" 固定であり、
     // float32 パスは従来とビット同一。未知の文字列は互換のため float32 として扱う。
-    size_t bytesPerSample = sizeof(float);
-    if (inBitMode && strcmp(inBitMode, "int32") == 0) {
-        bytesPerSample = sizeof(int32_t);
-    } else if (inBitMode && strcmp(inBitMode, "int16") == 0) {
-        bytesPerSample = sizeof(int16_t);
-    }
+    // 注意: float32 と int32 はどちらも 4 バイトのため、デコード分岐の判定に
+    // バイト数を使ってはならない（float32 が int32 分岐に入ってしまう）。
+    // 必ずフォーマットフラグで判定すること。
+    const bool isInt32 = (inBitMode && strcmp(inBitMode, "int32") == 0);
+    const bool isInt16 = (inBitMode && strcmp(inBitMode, "int16") == 0);
+    const size_t bytesPerSample = isInt32 ? sizeof(int32_t)
+                                : isInt16 ? sizeof(int16_t)
+                                          : sizeof(float);
 
     size_t numInFrames = inBytes / (bytesPerSample * 2);
     if (numInFrames == 0) return 0;
 
     tempInL_.resize(numInFrames);
     tempInR_.resize(numInFrames);
-    if (bytesPerSample == sizeof(int32_t)) {
+    if (isInt32) {
         const auto* srcInt = reinterpret_cast<const int32_t*>(inPcm);
         for (size_t i = 0; i < numInFrames; ++i) {
             tempInL_[i] = static_cast<float>(srcInt[i * 2] / 2147483648.0);
             tempInR_[i] = static_cast<float>(srcInt[i * 2 + 1] / 2147483648.0);
         }
-    } else if (bytesPerSample == sizeof(int16_t)) {
+    } else if (isInt16) {
         const auto* srcInt = reinterpret_cast<const int16_t*>(inPcm);
         for (size_t i = 0; i < numInFrames; ++i) {
             tempInL_[i] = static_cast<float>(srcInt[i * 2] / 32768.0);
