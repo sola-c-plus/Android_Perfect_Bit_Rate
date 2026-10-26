@@ -70,7 +70,8 @@ void FirStage2x::convertToMinimumPhase(std::vector<double>& h, int totalTaps) {
     }
 }
 
-void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz, FirFilterType filterType) {
+void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz, FirFilterType filterType, bool highPrecision) {
+    highPrecision_ = highPrecision;
     numTaps_ = (numTaps % 2 == 0) ? numTaps + 1 : numTaps;
     double normalizedCutoff = std::clamp(cutoffHz / outputRateHz, 0.001, 0.249);
     double beta = 16.0;
@@ -119,15 +120,29 @@ void FirStage2x::configure(size_t numTaps, double cutoffHz, double outputRateHz,
 
     poly0_.assign(tapsPerPhase_, 0.0f);
     poly1_.assign(tapsPerPhase_, 0.0f);
+    if (highPrecision_) {
+        poly0D_.assign(tapsPerPhase_, 0.0);
+        poly1D_.assign(tapsPerPhase_, 0.0);
+    } else {
+        poly0D_.clear();
+        poly1D_.clear();
+    }
 
     for (size_t i = 0; i < numTaps_; ++i) {
-        float tapVal = static_cast<float>(design[i] * scale);
+        double tapD = design[i] * scale;
+        float tapVal = static_cast<float>(tapD);
         if (i % 2 == 0) {
             size_t subIdx = i / 2;
-            if (subIdx < tapsPerPhase_) poly0_[tapsPerPhase_ - 1 - subIdx] = tapVal;
+            if (subIdx < tapsPerPhase_) {
+                poly0_[tapsPerPhase_ - 1 - subIdx] = tapVal;
+                if (highPrecision_) poly0D_[tapsPerPhase_ - 1 - subIdx] = tapD;
+            }
         } else {
             size_t subIdx = i / 2;
-            if (subIdx < tapsPerPhase_) poly1_[tapsPerPhase_ - 1 - subIdx] = tapVal;
+            if (subIdx < tapsPerPhase_) {
+                poly1_[tapsPerPhase_ - 1 - subIdx] = tapVal;
+                if (highPrecision_) poly1D_[tapsPerPhase_ - 1 - subIdx] = tapD;
+            }
         }
     }
 
@@ -153,6 +168,8 @@ void FirStage2x::processStereo(
 
     const float* c0 = poly0_.data();
     const float* c1 = poly1_.data();
+    const double* c0d = poly0D_.data();
+    const double* c1d = poly1D_.data();
     const size_t tpp = tapsPerPhase_;
 
     float* dstL = outL.data();
@@ -167,6 +184,24 @@ void FirStage2x::processStereo(
         const float* hPtrL = &mirrorHistL_[writePos_ + 1];
         const float* hPtrR = &mirrorHistR_[writePos_ + 1];
 
+        if (highPrecision_) {
+            // 倍精度経路 (ULTRA_HQ): 係数・蓄積を double で計算し、NEON float 経路は使わない。
+            // 履歴は入力由来の float のまま (精度の利得は係数精度と蓄積精度に宿る)。
+            double s0_L = 0.0, s1_L = 0.0;
+            double s0_R = 0.0, s1_R = 0.0;
+            for (size_t i = 0; i < tpp; ++i) {
+                double xL = static_cast<double>(hPtrL[i]);
+                double xR = static_cast<double>(hPtrR[i]);
+                s0_L += c0d[i] * xL;
+                s1_L += c1d[i] * xL;
+                s0_R += c0d[i] * xR;
+                s1_R += c1d[i] * xR;
+            }
+            dstL[n * 2]     = static_cast<float>(s0_L);
+            dstL[n * 2 + 1] = static_cast<float>(s1_L);
+            dstR[n * 2]     = static_cast<float>(s0_R);
+            dstR[n * 2 + 1] = static_cast<float>(s1_R);
+        } else {
 #if USE_ARM_NEON
         float32x4_t acc0_L = vdupq_n_f32(0.0f);
         float32x4_t acc1_L = vdupq_n_f32(0.0f);
@@ -214,6 +249,7 @@ void FirStage2x::processStereo(
         dstR[n * 2]     = s0_R;
         dstR[n * 2 + 1] = s1_R;
 #endif
+        }
         writePos_++;
         if (writePos_ >= static_cast<int>(tpp)) {
             writePos_ = 0;
