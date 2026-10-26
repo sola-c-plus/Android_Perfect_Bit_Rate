@@ -81,6 +81,8 @@ class MainActivity : AppCompatActivity() {
 
     private var isDirectSource = false
     private var currentThemeMode = "dark"
+    // ★ Phase 4: このフィールドは要求値専用（Prefs.selectedBitMode と同期）。
+    //   実績値は Service の actualBitMode（スナップショット経由）を読むこと。
     private var currentBitMode = "16bit"
     private var isVolLockOn = false
     private var isPlayingState = false
@@ -189,7 +191,7 @@ class MainActivity : AppCompatActivity() {
             detectAudioOutputDevice()
 
             playbackService?.isVolumeLocked = isVolLockOn
-            playbackService?.currentBitMode = currentBitMode
+            playbackService?.requestedBitMode = currentBitMode
             playbackService?.setOutputDevice(activeOutputDevice)
 
             playbackService?.upsampleFactor = upsampleFactor
@@ -206,14 +208,11 @@ class MainActivity : AppCompatActivity() {
             val eqGains = appPrefs.getAllEqGains()
             NativeAudioEngine.nativeSetEqualizer(appPrefs.isEqEnabled, eqGains)
 
-            playbackService?.onActualBitModeChanged = { actualMode ->
-                runOnUiThread {
-                    if (actualMode != currentBitMode) {
-                        currentBitMode = actualMode
-                        appPrefs.selectedBitMode = actualMode
-                        updateStatus()
-                    }
-                }
+            // ★ Phase 4: 実績通知は表示専用。要求値（currentBitMode）と Prefs へは
+            //   絶対に書き戻さない（DAC フォールバック時に保存設定が劣化値へ書き換わる
+            //   バグの修正）。表示は updateStatus がスナップショットの実績値を読む。
+            playbackService?.onActualBitModeChanged = {
+                runOnUiThread { updateStatus() }
             }
 
             playbackService?.onPeakListener = { dbL, dbR, mask, queueSize, latencyMs ->
@@ -477,7 +476,7 @@ class MainActivity : AppCompatActivity() {
             },
             onBitModeChanged = { newMode ->
                 currentBitMode = newMode
-                playbackService?.currentBitMode = newMode
+                playbackService?.requestedBitMode = newMode
                 // ★ Phase 1: フィールドへ先に書くことが要求伝達そのもの（initAudioTrack は自フィールドを読む）
                 playbackService?.initAudioTrack()
                 bitActivityMask = 0
@@ -731,7 +730,10 @@ class MainActivity : AppCompatActivity() {
         }
         textDacName.text = outputDeviceName
 
-        val bitLabel = when (currentBitMode) {
+        // ★ Phase 4: ステータス表示は実績値（スナップショット）を読む。
+        //   未バインド時のみ要求値（currentBitMode）で代替する。
+        val displayBitMode = stateSnapshot?.actualBitMode ?: currentBitMode
+        val bitLabel = when (displayBitMode) {
             "32bit" -> "32 bit"
             "24bit" -> "24 bit"
             else -> "16 bit"
@@ -763,7 +765,7 @@ class MainActivity : AppCompatActivity() {
         val peakTextR = if (peakDbR > -50f && isPlayingState) String.format(java.util.Locale.US, "%.1f", peakDbR) else "-inf"
         textPeak.text = "PEAK  L: ${peakTextL} / R: ${peakTextR} dB"
 
-        val maxBits = if (currentBitMode == "32bit") 32 else (if (currentBitMode == "24bit") 24 else 16)
+        val maxBits = if (displayBitMode == "32bit") 32 else (if (displayBitMode == "24bit") 24 else 16)
         val activeBits = if (!isPlayingState || (peakDbL <= -50f && peakDbR <= -50f)) 0 else Integer.bitCount(bitActivityMask).coerceIn(0, maxBits)
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
         textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
