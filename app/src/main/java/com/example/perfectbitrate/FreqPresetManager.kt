@@ -64,6 +64,31 @@ object FreqPresetManager {
 
     var onPresetChangedListener: ((Int, FreqPresetDef) -> Unit)? = null
 
+    // ★ 項目10: 適用後に native から読み戻した実状態（MsSpatial / DynamicSbr）を通知する
+    var onNativeStateReadbackListener: ((Boolean, Boolean) -> Unit)? = null
+
+    // ★ 項目9: 保存済みプリセットを復元する（JSON が無い/壊れている場合は DEFAULT のまま）
+    fun restorePresets() {
+        val saved = try {
+            AppPreferences.get().getSavedFreqPresets()
+        } catch (e: Exception) {
+            null
+        } ?: return
+        for (i in PRESETS.indices) {
+            PRESETS[i] = saved[i]
+        }
+        currentPresetIndex = currentPresetIndex.coerceIn(0, PRESETS.size - 1)
+    }
+
+    // ★ 項目9: 書き込み点はここ1箇所に集約（編集確定時とリセット時のみ呼ぶ）
+    fun persistPresets() {
+        try {
+            AppPreferences.get().saveFreqPresets(PRESETS)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private var isSyncing = false
     private var isUpdatingUI = false // ★ UI更新中のリスナー誤爆完全遮断フラグ
 
@@ -96,9 +121,53 @@ object FreqPresetManager {
             NativeAudioEngine.nativeSetTransientCustomParams(p.useGroupDelay, p.useLattice)
             NativeAudioEngine.nativeSetFreqMode(p.id)
             NativeAudioEngine.nativeSetFreqCustomParams(p.gain, p.extractFreq)
-            NativeAudioEngine.nativeSetLrIndependentDither(p.useLrDither)
             NativeAudioEngine.nativeSetMsSpatial(p.useMsSpatial)
             NativeAudioEngine.nativeSetDynamicSbr(p.useDynamicSbr)
+        }
+        // ★ 項目8: LRディザの真実はプリセット側に一本化。両分岐とも必ず送信し
+        //   (OFFプリセットの定義値は false なので OFF 時は決定的に false)、
+        //   AppPreferences は「プリセット現在値のキャッシュ」として書き戻す。
+        NativeAudioEngine.nativeSetLrIndependentDither(p.useLrDither)
+        try {
+            AppPreferences.get().isLrIndependentDither = p.useLrDither
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        notifyNativeStateReadback()
+    }
+
+    // ★ 項目10: 適用したはずの状態を native から読み戻し、表示側の正とする
+    fun notifyNativeStateReadback() {
+        val actualMsSpatial = NativeAudioEngine.nativeGetMsSpatial()
+        val actualDynamicSbr = NativeAudioEngine.nativeGetDynamicSbr()
+        onNativeStateReadbackListener?.invoke(actualMsSpatial, actualDynamicSbr)
+        backDialogViewRef?.get()?.let { view ->
+            syncDevDialogSwitchesToNativeState(view, actualMsSpatial, actualDynamicSbr)
+        }
+    }
+
+    private fun syncDevDialogSwitchesToNativeState(dialogView: View, actualMsSpatial: Boolean, actualDynamicSbr: Boolean) {
+        val updateAction = Runnable {
+            isUpdatingUI = true // プログラムからの値反映中はリスナー発火を遮断（既存ガードと同方式）
+            try {
+                (dialogView.findViewById<View>(R.id.devSwitchMsSpatial) as? SwitchCompat)?.isChecked = actualMsSpatial
+                val sbrSwitch = dialogView.findViewById<View>(R.id.devSwitchDynamicSbr) as? SwitchCompat
+                val isRichOn = try {
+                    AppPreferences.get().isRichHarmonicsEnabled
+                } catch (e: Exception) {
+                    false
+                }
+                sbrSwitch?.isChecked = if (isRichOn) actualDynamicSbr else false
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isUpdatingUI = false
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            updateAction.run()
+        } else {
+            Handler(Looper.getMainLooper()).post(updateAction)
         }
     }
 
@@ -298,6 +367,8 @@ object FreqPresetManager {
                 (dialogView.findViewById<View>(R.id.devSwitchMsSpatial) as? SwitchCompat)?.let { p.useMsSpatial = it.isChecked }
                 (dialogView.findViewById<View>(R.id.devSwitchDynamicSbr) as? SwitchCompat)?.let { p.useDynamicSbr = it.isChecked }
 
+                // ★ 項目9: 編集確定のタイミングで全プリセットを永続化（書き込み点は persistPresets に集約）
+                persistPresets()
                 applyPresetToNative(p)
             }
 
@@ -337,6 +408,8 @@ object FreqPresetManager {
                 for (i in DEFAULT_PRESETS.indices) {
                     PRESETS[i] = DEFAULT_PRESETS[i].copy()
                 }
+                // ★ 項目9: リセット結果も永続化し、次回起動時にリセット状態が復元される
+                persistPresets()
                 updateDevDialogUI(dialogView, getCurrentPreset())
                 applyCurrentPresetToNative()
                 Toast.makeText(ctx, "初期値にリセットしました", Toast.LENGTH_SHORT).show()

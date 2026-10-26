@@ -18,6 +18,18 @@ static bool g_isCascadeFir = true;
 static bool g_isRichHarmonics = false;
 static float g_currentSampleRate = 48000.0f;
 
+// 再生成時に値を失わないためのキャッシュ（初期値は DspUpsampler のデフォルトと一致させる）
+static int g_currentPerfMode = 1;
+static bool g_isLrIndependentDither = true;
+static float g_currentFreqGain = 0.22f;
+static float g_currentFreqExtractFreq = 13000.0f;
+static bool g_useGroupDelay = true;
+static bool g_useLattice = false;
+static bool g_isMsSpatial = false;
+static bool g_isDynamicSbr = false;
+static bool g_isEqEnabled = false;
+static float g_currentEqGains[10] = {0.0f};
+
 extern "C" {
 
 JNIEXPORT void JNICALL
@@ -33,6 +45,14 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
         g_upsampler->setFreqMode(static_cast<FreqMode>(g_currentFreqMode));
         g_upsampler->setTransientMode(static_cast<TransientMode>(g_currentTransientMode));
         g_upsampler->setRichHarmonics(g_isRichHarmonics);
+        g_upsampler->setPerformanceMode(static_cast<PerformanceMode>(g_currentPerfMode));
+        g_upsampler->setLrIndependentDither(g_isLrIndependentDither);
+        g_upsampler->setFreqCustomParams(g_currentFreqGain, g_currentFreqExtractFreq);
+        g_upsampler->setTransientCustomParams(g_useGroupDelay, g_useLattice);
+        g_upsampler->setMsSpatial(g_isMsSpatial);
+        g_upsampler->setDynamicSbr(g_isDynamicSbr);
+        g_upsampler->getEqualizer().setEnabled(g_isEqEnabled);
+        g_upsampler->getEqualizer().setAllGains(g_currentEqGains);
     }
 }
 
@@ -83,8 +103,9 @@ JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetLrIndependentDither(
         JNIEnv *env, jobject thiz, jboolean enabled) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_isLrIndependentDither = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->setLrIndependentDither(enabled == JNI_TRUE);
+    g_upsampler->setLrIndependentDither(g_isLrIndependentDither);
 }
 
 JNIEXPORT void JNICALL
@@ -109,6 +130,7 @@ JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetPerformanceMode(
         JNIEnv *env, jobject thiz, jint mode) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_currentPerfMode = mode;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setPerformanceMode(static_cast<PerformanceMode>(mode));
 }
@@ -135,6 +157,8 @@ JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(
         JNIEnv *env, jobject thiz, jfloat gain, jfloat extractFreq) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_currentFreqGain = gain;
+    g_currentFreqExtractFreq = extractFreq;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setFreqCustomParams(gain, extractFreq);
 }
@@ -152,38 +176,42 @@ JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientCustomParams(
         JNIEnv *env, jobject thiz, jboolean useGroupDelay, jboolean useLattice) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_useGroupDelay = (useGroupDelay == JNI_TRUE);
+    g_useLattice = (useLattice == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->setTransientCustomParams(useGroupDelay == JNI_TRUE, useLattice == JNI_TRUE);
+    g_upsampler->setTransientCustomParams(g_useGroupDelay, g_useLattice);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetMsSpatial(
         JNIEnv *env, jobject thiz, jboolean enabled) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_isMsSpatial = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->setMsSpatial(enabled == JNI_TRUE);
+    g_upsampler->setMsSpatial(g_isMsSpatial);
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetMsSpatial(
         JNIEnv *env, jobject thiz) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
-    return (g_upsampler && g_upsampler->isMsSpatial()) ? JNI_TRUE : JNI_FALSE;
+    return (g_upsampler ? g_upsampler->isMsSpatial() : g_isMsSpatial) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDynamicSbr(
         JNIEnv *env, jobject thiz, jboolean enabled) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_isDynamicSbr = (enabled == JNI_TRUE);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->setDynamicSbr(enabled == JNI_TRUE);
+    g_upsampler->setDynamicSbr(g_isDynamicSbr);
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetDynamicSbr(
         JNIEnv *env, jobject thiz) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
-    return (g_upsampler && g_upsampler->isDynamicSbr()) ? JNI_TRUE : JNI_FALSE;
+    return (g_upsampler ? g_upsampler->isDynamicSbr() : g_isDynamicSbr) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
@@ -191,10 +219,15 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetEqualizer(
         JNIEnv *env, jobject thiz, jboolean enabled, jfloatArray gains) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
     if (!g_upsampler) g_upsampler = new DspUpsampler();
-    g_upsampler->getEqualizer().setEnabled(enabled == JNI_TRUE);
+    g_isEqEnabled = (enabled == JNI_TRUE);
+    g_upsampler->getEqualizer().setEnabled(g_isEqEnabled);
     if (gains) {
         jfloat* gainElements = env->GetFloatArrayElements(gains, nullptr);
         if (gainElements) {
+            jsize gainCount = env->GetArrayLength(gains);
+            for (jsize i = 0; i < gainCount && i < 10; ++i) {
+                g_currentEqGains[i] = gainElements[i];
+            }
             g_upsampler->getEqualizer().setAllGains(gainElements);
             env->ReleaseFloatArrayElements(gains, gainElements, JNI_ABORT);
         }
