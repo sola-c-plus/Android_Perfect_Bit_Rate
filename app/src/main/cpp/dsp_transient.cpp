@@ -10,6 +10,18 @@ void DspTransientRestorer::configure(TransientMode mode, double sampleRate, bool
     sampleRate_ = std::max(8000.0, sampleRate);
     useGroupDelay_ = useGroupDelay;
     useLattice_ = useLattice;
+
+    // 群遅延補正オールパスの係数 (標準の強さ・ユーザー調整済み): 1次オールパス
+    // H(z) = (a + z^-1) / (1 + a*z^-1) の群遅延は
+    // τ(ω) = (1 - a^2) / (1 + a^2 + 2a*cos ω) で、DC では τ(0) = (1-a)/(1+a)。
+    // 1段あたり τ(0) = 3.0 サンプルを目標に a = (1-τ0)/(1+τ0) = -0.5 とする。
+    // τ(π/2) = 0.6、τ(π) = 1/3 ≈ 0.333 で、分散は τ(0) - τ(π) ≈ 2.67 サンプル/段
+    // (2段で約5.33サンプル、DC の合計は6.0サンプル)。
+    // 振幅特性は平坦で位相のみが変わる。固定係数では群遅延 (サンプル数) は
+    // サンプルレートに依存しないため、レートによらず同じ係数を使う。
+    static constexpr double kGroupDelayTau0 = 3.0;
+    gdA_ = (1.0 - kGroupDelayTau0) / (1.0 + kGroupDelayTau0);
+
     reset();
 
     if (mode_ == TransientMode::OFF) {
@@ -52,6 +64,10 @@ void DspTransientRestorer::reset() {
     latK1_R_ = 0.0; latK2_R_ = 0.0;
     latB1_L_ = 0.0; latB2_L_ = 0.0;
     latB1_R_ = 0.0; latB2_R_ = 0.0;
+    gdX1L_ = 0.0; gdY1L_ = 0.0;
+    gdX2L_ = 0.0; gdY2L_ = 0.0;
+    gdX1R_ = 0.0; gdY1R_ = 0.0;
+    gdX2R_ = 0.0; gdY2R_ = 0.0;
 }
 
 void DspTransientRestorer::processStereo(float* left, float* right, size_t numFrames) {
@@ -66,17 +82,28 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double diffL = std::max(0.0, envFastL_ - envSlowL_);
         double transientRatioL = std::min(diffL / (envSlowL_ + 1e-4), 1.5);
 
-        double predL = inL;
+        // 群遅延補正: delta 経路の入力だけをオールパスに通し、アタック成分の
+        // 位相を進める。包絡検出と出力の基準は元の inL のまま (振幅特性は不変)。
+        double srcL = inL;
+        if (useGroupDelay_) {
+            double y1 = gdA_ * inL + gdX1L_ - gdA_ * gdY1L_;
+            gdX1L_ = inL; gdY1L_ = y1;
+            double y2 = gdA_ * y1 + gdX2L_ - gdA_ * gdY2L_;
+            gdX2L_ = y1; gdY2L_ = y2;
+            srcL = y2;
+        }
+
+        double predL = srcL;
         if (useLattice_) {
-            double f1 = inL - latK1_L_ * latB1_L_;
-            double b1 = latB1_L_ - latK1_L_ * inL;
-            latB1_L_ = inL;
+            double f1 = srcL - latK1_L_ * latB1_L_;
+            double b1 = latB1_L_ - latK1_L_ * srcL;
+            latB1_L_ = srcL;
             latK1_L_ = std::clamp(latK1_L_ * 0.995 + (f1 * b1) * 0.005, -0.9, 0.9);
-            predL = inL + f1 * 0.25;
+            predL = srcL + f1 * 0.25;
         }
 
         double deltaL = predL - prevSampleL_;
-        prevSampleL_ = inL;
+        prevSampleL_ = srcL;
 
         // ★ 定常音への常時高域ブーストを排除し、過渡アタック時のみ適切にダイナミクス復元
         double outL = inL + (deltaL * (attackGain_ - 1.0) * transientRatioL * 0.5);
@@ -90,17 +117,26 @@ void DspTransientRestorer::processStereo(float* left, float* right, size_t numFr
         double diffR = std::max(0.0, envFastR_ - envSlowR_);
         double transientRatioR = std::min(diffR / (envSlowR_ + 1e-4), 1.5);
 
-        double predR = inR;
+        double srcR = inR;
+        if (useGroupDelay_) {
+            double y1 = gdA_ * inR + gdX1R_ - gdA_ * gdY1R_;
+            gdX1R_ = inR; gdY1R_ = y1;
+            double y2 = gdA_ * y1 + gdX2R_ - gdA_ * gdY2R_;
+            gdX2R_ = y1; gdY2R_ = y2;
+            srcR = y2;
+        }
+
+        double predR = srcR;
         if (useLattice_) {
-            double f1 = inR - latK1_R_ * latB1_R_;
-            double b1 = latB1_R_ - latK1_R_ * inR;
-            latB1_R_ = inR;
+            double f1 = srcR - latK1_R_ * latB1_R_;
+            double b1 = latB1_R_ - latK1_R_ * srcR;
+            latB1_R_ = srcR;
             latK1_R_ = std::clamp(latK1_R_ * 0.995 + (f1 * b1) * 0.005, -0.9, 0.9);
-            predR = inR + f1 * 0.25;
+            predR = srcR + f1 * 0.25;
         }
 
         double deltaR = predR - prevSampleR_;
-        prevSampleR_ = inR;
+        prevSampleR_ = srcR;
 
         double outR = inR + (deltaR * (attackGain_ - 1.0) * transientRatioR * 0.5);
         right[i] = static_cast<float>(std::clamp(outR, -1.0, 1.0));
