@@ -52,7 +52,18 @@ class BitPerfectPlaybackService : Service() {
 
     var baseSampleRate = 48000
     var effectiveSampleRate = 48000
-    
+
+    // ★ レートの要求/実績（Phase 4 のビットモード分離と同型）:
+    //   lastRequestedTargetRate は doInit が最後に受け取った「要求」目標レート。
+    //   effectiveSampleRate は交渉後の「実績」レートを保持するため、pushPcm の
+    //   再生成判定は要求同士（こちら）で比較しないと、クランプ発生時に毎回再初期化される。
+    private var lastRequestedTargetRate = 0
+
+    // ★ 交渉で確定した実績倍率。native エンジンは doInit でこの倍率で初期化されるため、
+    //   nativeProcessUpsample へは要求倍率ではなくこちらを渡す。
+    //   初回 init 前は pushPcm が必ず再生成経路に入り native へ到達しないため初期値 1 でよい。
+    private var negotiatedFactor = 1
+
     // ★ Phase 4: ビットモードの要求値。ユーザー設定であり、Prefs.selectedBitMode と
     //   同期する唯一の永続値。doInit の交渉はこの値を入力として受け取る。
     //   交渉結果をここへ書き戻してはならない（フォールバックで保存設定が劣化するため）。
@@ -475,8 +486,10 @@ class BitPerfectPlaybackService : Service() {
         val factorToApply = effectiveFactor
         val targetEffectiveRate = actualInputRate * factorToApply
 
+        // ★ 再生成判定は要求同士で比較する。effectiveSampleRate は実績値（クランプ後は
+        //   要求と異なる）ため、ここで使うとクランプのたびに再初期化が繰り返される。
         val needsRecreate = (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED ||
-                             actualInputRate != baseSampleRate || targetEffectiveRate != effectiveSampleRate)
+                             actualInputRate != baseSampleRate || targetEffectiveRate != lastRequestedTargetRate)
 
         if (needsRecreate) {
             baseSampleRate = actualInputRate
@@ -484,8 +497,10 @@ class BitPerfectPlaybackService : Service() {
             return
         }
 
+        // ★ native は doInit で実績倍率（negotiatedFactor）で初期化済み。要求倍率を渡すと
+        //   クランプ時に native の想定とずれるため、実績倍率を渡す。
         val processedBytes = NativeAudioEngine.nativeProcessUpsample(
-            pcmBytes, pcmBytes.size, inBitMode, actualBitMode, factorToApply
+            pcmBytes, pcmBytes.size, inBitMode, actualBitMode, negotiatedFactor
         ) ?: pcmBytes
 
         if (!pcmQueue.offer(processedBytes)) {
@@ -802,8 +817,41 @@ class BitPerfectPlaybackService : Service() {
                 val factorToApply = factor
                 val targetRate = baseRate * factorToApply
 
-                effectiveSampleRate = targetRate
-                NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
+                // ★ レートクランプ: 要求値（ユーザー設定）はここでは一切変更しない。
+                //   決めるのは実績値だけである。USB DAC が要求レートに対応していない場合、
+                //   従来は BIT_PERFECT ロックに失敗しても要求レートのまま AudioTrack を作り、
+                //   OS ミキサーが無言でリサンプルしていた（それでもアプリは要求レートを
+                //   「実績」として表示していた）。そこで、デバイス対応レートのうち
+                //   「入力レートの整数倍」という設計を保てる最大のものへ実績をクランプし、
+                //   ビットパーフェクトを優先する。対応レートが取得できない場合は
+                //   クランプせず従来通り（要求 = 実績）とする。
+                var actualTargetRate = targetRate
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                    isUsbDevice(targetDevice) && baseRate > 0
+                ) {
+                    val supportedRates = try {
+                        audioManager.getSupportedMixerAttributes(targetDevice!!)
+                            .map { it.format.sampleRate }
+                            .distinct()
+                            .ifEmpty { targetDevice!!.sampleRates.toList() }
+                    } catch (e: Exception) {
+                        targetDevice!!.sampleRates.toList()
+                    }
+                    val clampedRate = supportedRates
+                        .filter { it <= targetRate && it % baseRate == 0 }
+                        .maxOrNull()
+                    if (clampedRate != null) {
+                        actualTargetRate = clampedRate
+                    }
+                }
+                val actualFactor = if (baseRate > 0) actualTargetRate / baseRate else factorToApply
+
+                // ★ 要求は要求として記録し（pushPcm の再生成判定用）、実績だけを
+                //   effectiveSampleRate / native 初期化へ反映する。
+                lastRequestedTargetRate = targetRate
+                negotiatedFactor = actualFactor
+                effectiveSampleRate = actualTargetRate
+                NativeAudioEngine.nativeConfigureUpsampler(actualFactor, baseSampleRate)
 
                 val mediaAttr = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -841,7 +889,7 @@ class BitPerfectPlaybackService : Service() {
                     // 1. supportedMixers から BIT_PERFECT を探索
                     for (tryEnc in preferredEncList) {
                         val bpMatch = supportedMixers.firstOrNull {
-                            it.format.sampleRate == effectiveSampleRate &&
+                            it.format.sampleRate == actualTargetRate &&
                             it.format.encoding == tryEnc &&
                             it.mixerBehavior == AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT
                         }
@@ -862,7 +910,7 @@ class BitPerfectPlaybackService : Service() {
                     if (!lockSuccess) {
                         for (tryEnc in preferredEncList) {
                             val defMatch = supportedMixers.firstOrNull {
-                                it.format.sampleRate == effectiveSampleRate &&
+                                it.format.sampleRate == actualTargetRate &&
                                 it.format.encoding == tryEnc
                             }
                             if (defMatch != null) {
@@ -884,7 +932,7 @@ class BitPerfectPlaybackService : Service() {
                         for (tryEnc in preferredEncList) {
                             val forcedBp = AudioMixerAttributes.Builder(
                                 AudioFormat.Builder()
-                                    .setSampleRate(effectiveSampleRate)
+                                    .setSampleRate(actualTargetRate)
                                     .setEncoding(tryEnc)
                                     .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                                     .build()
@@ -907,7 +955,7 @@ class BitPerfectPlaybackService : Service() {
                         for (tryEnc in preferredEncList) {
                             val forcedDef = AudioMixerAttributes.Builder(
                                 AudioFormat.Builder()
-                                    .setSampleRate(effectiveSampleRate)
+                                    .setSampleRate(actualTargetRate)
                                     .setEncoding(tryEnc)
                                     .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                                     .build()
@@ -940,8 +988,8 @@ class BitPerfectPlaybackService : Service() {
                     else -> 2
                 }
 
-                val minBuf = AudioTrack.getMinBufferSize(effectiveSampleRate, AudioFormat.CHANNEL_OUT_STEREO, finalEncoding)
-                val desiredBuf = effectiveSampleRate * 2 * bytesPerSample / 4
+                val minBuf = AudioTrack.getMinBufferSize(actualTargetRate, AudioFormat.CHANNEL_OUT_STEREO, finalEncoding)
+                val desiredBuf = actualTargetRate * 2 * bytesPerSample / 4
                 val bufferSize = max(if (minBuf > 0) minBuf * 4 else 16384, desiredBuf)
 
                 var createdTrack: AudioTrack? = null
@@ -952,7 +1000,7 @@ class BitPerfectPlaybackService : Service() {
                             .setAudioFormat(
                                 AudioFormat.Builder()
                                     .setEncoding(finalEncoding)
-                                    .setSampleRate(effectiveSampleRate)
+                                    .setSampleRate(actualTargetRate)
                                     .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                                     .build()
                             )
@@ -989,7 +1037,7 @@ class BitPerfectPlaybackService : Service() {
                 onActualBitModeChanged?.invoke(actualModeStr)
                 notifyPlaybackStateChanged()
 
-                Log.i("BitPerfect", "★ AudioTrack Ready: ${effectiveSampleRate}Hz ($actualModeStr) -> ${targetDevice?.productName ?: "Default"} (Lock: $lockSuccess)")
+                Log.i("BitPerfect", "★ AudioTrack Ready: ${actualTargetRate}Hz ($actualModeStr) -> ${targetDevice?.productName ?: "Default"} (Lock: $lockSuccess)")
             } finally {
                 audioLock.unlock()
             }
