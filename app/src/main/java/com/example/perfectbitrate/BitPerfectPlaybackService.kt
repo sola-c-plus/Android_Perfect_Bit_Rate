@@ -99,6 +99,42 @@ class BitPerfectPlaybackService : Service() {
     var onPeakListener: ((Float, Float, Int, Int, Int) -> Unit)? = null
     var onActualBitModeChanged: ((String) -> Unit)? = null
 
+    // ★ Phase 0: 表示用スナップショット。ライブ再生状態の正は Service であり、
+    //   MainActivity はこれを「表示キャッシュ」として読む（ミラー変数の代わり）。
+    data class PlaybackStateSnapshot(
+        val effectiveSampleRate: Int,
+        val effectiveFactor: Int,
+        val actualBitMode: String,
+        val isDirectSource: Boolean,
+        val isPlaying: Boolean,
+        val title: String,
+        val artist: String,
+        val positionMs: Long,
+        val durationMs: Long,
+        val artwork: Bitmap?
+    )
+
+    var onPlaybackStateChanged: ((PlaybackStateSnapshot) -> Unit)? = null
+
+    fun getPlaybackStateSnapshot(): PlaybackStateSnapshot {
+        return PlaybackStateSnapshot(
+            effectiveSampleRate = effectiveSampleRate,
+            effectiveFactor = effectiveFactor,
+            actualBitMode = currentBitMode,
+            isDirectSource = isDirectSource,
+            isPlaying = isCurrentlyPlaying,
+            title = currentTitle,
+            artist = currentArtist,
+            positionMs = currentPosition,
+            durationMs = currentDuration,
+            artwork = currentArtworkBitmap
+        )
+    }
+
+    private fun notifyPlaybackStateChanged() {
+        onPlaybackStateChanged?.invoke(getPlaybackStateSnapshot())
+    }
+
     private var totalWrittenFrames = 0L
 
     var isVolumeLocked = false
@@ -404,10 +440,11 @@ class BitPerfectPlaybackService : Service() {
 
         effectiveSampleRate = targetRate
         NativeAudioEngine.nativeConfigureUpsampler(factorToApply, baseSampleRate)
+        notifyPlaybackStateChanged()
 
         trackExecutor.execute {
             try {
-                initAudioTrack(currentBitMode, baseSampleRate, factorToApply, activeOutputDevice)
+                initAudioTrack()
             } finally {
                 pcmQueue.clear()
                 isSwitchingRate.set(false)
@@ -542,6 +579,7 @@ class BitPerfectPlaybackService : Service() {
         mediaSession.setMetadata(metaBuilder.build())
         updatePlaybackState(isPlaying, currentMs)
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isPlaying, currentMs, durationMs)
+        notifyPlaybackStateChanged()
     }
 
     fun forceCloseDacStream() {
@@ -596,6 +634,7 @@ class BitPerfectPlaybackService : Service() {
 
         updateNotification()
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isPlaying, position, currentDuration)
+        notifyPlaybackStateChanged()
     }
 
     fun updateCodec(codec: String) {
@@ -621,6 +660,7 @@ class BitPerfectPlaybackService : Service() {
         mediaSession.setMetadata(metaBuilder.build())
         updateNotification()
         PlayerWidgetProvider.updateAllWidgets(this, title, artist, currentArtworkBitmap, isCurrentlyPlaying, currentPosition, currentDuration)
+        notifyPlaybackStateChanged()
 
         if (artworkUrl.isNotEmpty()) {
             imageExecutor.execute {
@@ -698,12 +738,12 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
-    fun initAudioTrack(
-        bitMode: String = currentBitMode,
-        baseRate: Int = baseSampleRate,
-        factor: Int = effectiveFactor,
-        targetDevice: AudioDeviceInfo? = activeOutputDevice
-    ) {
+    // ★ Phase 1: 引数は全て無視されていたため廃止し、構成は自フィールド
+    //   (currentBitMode / baseSampleRate / effectiveFactor / activeOutputDevice) が正。
+    //   呼び出し側は「呼ぶ前にフィールドへ書く」ことが要求伝達そのものである。
+    // ★ hasPendingInit の合体仕様: 初期化の実行中に追加要求が来た場合は保留フラグだけを立て、
+    //   実行中ループが「その時点の最新フィールド値」で再実行する（要求キューではなく最後の状態が勝つ）。
+    fun initAudioTrack() {
         if (isInitializingTrack.getAndSet(true)) {
             hasPendingInit.set(true)
             return
@@ -936,6 +976,7 @@ class BitPerfectPlaybackService : Service() {
                 }
                 currentBitMode = actualModeStr
                 onActualBitModeChanged?.invoke(actualModeStr)
+                notifyPlaybackStateChanged()
 
                 Log.i("BitPerfect", "★ AudioTrack Ready: ${effectiveSampleRate}Hz ($actualModeStr) -> ${targetDevice?.productName ?: "Default"} (Lock: $lockSuccess)")
             } finally {

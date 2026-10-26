@@ -30,7 +30,6 @@ class DspSettingsDialog(
     private val isDarkTheme: Boolean,
     private val topPanelHeight: Int,
     private val activeOutputDevice: AudioDeviceInfo?,
-    private val baseSampleRate: Int,
     private val isVolumeLocked: Boolean,
     private val onVolumeLockChanged: (Boolean) -> Unit,
     private val onBitModeChanged: (String) -> Unit,

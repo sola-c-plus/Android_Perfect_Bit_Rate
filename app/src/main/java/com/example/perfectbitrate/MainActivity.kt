@@ -265,10 +265,13 @@ class MainActivity : AppCompatActivity() {
 
         isDirectSource = appPrefs.isDirectSource
         currentThemeMode = appPrefs.uiThemeMode
-        isVolLockOn = false
+        // ★ 項目7: Vol Lock は永続化された前回状態を復元する（従来は起動時に無条件で false だった）
+        isVolLockOn = appPrefs.isVolLockEnabled
         currentBitMode = appPrefs.selectedBitMode
         upsampleFactor = appPrefs.selectedUpsampleFactor
 
+        // ★ 項目9: プリセット本体を復元してから選択 index を反映する
+        FreqPresetManager.restorePresets()
         FreqPresetManager.setInitialPresetIndex(appPrefs.selectedPresetIndex)
         FreqPresetManager.onPresetChangedListener = { pos, _ ->
             appPrefs.selectedPresetIndex = pos
@@ -464,7 +467,6 @@ class MainActivity : AppCompatActivity() {
             isDarkTheme = isDarkThemeActive(),
             topPanelHeight = topInfoPanel?.height ?: 0,
             activeOutputDevice = activeOutputDevice,
-            baseSampleRate = baseSampleRate,
             isVolumeLocked = isVolLockOn,
             onVolumeLockChanged = { isLocked ->
                 isVolLockOn = isLocked
@@ -476,7 +478,8 @@ class MainActivity : AppCompatActivity() {
             onBitModeChanged = { newMode ->
                 currentBitMode = newMode
                 playbackService?.currentBitMode = newMode
-                playbackService?.initAudioTrack(newMode, baseSampleRate, if (isDirectSource) 1 else upsampleFactor, activeOutputDevice)
+                // ★ Phase 1: フィールドへ先に書くことが要求伝達そのもの（initAudioTrack は自フィールドを読む）
+                playbackService?.initAudioTrack()
                 bitActivityMask = 0
                 peakDbL = -60f
                 peakDbR = -60f
@@ -572,9 +575,9 @@ class MainActivity : AppCompatActivity() {
             currentLatencyMs = 0
             walkmanLevelMeter?.reset()
             playbackService?.resetBuffer()
-            val effectiveFactor = if (isDirectSource) 1 else upsampleFactor
             playbackService?.setUpsampling(upsampleFactor)
-            playbackService?.initAudioTrack(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+            // ★ Phase 1: 引数で渡していた構成は全て Service の自フィールドが正（initAudioTrack は引数なし）
+            playbackService?.initAudioTrack()
             geckoController.reload()
             updateStatus()
         }
@@ -702,7 +705,9 @@ class MainActivity : AppCompatActivity() {
         val dev = activeOutputDevice
         val isUsb = isUsbDevice(dev)
         
-        val activeFactor = playbackService?.effectiveFactor ?: (if (isDirectSource) 1 else upsampleFactor)
+        // ★ Phase 0: バインド済みの間は Service のスナップショットを正として表示する
+        val stateSnapshot = playbackService?.getPlaybackStateSnapshot()
+        val activeFactor = stateSnapshot?.effectiveFactor ?: (if (isDirectSource) 1 else upsampleFactor)
         val dspTag = if (isDirectSource) " [DIRECT]" else (if (activeFactor > 1) " [DSP ${activeFactor}x]" else "")
 
         if (dev != null) {
@@ -732,7 +737,7 @@ class MainActivity : AppCompatActivity() {
             else -> "16 bit"
         }
 
-        val effectiveRate = playbackService?.effectiveSampleRate ?: (baseSampleRate * activeFactor)
+        val effectiveRate = stateSnapshot?.effectiveSampleRate ?: (baseSampleRate * activeFactor)
         val rateStr = String.format(java.util.Locale.US, "%.1f", effectiveRate / 1000.0)
         textRateBits.text = "$rateStr kHz / $bitLabel"
         

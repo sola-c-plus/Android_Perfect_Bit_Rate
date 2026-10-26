@@ -48,6 +48,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_CURRENT_EQ_GAIN_PREFIX = "current_eq_gain_"
         private const val KEY_WORKING_CUSTOM_GAIN_PREFIX = "working_custom_gain_"
         private const val KEY_CUSTOM_EQ_PRESETS_JSON = "custom_eq_presets_json"
+        private const val KEY_FREQ_PRESETS_JSON = "freq_presets_json"
 
         @Volatile
         private var instance: AppPreferences? = null
@@ -177,6 +178,63 @@ class AppPreferences private constructor(context: Context) {
             list.clear()
         }
         return list
+    }
+
+    // ★ Freqプリセット全件の永続化（カスタムEQプリセットと同じ JSONArray/JSONObject 方式）。
+    //    古い JSON に欠けているフィールドはデフォルトプリセットの値で補完する。
+    fun getSavedFreqPresets(): List<FreqPresetDef>? {
+        val jsonStr = prefs.getString(KEY_FREQ_PRESETS_JSON, null)
+        if (jsonStr.isNullOrEmpty()) return null
+        return try {
+            val arr = JSONArray(jsonStr)
+            val list = mutableListOf<FreqPresetDef>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val fallback = FreqPresetManager.DEFAULT_PRESETS.getOrNull(i)
+                list.add(
+                    FreqPresetDef(
+                        id = obj.optInt("id", fallback?.id ?: i),
+                        name = obj.optString("name", fallback?.name ?: ""),
+                        firType = obj.optInt("firType", fallback?.firType ?: 0),
+                        transientMode = obj.optInt("transientMode", fallback?.transientMode ?: 0),
+                        lpcAlgo = obj.optInt("lpcAlgo", fallback?.lpcAlgo ?: 0),
+                        gain = obj.optDouble("gain", (fallback?.gain ?: 0.0f).toDouble()).toFloat(),
+                        extractFreq = obj.optDouble("extractFreq", (fallback?.extractFreq ?: 13000.0f).toDouble()).toFloat(),
+                        useQmf = obj.optBoolean("useQmf", fallback?.useQmf ?: false),
+                        useGroupDelay = obj.optBoolean("useGroupDelay", fallback?.useGroupDelay ?: false),
+                        useLattice = obj.optBoolean("useLattice", fallback?.useLattice ?: false),
+                        useLrDither = obj.optBoolean("useLrDither", fallback?.useLrDither ?: false),
+                        useMsSpatial = obj.optBoolean("useMsSpatial", fallback?.useMsSpatial ?: false),
+                        useDynamicSbr = obj.optBoolean("useDynamicSbr", fallback?.useDynamicSbr ?: false)
+                    )
+                )
+            }
+            if (list.size == FreqPresetManager.DEFAULT_PRESETS.size) list else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun saveFreqPresets(list: List<FreqPresetDef>) {
+        val arr = JSONArray()
+        for (p in list) {
+            val obj = JSONObject()
+            obj.put("id", p.id)
+            obj.put("name", p.name)
+            obj.put("firType", p.firType)
+            obj.put("transientMode", p.transientMode)
+            obj.put("lpcAlgo", p.lpcAlgo)
+            obj.put("gain", p.gain.toDouble())
+            obj.put("extractFreq", p.extractFreq.toDouble())
+            obj.put("useQmf", p.useQmf)
+            obj.put("useGroupDelay", p.useGroupDelay)
+            obj.put("useLattice", p.useLattice)
+            obj.put("useLrDither", p.useLrDither)
+            obj.put("useMsSpatial", p.useMsSpatial)
+            obj.put("useDynamicSbr", p.useDynamicSbr)
+            arr.put(obj)
+        }
+        prefs.edit { putString(KEY_FREQ_PRESETS_JSON, arr.toString()) }
     }
 
     fun saveCustomEqPresets(list: List<CustomEqPreset>) {
