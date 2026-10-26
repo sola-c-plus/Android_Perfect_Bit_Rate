@@ -356,7 +356,7 @@ class MainActivity : AppCompatActivity() {
             geckoView = findViewById(R.id.geckoview),
             listener = object : GeckoSessionController.Listener {
                 override fun onFlush() {
-                    playbackService?.resetBuffer()
+                    playbackService?.resetBuffer("page")
                 }
                 override fun onPcm(pcmBytes: ByteArray, inBitMode: String) {
                     pcmPacketCount += pcmBytes.size
@@ -367,7 +367,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onCodec(codec: String, rate: Int) {
                     currentCodec = codec
                     if (rate > 0 && rate != baseSampleRate) {
-                        playbackService?.resetBuffer()
+                        playbackService?.resetBuffer("codec")
                         baseSampleRate = rate
                         playbackService?.updateBaseSampleRate(rate)
                     }
@@ -635,7 +635,7 @@ class MainActivity : AppCompatActivity() {
             peakDbR = -60f
             currentLatencyMs = 0
             walkmanLevelMeter?.reset()
-            playbackService?.resetBuffer()
+            playbackService?.resetBuffer("direct")
             playbackService?.setUpsampling(upsampleFactor)
             // ★ Phase 1: 引数で渡していた構成は全て Service の自フィールドが正（initAudioTrack は引数なし）
             playbackService?.initAudioTrack()
@@ -816,7 +816,15 @@ class MainActivity : AppCompatActivity() {
             textBufferLatency.visibility = View.VISIBLE
             val bufPercent = if (isPlayingState) ((currentQueueSize * 100) / 64).coerceIn(0, 100) else 100
             val latStr = if (isPlayingState && currentLatencyMs > 0) "${currentLatencyMs}ms" else "--"
-            textBufferLatency.text = "BUF:${bufPercent}%  LAT:${latStr}"
+            // ★ バッファ破棄の計測カウンタ（Service 起動以来の累計）を併記する
+            val svc = playbackService
+            val drop = svc?.bufferDropCount?.get() ?: 0L
+            val dropMs = svc?.bufferDropMs?.get() ?: 0L
+            val flush = svc?.bufferFlushCount?.get() ?: 0L
+            val flushPage = svc?.bufferFlushPageCount?.get() ?: 0L
+            val und = svc?.bufferUnderrunCount?.get() ?: 0L
+            val res = svc?.bufferResumeCount?.get() ?: 0L
+            textBufferLatency.text = "BUF:${bufPercent}%  LAT:${latStr}  DROP:${drop}(${dropMs}ms) FL:${flush}(p${flushPage}) UND:${und}/${res}"
             textBufferLatency.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
         } else {
             textCpuRamMonitor.visibility = View.GONE

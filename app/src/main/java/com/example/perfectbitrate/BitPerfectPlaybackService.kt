@@ -38,6 +38,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.abs
 import kotlin.math.log10
@@ -111,6 +112,15 @@ class BitPerfectPlaybackService : Service() {
     
     private val PREROLL_THRESHOLD = 3
     private val isBuffering = AtomicBoolean(true)
+
+    // ★ バッファ破棄の計測カウンタ（診断用、サービス起動以来の累計。再生挙動には影響しない）
+    val bufferDropCount = AtomicLong(0)     // キューフルで最古パケットを落とした回数
+    val bufferDropMs = AtomicLong(0)        // 落とした音の合計時間 (ms)
+    val bufferFlushCount = AtomicLong(0)    // resetBuffer による flush の総回数
+    val bufferFlushPageCount = AtomicLong(0) // うちページ由来 ({type:"flush"})
+    val bufferUnderrunCount = AtomicLong(0) // 再生中にキューが枯れた回数
+    val bufferResumeCount = AtomicLong(0)   // アンダーラン後にプリロール再開した回数
+    private val underrunOpen = AtomicBoolean(false) // アンダーラン中（再開待ち）か
 
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
@@ -504,16 +514,30 @@ class BitPerfectPlaybackService : Service() {
         ) ?: pcmBytes
 
         if (!pcmQueue.offer(processedBytes)) {
-            pcmQueue.poll()
+            val dropped = pcmQueue.poll()
             pcmQueue.offer(processedBytes)
+            if (dropped != null) {
+                bufferDropCount.incrementAndGet()
+                val bytesPerSample = when (actualBitMode) { "32bit" -> 4; "24bit" -> 3; else -> 2 }
+                if (effectiveSampleRate > 0) {
+                    val droppedFrames = dropped.size / (bytesPerSample * 2)
+                    bufferDropMs.addAndGet(droppedFrames * 1000L / effectiveSampleRate)
+                }
+            }
         }
 
         if (isBuffering.get() && pcmQueue.size >= PREROLL_THRESHOLD) {
             isBuffering.set(false)
+            if (underrunOpen.compareAndSet(true, false)) {
+                bufferResumeCount.incrementAndGet()
+            }
         }
     }
 
-    fun resetBuffer() {
+    fun resetBuffer(reason: String = "unknown") {
+        bufferFlushCount.incrementAndGet()
+        if (reason == "page") bufferFlushPageCount.incrementAndGet()
+        Log.i("BitPerfect", "★ Buffer flush (reason=$reason) total=${bufferFlushCount.get()}")
         isBuffering.set(true)
         pcmQueue.clear()
         audioLock.lock()
@@ -577,7 +601,7 @@ class BitPerfectPlaybackService : Service() {
                 override fun onSeekTo(pos: Long) {
                     currentPosition = pos
                     onSeekListener?.invoke(pos)
-                    resetBuffer()
+                    resetBuffer("seek")
                     updatePlaybackState(isCurrentlyPlaying, pos)
                 }
             })
@@ -1071,12 +1095,19 @@ class BitPerfectPlaybackService : Service() {
                             continue
                         } else {
                             isBuffering.set(false)
+                            if (underrunOpen.compareAndSet(true, false)) {
+                                bufferResumeCount.incrementAndGet()
+                            }
                         }
                     }
 
                     val pcm = pcmQueue.poll(100, TimeUnit.MILLISECONDS)
                     if (pcm == null) {
                         if (pcmQueue.isEmpty()) {
+                            if (!isBuffering.get() && underrunOpen.compareAndSet(false, true)) {
+                                bufferUnderrunCount.incrementAndGet()
+                                Log.i("BitPerfect", "★ Buffer underrun total=${bufferUnderrunCount.get()}")
+                            }
                             isBuffering.set(true)
                         }
                         continue
