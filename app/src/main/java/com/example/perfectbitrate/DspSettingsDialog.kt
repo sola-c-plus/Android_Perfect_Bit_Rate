@@ -515,6 +515,8 @@ class DspSettingsDialog(
         btnEqMinus.setOnClickListener { walkmanEqView?.stepGain(-0.5f) }
 
         // --- 他の DSP スピナー群の設定 ---
+        // ★ Phase 4: ビット深度スピナーは要求値（Prefs.selectedBitMode）を表示・編集する。
+        //   実際に再生されている形式（実績値）はステータス表示側が Service から読む。
         val bitAdapter = ArrayAdapter(activity, spinnerLayout, bitOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerBitDepth.adapter = bitAdapter
         spinnerBitDepth.setSelection(bitModeValues.indexOf(appPrefs.selectedBitMode).coerceAtLeast(0))

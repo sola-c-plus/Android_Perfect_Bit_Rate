@@ -53,7 +53,16 @@ class BitPerfectPlaybackService : Service() {
     var baseSampleRate = 48000
     var effectiveSampleRate = 48000
     
-    var currentBitMode = "16bit"
+    // ★ Phase 4: ビットモードの要求値。ユーザー設定であり、Prefs.selectedBitMode と
+    //   同期する唯一の永続値。doInit の交渉はこの値を入力として受け取る。
+    //   交渉結果をここへ書き戻してはならない（フォールバックで保存設定が劣化するため）。
+    var requestedBitMode = "16bit"
+
+    // ★ Phase 4: ビットモードの実績値。doInit の交渉結果であり読取専用。
+    //   表示と実ストリームの解釈（native 出力形式・ピーク解析・フレーム数換算）はこちらを使う。
+    //   フォールバックが起きても requestedBitMode は不変で、次回 init は要求を再試行する。
+    var actualBitMode = "16bit"
+        private set
 
     // ★ ユーザーが選択した本来の設定倍率 (Direct Source ON でも絶対に破壊せず保持)
     var upsampleFactor = 1
@@ -97,6 +106,7 @@ class BitPerfectPlaybackService : Service() {
 
     // ★ (peakDbL, peakDbR, bitMask, queueSize, latencyMs)
     var onPeakListener: ((Float, Float, Int, Int, Int) -> Unit)? = null
+    // ★ Phase 4: 実績値の通知は表示専用。受け手は要求値や Prefs へ書き戻してはならない。
     var onActualBitModeChanged: ((String) -> Unit)? = null
 
     // ★ Phase 0: 表示用スナップショット。ライブ再生状態の正は Service であり、
@@ -120,7 +130,7 @@ class BitPerfectPlaybackService : Service() {
         return PlaybackStateSnapshot(
             effectiveSampleRate = effectiveSampleRate,
             effectiveFactor = effectiveFactor,
-            actualBitMode = currentBitMode,
+            actualBitMode = actualBitMode,
             isDirectSource = isDirectSource,
             isPlaying = isCurrentlyPlaying,
             title = currentTitle,
@@ -475,7 +485,7 @@ class BitPerfectPlaybackService : Service() {
         }
 
         val processedBytes = NativeAudioEngine.nativeProcessUpsample(
-            pcmBytes, pcmBytes.size, inBitMode, currentBitMode, factorToApply
+            pcmBytes, pcmBytes.size, inBitMode, actualBitMode, factorToApply
         ) ?: pcmBytes
 
         if (!pcmQueue.offer(processedBytes)) {
@@ -699,7 +709,7 @@ class BitPerfectPlaybackService : Service() {
         )
 
         val playPauseIcon = if (isCurrentlyPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
-        val bitStr = currentBitMode
+        val bitStr = actualBitMode
         val deviceLabel = when {
             isUsbDevice(activeOutputDevice) -> "DIRECT"
             isBluetoothDevice(activeOutputDevice) -> "BLUETOOTH"
@@ -739,7 +749,7 @@ class BitPerfectPlaybackService : Service() {
     }
 
     // ★ Phase 1: 引数は全て無視されていたため廃止し、構成は自フィールド
-    //   (currentBitMode / baseSampleRate / effectiveFactor / activeOutputDevice) が正。
+    //   (requestedBitMode / baseSampleRate / effectiveFactor / activeOutputDevice) が正。
     //   呼び出し側は「呼ぶ前にフィールドへ書く」ことが要求伝達そのものである。
     // ★ hasPendingInit の合体仕様: 初期化の実行中に追加要求が来た場合は保留フラグだけを立て、
     //   実行中ループが「その時点の最新フィールド値」で再実行する（要求キューではなく最後の状態が勝つ）。
@@ -752,7 +762,7 @@ class BitPerfectPlaybackService : Service() {
         try {
             do {
                 hasPendingInit.set(false)
-                doInitAudioTrackInternal(currentBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+                doInitAudioTrackInternal(requestedBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
@@ -974,7 +984,8 @@ class BitPerfectPlaybackService : Service() {
                     AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24bit"
                     else -> "16bit"
                 }
-                currentBitMode = actualModeStr
+                // ★ Phase 4: 交渉結果は実績値にだけ記録する。要求値には書き戻さない。
+                actualBitMode = actualModeStr
                 onActualBitModeChanged?.invoke(actualModeStr)
                 notifyPlaybackStateChanged()
 
@@ -1023,7 +1034,7 @@ class BitPerfectPlaybackService : Service() {
                         continue
                     }
 
-                    analyzeAndDispatchPeak(pcm, currentBitMode)
+                    analyzeAndDispatchPeak(pcm, actualBitMode)
 
                     var track: AudioTrack? = null
                     audioLock.lock()
@@ -1039,7 +1050,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written > 0) {
-                            val bytesPerSample = when (currentBitMode) {
+                            val bytesPerSample = when (actualBitMode) {
                                 "32bit" -> 4
                                 "24bit" -> 3
                                 else -> 2
