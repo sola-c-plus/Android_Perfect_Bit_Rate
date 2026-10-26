@@ -73,7 +73,7 @@ private:
     void executeFftAnalysis();
 
     void processMsSpatial(float* left, float* right, size_t numFrames);
-    void processDynamicSbr(float* left, float* right, size_t numFrames);
+    void updateDynamicSbr(const float* inL, const float* inR, size_t numFrames, double inputRate);
 
     int factor_ = 1;
     float inSampleRate_ = 48000.0f;
@@ -89,7 +89,12 @@ private:
     bool isDynamicSbr_ = false;
     float prevSideL_ = 0.0f, prevSideR_ = 0.0f;
     float detectedCutoffHz_ = 20000.0f;
-    float sbrPhaseL_ = 0.0f, sbrPhaseR_ = 0.0f;
+    // Dynamic SBR のカットオフ検出状態 (1ポールHPの状態とブロック内エネルギー蓄積)
+    double sbrHpState_ = 0.0;
+    double sbrPrevMono_ = 0.0;
+    double sbrEnergyHp_ = 0.0;
+    double sbrEnergyTot_ = 0.0;
+    int sbrBlockCount_ = 0;
 
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     DitherMode ditherMode_ = DitherMode::TPDF;

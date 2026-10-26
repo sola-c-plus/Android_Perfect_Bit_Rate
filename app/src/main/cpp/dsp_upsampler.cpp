@@ -269,7 +269,70 @@ void DspUpsampler::setMsSpatial(bool enabled) {
 }
 
 void DspUpsampler::setDynamicSbr(bool enabled) {
+    if (isDynamicSbr_ && !enabled) {
+        // OFF への遷移時のみ、FreqEngine 側の動的補正を解除して検出値を初期化する
+        freqEngine_.setDynamicSbrState(0.0, 1.0);
+        detectedCutoffHz_ = 20000.0f;
+    }
     isDynamicSbr_ = enabled;
+}
+
+// Dynamic SBR のカットオフ検出。
+// 入力モノラル信号の 16kHz 1ポールHP エネルギー比から実効カットオフを推定し、
+// 512 サンプルブロック毎に FreqEngine へ「抽出開始点の上限キャップ」と
+// 「倍音ゲイン倍率」を渡す。チューニング定数は控えめな初期値であり、
+// 実機の聴感評価で調整しうる前提で置いている。
+void DspUpsampler::updateDynamicSbr(const float* inL, const float* inR, size_t numFrames, double inputRate) {
+    constexpr int kSbrBlockSize = 512;        // 検出ブロック長 (サンプル)
+    constexpr double kRatioHi = 0.02;         // この比以上なら高域十分 (カットオフ 20kHz)
+    constexpr double kRatioLo = 0.002;        // この比以下なら強い帯域制限 (カットオフ 8kHz)
+    constexpr double kAttack = 0.5;           // カットオフ低下への追従 (速い)
+    constexpr double kRelease = 0.05;         // カットオフ回復への追従 (遅い)
+
+    // 1ポール HP (16kHz @入力レート): y = a * (state + m - prev)
+    const double rc = 1.0 / (2.0 * DSP_PI * 16000.0);
+    const double dt = 1.0 / inputRate;
+    const double a = rc / (rc + dt);
+
+    for (size_t i = 0; i < numFrames; ++i) {
+        double m = 0.5 * (static_cast<double>(inL[i]) + static_cast<double>(inR[i]));
+        double y = a * (sbrHpState_ + m - sbrPrevMono_);
+        sbrHpState_ = y;
+        sbrPrevMono_ = m;
+        sbrEnergyHp_ += y * y;
+        sbrEnergyTot_ += m * m;
+
+        if (++sbrBlockCount_ < kSbrBlockSize) continue;
+        sbrBlockCount_ = 0;
+        double tot = sbrEnergyTot_;
+        double hp = sbrEnergyHp_;
+        sbrEnergyTot_ = 0.0;
+        sbrEnergyHp_ = 0.0;
+
+        // 無音ブロックでは推定を更新しない (ノイズフロアでの誤検出防止)
+        if (tot >= 1e-10) {
+            double ratio = std::sqrt(hp / std::max(tot, 1e-12));
+            double est;
+            if (ratio >= kRatioHi) {
+                est = 20000.0;
+            } else if (ratio <= kRatioLo) {
+                est = 8000.0;
+            } else {
+                // 端点間は対数線形で補間する
+                double t = (std::log(ratio) - std::log(kRatioLo)) / (std::log(kRatioHi) - std::log(kRatioLo));
+                est = 8000.0 * std::pow(20000.0 / 8000.0, t);
+            }
+            double det = static_cast<double>(detectedCutoffHz_);
+            det += (est - det) * ((est < det) ? kAttack : kRelease);
+            detectedCutoffHz_ = static_cast<float>(det);
+        }
+
+        double det = static_cast<double>(detectedCutoffHz_);
+        double act = std::clamp((16000.0 - det) / 8000.0, 0.0, 1.0);
+        double capHz = std::clamp(det * 0.95, 8000.0, 20000.0);
+        double gainScale = 1.0 + 0.5 * act;
+        freqEngine_.setDynamicSbrState(capHz, gainScale);
+    }
 }
 
 void DspUpsampler::configure(int factor, float inSampleRate) {
@@ -305,6 +368,10 @@ void DspUpsampler::reset() {
     std::fill(std::begin(errHistR_), std::end(errHistR_), 0.0);
     std::fill(std::begin(spectrumDb_), std::end(spectrumDb_), -60.0f);
     prevSideL_ = 0.0f; prevSideR_ = 0.0f;
+    sbrHpState_ = 0.0; sbrPrevMono_ = 0.0;
+    sbrEnergyHp_ = 0.0; sbrEnergyTot_ = 0.0;
+    sbrBlockCount_ = 0;
+    detectedCutoffHz_ = 20000.0f;
     equalizer_.reset();
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
@@ -513,6 +580,12 @@ size_t DspUpsampler::process(
             tempInL_[i] = srcFloat[i * 2];
             tempInR_[i] = srcFloat[i * 2 + 1];
         }
+    }
+
+    // Dynamic SBR の検出は入力レートのサンプルで行う。
+    // FreqEngine が実際に動作する条件 (倍率>=2, Freq有効, 非Direct) の時だけ駆動する。
+    if (isDynamicSbr_ && factor_ >= 2 && freqMode_ != FreqMode::OFF && !isDirectSource_) {
+        updateDynamicSbr(tempInL_.data(), tempInR_.data(), numInFrames, static_cast<double>(inSampleRate_));
     }
 
     int outBytesPerSample = 2;
