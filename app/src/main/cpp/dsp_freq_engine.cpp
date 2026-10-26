@@ -153,10 +153,93 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
 }
 
 void DspFreqEngine::setAdvancedParams(int lpcAlgo, bool useQmf, double qmfCrossoverHz) {
-    lpcAlgo_ = lpcAlgo;  // LPC の音響処理は次 PR で実装する。今回は値の保持のみ。
+    if (lpcAlgo != lpcAlgo_) {
+        lpcAlgo_ = lpcAlgo;
+        resetLpcState();  // モードが変わったら分析の平滑状態をニュートラルへ戻す
+    }
     useQmf_ = useQmf;
     qmfXoverHz_ = qmfCrossoverHz;
     updateQmfCrossover();
+}
+
+void DspFreqEngine::resetLpcState() {
+    lpcFill_ = 0;
+    lpcTiltPrev_ = 0.0;
+    lpcTiltCur_ = 0.0;
+    lpcPgPrev_ = 0.0;
+    lpcPgCur_ = 0.0;
+}
+
+// LPC 分析 (ブロック境界でのみ実行)。lpcBuf_ に蓄積された 256 フレームの
+// hiMid (入力 HP 後・QMF 分割前の全帯域抽出信号) から、スペクトルティルトと
+// 予測ゲインを求めて平滑値を更新する。なお「DSEE HX」「K2」は固有技術で
+// 非公開のため、これは再現ではなく LPC 分析を倍音合成の制御に使う解釈実装。
+// 解析に失敗した場合 (無音・数値異常) は前回の平滑値を保持する。
+void DspFreqEngine::updateLpcAnalysis() {
+    // 補間の原点を現値へ進める (以降の更新をスキップする場合も同じ)
+    lpcTiltPrev_ = lpcTiltCur_;
+    lpcPgPrev_ = lpcPgCur_;
+
+    // 自己相関 r[0..10] (次数 10)
+    double r[kLpcOrder + 1] = {};
+    for (int k = 0; k <= kLpcOrder; ++k) {
+        double acc = 0.0;
+        for (int n = 0; n + k < kLpcBlockSize; ++n) {
+            acc += lpcBuf_[n] * lpcBuf_[n + k];
+        }
+        r[k] = acc;
+    }
+    if (!(r[0] >= 1e-12)) return;  // 無音・微小 (または NaN) の場合は更新をスキップ
+
+    // Levinson-Durbin 漸化。反射係数を ±0.98 にクランプして安定化する。
+    // a[1..10] は誤差フィルタ A(z) = 1 + Σ a_k z^-k の係数。
+    double a[kLpcOrder + 1] = {};
+    double E = r[0];
+    for (int i = 1; i <= kLpcOrder; ++i) {
+        double lambda = r[i];
+        for (int j = 1; j < i; ++j) lambda += a[j] * r[i - j];
+        lambda = -lambda / E;
+        if (!std::isfinite(lambda)) return;
+        lambda = std::clamp(lambda, -0.98, 0.98);
+        double aNext[kLpcOrder + 1] = {};
+        aNext[i] = lambda;
+        for (int j = 1; j < i; ++j) aNext[j] = a[j] + lambda * a[i - j];
+        for (int j = 1; j <= i; ++j) a[j] = aNext[j];
+        E *= (1.0 - lambda * lambda);
+        if (!(E > 0.0) || !std::isfinite(E)) return;  // 数値異常時は更新を中止
+    }
+
+    // 予測ゲイン (入力パワー / 予測誤差パワー)
+    double pgDb = std::clamp(10.0 * std::log10(std::max(r[0] / E, 1.0)), 0.0, 24.0);
+
+    // スペクトルティルト: LPC 包絡 envDb(f) = -10*log10(|A(e^{jω})|^2) を
+    // 実効抽出開始点とその2倍 (上限 fs×0.40) の2点で評価し、差を取る。
+    // 源が明るい (高域寄り) ほど正になる。
+    double tiltDb = 0.0;
+    double fLo = effectiveExtractHz();
+    double fHi = std::min(sampleRate_ * 0.40, fLo * 2.0);
+    if (fHi > fLo) {
+        auto envDb = [this, &a](double f) {
+            double w = 2.0 * DSP_PI * f / sampleRate_;
+            double re = 1.0, im = 0.0;
+            for (int k = 1; k <= kLpcOrder; ++k) {
+                re += a[k] * std::cos(w * static_cast<double>(k));
+                im -= a[k] * std::sin(w * static_cast<double>(k));
+            }
+            double mag2 = re * re + im * im;
+            return -10.0 * std::log10(std::max(mag2, 1e-12));
+        };
+        tiltDb = std::clamp(envDb(fHi) - envDb(fLo), -12.0, 12.0);
+    }
+    if (!std::isfinite(tiltDb) || !std::isfinite(pgDb)) return;
+
+    double tiltNorm = std::clamp(tiltDb / 12.0, -1.0, 1.0);
+    double pgNorm = std::clamp(pgDb / 24.0, 0.0, 1.0);
+
+    // モード別の平滑係数で平滑値を更新する (ブロック内は prev → cur を線形補間)
+    const double alpha = (lpcAlgo_ == 1) ? 0.1 : (lpcAlgo_ == 2) ? 0.35 : 0.5;
+    lpcTiltCur_ += alpha * (tiltNorm - lpcTiltCur_);
+    lpcPgCur_ += alpha * (pgNorm - lpcPgCur_);
 }
 
 void DspFreqEngine::updateQmfCrossover() {
@@ -267,6 +350,9 @@ void DspFreqEngine::reset() {
     prevPowMid_ = 0.0; prevPowSide_ = 0.0;
     transientFluxMid_ = 0.0; transientFluxSide_ = 0.0;
     noiseFloorMid_ = 1e-5; noiseFloorSide_ = 1e-5;
+    // LPC 分析状態はニュートラルへ (tilt = 0, pg = 0 → 乗数はすべて 1.0)。
+    // lpcAlgo_ 自体は制御値のため消去しない。
+    resetLpcState();
 }
 
 void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
@@ -313,6 +399,36 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         if (perfMode_ == PerformanceMode::ULTRA_HQ) {
             double sideAlign = (hiSide * 0.90) + (hiMid * 0.10);
             hiSide = sideAlign;
+        }
+
+        // LPC 分析による倍音ウェイト乗数 (lpcAlgo が 0/1/2 のときのみ有効。
+        // それ以外では乗数はすべて正確に 1.0 で、従来の演算と完全に同一になる)。
+        // hiMid を 256 フレーム蓄積し、ブロック境界で分析して平滑値を更新する。
+        // ブロック内は平滑値 (前回 → 今回) を線形補間して適用し、
+        // クリック / ポンピングを避ける。乗数は Mid / Side 共通。
+        double lpcMulH2 = 1.0, lpcMulH3 = 1.0, lpcMulH4 = 1.0;
+        if (lpcAlgo_ >= 0 && lpcAlgo_ <= 2) {
+            double t = static_cast<double>(lpcFill_ + 1) / static_cast<double>(kLpcBlockSize);
+            double tiltSm = lpcTiltPrev_ + (lpcTiltCur_ - lpcTiltPrev_) * t;
+            double pgSm = lpcPgPrev_ + (lpcPgCur_ - lpcPgPrev_) * t;
+            if (lpcAlgo_ == 0) {
+                // 適応: ティルトで h4 / h3 の配分を寄せる (h2 と全体ゲインは不変)
+                lpcMulH4 = 1.0 + 0.6 * tiltSm;
+                lpcMulH3 = 1.0 - 0.3 * tiltSm;
+            } else if (lpcAlgo_ == 1) {
+                // K2 Natural: 強平滑したティルトで h2 のみを穏やかに整形する
+                lpcMulH2 = 1.0 + 0.35 * tiltSm;
+            } else {
+                // Exciter: 予測ゲインで倍音ゲインにコントラストを付ける
+                lpcMulH2 = 1.0 + 0.3 * pgSm;
+                lpcMulH4 = 1.0 + 0.8 * pgSm;
+                lpcMulH3 = 1.0 - 0.2 * pgSm;
+            }
+            lpcBuf_[lpcFill_] = hiMid;
+            if (++lpcFill_ >= kLpcBlockSize) {
+                lpcFill_ = 0;
+                updateLpcAnalysis();
+            }
         }
 
         double midPow = hiMid * hiMid;
@@ -392,9 +508,9 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
             // 単帯域パス: shapeHarmonics は現行のインライン式の移設であり、
             // 渡す係数・重みが従来と同一のため演算結果はビット同一になる
             harmMid = shapeHarmonics(hiMid, rmsMid, h2Scale, h3ScaleMid, h4ScaleMid,
-                                      effEven, effOdd, airWeightMid);
+                                      effEven * lpcMulH2, effOdd * lpcMulH3, airWeightMid * lpcMulH4);
             harmSide = shapeHarmonics(hiSide, rmsSide, h2Scale, h3ScaleSide, h4ScaleSide,
-                                      effEven * 0.95, effOdd * 0.80, 0.15);
+                                      effEven * 0.95 * lpcMulH2, effOdd * 0.80 * lpcMulH3, 0.15 * lpcMulH4);
         } else {
             // QMF パス: 抽出帯域 (hiMid / hiSide) を LR4 クロスオーバーで
             // 低/高サブバンドへ分割し、サブバンド毎に同じ整形を掛けて合算する。
@@ -420,14 +536,16 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
             sideHi = runBiquad(sideHi, qmf_hp_b0_, qmf_hp_b1_, qmf_hp_b2_, qmf_hp_a1_, qmf_hp_a2_,
                                qmf_hp2_s1_side_, qmf_hp2_s2_side_);
 
+            // LPC 乗数はベースウェイトに先に掛かり、その後に QMF のバンド別係数
+            // (高域: h3 ×0.5 / h4 ×1.5) が乗る合成順序とする
             harmMid = shapeHarmonics(midLo, rmsMid, h2Scale, h3ScaleMid, h4ScaleMid,
-                                     effEven, effOdd, airWeightMid)
+                                     effEven * lpcMulH2, effOdd * lpcMulH3, airWeightMid * lpcMulH4)
                     + shapeHarmonics(midHi, rmsMid, h2Scale, h3ScaleMid, h4ScaleMid,
-                                     effEven, effOdd * 0.5, airWeightMid * 1.5);
+                                     effEven * lpcMulH2, effOdd * lpcMulH3 * 0.5, airWeightMid * lpcMulH4 * 1.5);
             harmSide = shapeHarmonics(sideLo, rmsSide, h2Scale, h3ScaleSide, h4ScaleSide,
-                                      effEven * 0.95, effOdd * 0.80, 0.15)
+                                      effEven * 0.95 * lpcMulH2, effOdd * 0.80 * lpcMulH3, 0.15 * lpcMulH4)
                      + shapeHarmonics(sideHi, rmsSide, h2Scale, h3ScaleSide, h4ScaleSide,
-                                      effEven * 0.95, effOdd * 0.80 * 0.5, 0.15 * 1.5);
+                                      effEven * 0.95 * lpcMulH2, effOdd * 0.80 * lpcMulH3 * 0.5, 0.15 * lpcMulH4 * 1.5);
         }
 
         double harmL = (harmMid * smoothedGainMid_) + (harmSide * smoothedGainSide_);

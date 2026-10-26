@@ -12,7 +12,8 @@ public:
     // 係数の差し替えは次回 processStereo の先頭でブロック境界でのみ行う。
     void setDynamicSbrState(double extractCapHz, double gainScale);
 
-    // Freq 詳細パラメータ: lpcAlgo は今回保持のみ (LPC の音響処理は次 PR で実装)。
+    // Freq 詳細パラメータ: lpcAlgo は LPC 分析による倍音ミックス適応
+    // (0=適応 / 1=K2 Natural / 2=Exciter、それ以外は無効で従来動作と完全同一)、
     // useQmf / qmfCrossoverHz は QMF サブバンド分割 (LR4 クロスオーバー) を駆動する。
     // 制御値のため configure() では消去されず、reset() ではフィルタ状態のみ消去される。
     void setAdvancedParams(int lpcAlgo, bool useQmf, double qmfCrossoverHz);
@@ -29,6 +30,8 @@ private:
     void updateInputHp(double fExtractHz);
     double effectiveExtractHz() const;
     void updateQmfCrossover();
+    void resetLpcState();
+    void updateLpcAnalysis();
 
     FreqMode mode_ = FreqMode::AUTO_AI;
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
@@ -45,7 +48,7 @@ private:
     double lastAppliedEffExtract_ = 13000.0;
 
     // QMF / LPC の制御状態 (フィルタ状態ではないため reset() では消去しない)
-    int lpcAlgo_ = 0;              // 今回は保持のみ。音響処理は次 PR で実装する
+    int lpcAlgo_ = -1;             // 未設定 = LPC 無効 (乗数すべて 1.0 で従来と完全同一)。有効値は 0/1/2 のみ
     bool useQmf_ = false;
     double qmfXoverHz_ = 16900.0;  // ユーザー設定値 (実効値は updateQmfCrossover でクランプ)
 
@@ -99,4 +102,12 @@ private:
     double prevPowMid_ = 0.0, prevPowSide_ = 0.0;
     double transientFluxMid_ = 0.0, transientFluxSide_ = 0.0;
     double noiseFloorMid_ = 1e-5, noiseFloorSide_ = 1e-5;
+
+    // LPC 分析状態 (reset() でニュートラルに初期化する。lpcAlgo_ 自体は消去しない)
+    static constexpr int kLpcOrder = 10;
+    static constexpr int kLpcBlockSize = 256;
+    double lpcBuf_[kLpcBlockSize] = {};
+    int lpcFill_ = 0;
+    double lpcTiltPrev_ = 0.0, lpcTiltCur_ = 0.0;  // 平滑済みスペクトルティルト (前ブロック値 / 現ブロック値)
+    double lpcPgPrev_ = 0.0, lpcPgCur_ = 0.0;      // 平滑済み予測ゲイン (同上)
 };
