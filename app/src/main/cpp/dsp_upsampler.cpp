@@ -3,6 +3,23 @@
 #include <cstring>
 #include <algorithm>
 
+// PerformanceMode 別のリサンプラ品質テーブル (行: ECO / STANDARD / ULTRA_HQ)。
+// kPolyTapsPerPhase はポリフェーズ FIR の tapsPerPhase (列: factor 2 / 4 / 8)、
+// kCascadeTaps はカスケード FIR 3段のタップ数。
+// STANDARD は従来値そのもの (64/48/32, 255/63/39) で、従来と同一の音を保つ。
+namespace {
+constexpr int kPolyTapsPerPhase[3][3] = {
+    {32, 24, 16},     // ECO
+    {64, 48, 32},     // STANDARD
+    {128, 96, 64},    // ULTRA_HQ
+};
+constexpr size_t kCascadeTaps[3][3] = {
+    {127, 31, 23},    // ECO
+    {255, 63, 39},    // STANDARD
+    {383, 95, 63},    // ULTRA_HQ
+};
+} // namespace
+
 static uint32_t g_ditherStateL1 = 0x87654321;
 static uint32_t g_ditherStateL2 = 0x12345678;
 static uint32_t g_ditherStateR1 = 0xDEADBEEF;
@@ -99,9 +116,10 @@ void DspUpsampler::generateFilterCoefficients(int factor) {
         return;
     }
 
-    if (factor == 2) tapsPerPhase_ = 64;
-    else if (factor == 4) tapsPerPhase_ = 48;
-    else tapsPerPhase_ = 32;
+    const int modeIdx = static_cast<int>(perfMode_);
+    if (factor == 2) tapsPerPhase_ = kPolyTapsPerPhase[modeIdx][0];
+    else if (factor == 4) tapsPerPhase_ = kPolyTapsPerPhase[modeIdx][1];
+    else tapsPerPhase_ = kPolyTapsPerPhase[modeIdx][2];
 
     int totalTaps = factor * tapsPerPhase_;
     double cutoff = 0.94 / (2.0 * factor);
@@ -188,6 +206,14 @@ void DspUpsampler::setFirFilterType(FirFilterType type) {
     }
 }
 
+void DspUpsampler::setPerformanceMode(PerformanceMode mode) {
+    if (perfMode_ != mode) {
+        perfMode_ = mode;
+        freqEngine_.setPerformanceMode(mode);
+        configure(factor_, inSampleRate_);
+    }
+}
+
 void DspUpsampler::setDcPhaseType(DcPhaseType type) {
     dcPhaseType_ = type;
     dcPhaseLinearizer_.configure(type, static_cast<double>(inSampleRate_ * factor_));
@@ -229,9 +255,10 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
 
     generateFilterCoefficients(factor_);
 
-    cascadeStages_[0].configure(255, inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_);
-    cascadeStages_[1].configure(63, inSampleRate_, inSampleRate_ * 4.0, filterType_);
-    cascadeStages_[2].configure(39, inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_);
+    const size_t* cascadeTaps = kCascadeTaps[static_cast<int>(perfMode_)];
+    cascadeStages_[0].configure(cascadeTaps[0], inSampleRate_ * 0.5, inSampleRate_ * 2.0, filterType_);
+    cascadeStages_[1].configure(cascadeTaps[1], inSampleRate_, inSampleRate_ * 4.0, filterType_);
+    cascadeStages_[2].configure(cascadeTaps[2], inSampleRate_ * 2.0, inSampleRate_ * 8.0, filterType_);
 
     float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
     equalizer_.setSampleRate(static_cast<double>(currentFs));

@@ -42,10 +42,7 @@ public:
     bool isRichHarmonics() const { return freqEngine_.isRichHarmonics(); }
     FreqMode getFreqMode() const { return freqMode_; }
 
-    void setPerformanceMode(PerformanceMode mode) {
-        perfMode_ = mode;
-        freqEngine_.setPerformanceMode(mode);
-    }
+    void setPerformanceMode(PerformanceMode mode);
     PerformanceMode getPerformanceMode() const { return perfMode_; }
 
     void setTransientMode(TransientMode mode);
