@@ -253,6 +253,16 @@ void DspUpsampler::setFreqCustomParams(float gain, float extractFreq) {
     freqEngine_.configure(freqMode_, static_cast<double>(inSampleRate_ * factor_), customFreqGain_, customFreqExtractFreq_);
 }
 
+void DspUpsampler::setFreqAdvancedParams(int lpcAlgo, bool useQmf, double qmfCrossoverHz) {
+    customLpcAlgo_ = lpcAlgo;
+    customUseQmf_ = useQmf;
+    customQmfXoverHz_ = qmfCrossoverHz;
+    // FreqEngine::configure は lpcAlgo / useQmf / qmfCrossoverHz の制御値を消去せず、
+    // クロスオーバー係数を再計算するため、setFreqMode / setFreqCustomParams / configure
+    // 経由の再構成が起きても詳細パラメータは失われない (再送は不要)。
+    freqEngine_.setAdvancedParams(lpcAlgo, useQmf, qmfCrossoverHz);
+}
+
 void DspUpsampler::setTransientMode(TransientMode mode) {
     transientMode_ = mode;
     transientRestorer_.configure(mode, static_cast<double>(inSampleRate_ * factor_), customUseGroupDelay_, customUseLattice_);

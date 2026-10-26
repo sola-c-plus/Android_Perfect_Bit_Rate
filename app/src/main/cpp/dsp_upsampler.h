@@ -38,6 +38,7 @@ public:
 
     void setFreqMode(FreqMode mode);
     void setFreqCustomParams(float gain, float extractFreq);
+    void setFreqAdvancedParams(int lpcAlgo, bool useQmf, double qmfCrossoverHz);
     void setRichHarmonics(bool enabled) { freqEngine_.setRichHarmonics(enabled); }
     bool isRichHarmonics() const { return freqEngine_.isRichHarmonics(); }
     FreqMode getFreqMode() const { return freqMode_; }
@@ -108,6 +109,12 @@ private:
 
     float customFreqGain_ = 0.22f;
     float customFreqExtractFreq_ = 13000.0f;
+
+    // Freq 詳細パラメータ (LPC / QMF)。実体は FreqEngine 側が保持し、
+    // FreqEngine::configure が制御値を保持するため再構成でも失われない。
+    int customLpcAlgo_ = 0;
+    bool customUseQmf_ = false;
+    double customQmfXoverHz_ = 16900.0;
 
     double errHistL_[4] = {0.0, 0.0, 0.0, 0.0};
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};

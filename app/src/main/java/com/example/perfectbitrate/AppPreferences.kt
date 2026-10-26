@@ -205,7 +205,12 @@ class AppPreferences private constructor(context: Context) {
                         useLattice = obj.optBoolean("useLattice", fallback?.useLattice ?: false),
                         useLrDither = obj.optBoolean("useLrDither", fallback?.useLrDither ?: false),
                         useMsSpatial = obj.optBoolean("useMsSpatial", fallback?.useMsSpatial ?: false),
-                        useDynamicSbr = obj.optBoolean("useDynamicSbr", fallback?.useDynamicSbr ?: false)
+                        useDynamicSbr = obj.optBoolean("useDynamicSbr", fallback?.useDynamicSbr ?: false),
+                        // 旧 JSON にキーが無い場合はデフォルトプリセット値、無ければ extractFreq × 1.3 で補完
+                        qmfCrossoverHz = obj.optDouble(
+                            "qmfCrossoverHz",
+                            (fallback?.qmfCrossoverHz ?: ((fallback?.extractFreq ?: 13000.0f) * 1.3f)).toDouble()
+                        ).toFloat()
                     )
                 )
             }
@@ -232,6 +237,7 @@ class AppPreferences private constructor(context: Context) {
             obj.put("useLrDither", p.useLrDither)
             obj.put("useMsSpatial", p.useMsSpatial)
             obj.put("useDynamicSbr", p.useDynamicSbr)
+            obj.put("qmfCrossoverHz", p.qmfCrossoverHz.toDouble())
             arr.put(obj)
         }
         prefs.edit { putString(KEY_FREQ_PRESETS_JSON, arr.toString()) }

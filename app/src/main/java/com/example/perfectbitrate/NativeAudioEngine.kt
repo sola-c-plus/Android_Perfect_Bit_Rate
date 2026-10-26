@@ -22,6 +22,7 @@ object NativeAudioEngine {
     external fun nativeSetPerformanceMode(mode: Int)
     external fun nativeSetFreqMode(mode: Int)
     external fun nativeSetFreqCustomParams(gain: Float, extractFreq: Float)
+    external fun nativeSetFreqAdvancedParams(lpcAlgo: Int, useQmf: Boolean, qmfCrossoverHz: Float)
     external fun nativeSetRichHarmonics(enabled: Boolean)
 
     external fun nativeSetTransientMode(mode: Int)
