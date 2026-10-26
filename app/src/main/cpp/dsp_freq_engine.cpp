@@ -52,23 +52,8 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     fExtract_ = std::clamp(fExtract_, 4000.0, sampleRate_ * 0.40);
     fOutHp    = std::clamp(fOutHp, 8000.0, sampleRate_ * 0.43);
 
-    double w0_in = 2.0 * DSP_PI * fExtract_ / sampleRate_;
-    double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
-    double cosw0_in = std::cos(w0_in);
-
-    double in_b0 = (1.0 + cosw0_in) * 0.5;
-    double in_b1 = -(1.0 + cosw0_in);
-    double in_b2 = (1.0 + cosw0_in) * 0.5;
-    double in_a0 = 1.0 + alpha_in;
-    double in_a1 = -2.0 * cosw0_in;
-    double in_a2 = 1.0 - alpha_in;
-
-    double inv_in_a0 = 1.0 / in_a0;
-    in_hp_b0_ = in_b0 * inv_in_a0;
-    in_hp_b1_ = in_b1 * inv_in_a0;
-    in_hp_b2_ = in_b2 * inv_in_a0;
-    in_hp_a1_ = in_a1 * inv_in_a0;
-    in_hp_a2_ = in_a2 * inv_in_a0;
+    updateInputHp(fExtract_);
+    lastAppliedEffExtract_ = fExtract_;
 
     double w0_out = 2.0 * DSP_PI * fOutHp / sampleRate_;
     double alpha_out = std::sin(w0_out) / (2.0 * 0.70710678);
@@ -127,6 +112,44 @@ void DspFreqEngine::configure(FreqMode mode, double sampleRate, float gain, floa
     formant_bp_a2_ = f_a2 * inv_f_a0;
 
     dcCutCoeff_ = std::exp(-2.0 * DSP_PI * 120.0 / sampleRate_);
+
+    // Dynamic SBR のキャップが有効なまま再構成された場合は、次の process で再適用する
+    if (dynCapHz_ > 0.0) dynDirty_ = true;
+}
+
+void DspFreqEngine::updateInputHp(double fExtractHz) {
+    double f = std::clamp(fExtractHz, 4000.0, sampleRate_ * 0.40);
+
+    double w0_in = 2.0 * DSP_PI * f / sampleRate_;
+    double alpha_in = std::sin(w0_in) / (2.0 * 0.70710678);
+    double cosw0_in = std::cos(w0_in);
+
+    double in_b0 = (1.0 + cosw0_in) * 0.5;
+    double in_b1 = -(1.0 + cosw0_in);
+    double in_b2 = (1.0 + cosw0_in) * 0.5;
+    double in_a0 = 1.0 + alpha_in;
+    double in_a1 = -2.0 * cosw0_in;
+    double in_a2 = 1.0 - alpha_in;
+
+    double inv_in_a0 = 1.0 / in_a0;
+    in_hp_b0_ = in_b0 * inv_in_a0;
+    in_hp_b1_ = in_b1 * inv_in_a0;
+    in_hp_b2_ = in_b2 * inv_in_a0;
+    in_hp_a1_ = in_a1 * inv_in_a0;
+    in_hp_a2_ = in_a2 * inv_in_a0;
+}
+
+double DspFreqEngine::effectiveExtractHz() const {
+    return (dynCapHz_ > 0.0) ? std::min(fExtract_, dynCapHz_) : fExtract_;
+}
+
+void DspFreqEngine::setDynamicSbrState(double extractCapHz, double gainScale) {
+    dynCapHz_ = extractCapHz;
+    dynGainScale_ = gainScale;
+    // 実効抽出周波数が適用済みの値から 25Hz を超えて変わる場合のみ係数差し替えを予約する
+    if (std::abs(effectiveExtractHz() - lastAppliedEffExtract_) > 25.0) {
+        dynDirty_ = true;
+    }
 }
 
 void DspFreqEngine::reset() {
@@ -149,6 +172,18 @@ void DspFreqEngine::reset() {
 
 void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
     if (isBypass_ || !left || !right || numFrames == 0) return;
+
+    // Dynamic SBR: 予約された係数差し替えをブロック境界でのみ適用する
+    // (フィルタ状態はリセットしないためクリックノイズにならない)
+    if (dynDirty_) {
+        double effExtract = effectiveExtractHz();
+        updateInputHp(effExtract);
+        lastAppliedEffExtract_ = effExtract;
+        dynDirty_ = false;
+    }
+
+    // Dynamic SBR のゲイン倍率は targetGain_ の消費点すべてに共通する最上流で一度だけ掛ける
+    const double effTargetGain = static_cast<double>(targetGain_) * dynGainScale_;
 
     for (size_t i = 0; i < numFrames; ++i) {
         double inL = static_cast<double>(left[i]);
@@ -234,10 +269,10 @@ void DspFreqEngine::processStereo(float* left, float* right, size_t numFrames) {
         double baseMidGain = isRichHarmonics_ ? 0.24f : 0.18f;
         double baseSideGain = isRichHarmonics_ ? 0.28f : 0.22f;
 
-        double targetGainMid = std::min(rmsMid * (isRichHarmonics_ ? 0.85 : 0.70), static_cast<double>(targetGain_ * modeGainScale_ * baseMidGain)) * floorGateMid;
+        double targetGainMid = std::min(rmsMid * (isRichHarmonics_ ? 0.85 : 0.70), effTargetGain * modeGainScale_ * baseMidGain) * floorGateMid;
         smoothedGainMid_ += (targetGainMid - smoothedGainMid_) * ((targetGainMid > smoothedGainMid_) ? 0.040 : 0.004);
 
-        double targetGainSide = std::min(rmsSide * (isRichHarmonics_ ? 1.00 : 0.90), static_cast<double>(targetGain_ * modeGainScale_ * baseSideGain)) * floorGateSide;
+        double targetGainSide = std::min(rmsSide * (isRichHarmonics_ ? 1.00 : 0.90), effTargetGain * modeGainScale_ * baseSideGain) * floorGateSide;
         smoothedGainSide_ += (targetGainSide - smoothedGainSide_) * ((targetGainSide > smoothedGainSide_) ? 0.045 : 0.005);
 
         double normMid = std::clamp(hiMid / (rmsMid * 1.414 + 1e-5), -2.5, 2.5);

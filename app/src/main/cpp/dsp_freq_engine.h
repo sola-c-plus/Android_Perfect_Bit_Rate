@@ -8,7 +8,10 @@ public:
     void reset();
     void processStereo(float* left, float* right, size_t numFrames);
     void setPerformanceMode(PerformanceMode mode) { perfMode_ = mode; }
-    
+    // Dynamic SBR: 抽出開始点の上限キャップ (Hz, <=0 で無効) と倍音ゲイン倍率を受け取る。
+    // 係数の差し替えは次回 processStereo の先頭でブロック境界でのみ行う。
+    void setDynamicSbrState(double extractCapHz, double gainScale);
+
     void setRichHarmonics(bool enabled) {
         if (isRichHarmonics_ != enabled) {
             isRichHarmonics_ = enabled;
@@ -18,6 +21,9 @@ public:
     bool isRichHarmonics() const { return isRichHarmonics_; }
 
 private:
+    void updateInputHp(double fExtractHz);
+    double effectiveExtractHz() const;
+
     FreqMode mode_ = FreqMode::AUTO_AI;
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
     double sampleRate_ = 48000.0;
@@ -25,6 +31,12 @@ private:
     bool isRichHarmonics_ = false;
     float targetGain_ = 0.22f;
     double fExtract_ = 13000.0;
+
+    // Dynamic SBR の制御状態 (フィルタ状態ではないため reset() では消去しない)
+    double dynCapHz_ = 0.0;
+    double dynGainScale_ = 1.0;
+    bool dynDirty_ = false;
+    double lastAppliedEffExtract_ = 13000.0;
 
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;
