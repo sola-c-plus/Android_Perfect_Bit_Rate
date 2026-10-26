@@ -208,7 +208,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:gravity="center_vertical">
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -244,6 +245,56 @@
                     android:thumb="@drawable/switch_thumb_white"
                     app:track="@drawable/switch_track_walkman_outline"
                     android:checked="true" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/dividerUi3"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1C1C1C"
+                android:layout_marginBottom="12dp" />
+
+            <!-- HAPTIC FEEDBACK -->
+            <LinearLayout
+                android:id="@+id/layoutSectionHaptic"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textHapticTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="HAPTIC FEEDBACK (触覚フィードバック)"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
+
+                    <TextView
+                        android:id="@+id/textHapticSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="ボタン操作時に振動でフィードバック"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/dialogSwitchHaptic"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:thumbTint="@null"
+                    app:trackTint="@null"
+                    android:thumb="@drawable/switch_thumb_white"
+                    app:track="@drawable/switch_track_walkman_outline" />
             </LinearLayout>
 
         </LinearLayout>

@@ -204,6 +204,11 @@ class BitPerfectPlaybackService : Service() {
             } else if (direction < 0) {
                 onCommandListener?.invoke("prev")
             }
+            if (direction != 0) {
+                // リモート再生扱いのこの経路は MainActivity のキー処理を通らないため、
+                // 曲送りが実際に発火した時に合わせて触覚フィードバックも鳴らす
+                this@BitPerfectPlaybackService.hapticTick(AppPreferences.get())
+            }
         }
     }
 
