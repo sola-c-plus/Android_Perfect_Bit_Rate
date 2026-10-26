@@ -280,13 +280,13 @@ void DspUpsampler::setDynamicSbr(bool enabled) {
 // Dynamic SBR のカットオフ検出。
 // 入力モノラル信号の 16kHz 1ポールHP エネルギー比から実効カットオフを推定し、
 // 512 サンプルブロック毎に FreqEngine へ「抽出開始点の上限キャップ」と
-// 「倍音ゲイン倍率」を渡す。チューニング定数はユーザーの聴感評価に基づき
-// 中程度の強さに調整済み (実機評価でさらに詰めうる前提)。
+// 「倍音ゲイン倍率」を渡す。チューニング定数は控えめな初期値であり、
+// 実機の聴感評価で調整しうる前提で置いている。
 void DspUpsampler::updateDynamicSbr(const float* inL, const float* inR, size_t numFrames, double inputRate) {
     constexpr int kSbrBlockSize = 512;        // 検出ブロック長 (サンプル)
-    constexpr double kRatioHi = 0.015;        // この比以上なら高域十分 (カットオフ 20kHz)
-    constexpr double kRatioLo = 0.0015;       // この比以下なら強い帯域制限 (カットオフ 8kHz)
-    constexpr double kAttack = 0.6;           // カットオフ低下への追従 (速い)
+    constexpr double kRatioHi = 0.02;         // この比以上なら高域十分 (カットオフ 20kHz)
+    constexpr double kRatioLo = 0.002;        // この比以下なら強い帯域制限 (カットオフ 8kHz)
+    constexpr double kAttack = 0.5;           // カットオフ低下への追従 (速い)
     constexpr double kRelease = 0.05;         // カットオフ回復への追従 (遅い)
 
     // 1ポール HP (16kHz @入力レート): y = a * (state + m - prev)
@@ -330,7 +330,7 @@ void DspUpsampler::updateDynamicSbr(const float* inL, const float* inR, size_t n
         double det = static_cast<double>(detectedCutoffHz_);
         double act = std::clamp((16000.0 - det) / 8000.0, 0.0, 1.0);
         double capHz = std::clamp(det * 0.95, 8000.0, 20000.0);
-        double gainScale = 1.0 + 0.75 * act;
+        double gainScale = 1.0 + 0.5 * act;
         freqEngine_.setDynamicSbrState(capHz, gainScale);
     }
 }
