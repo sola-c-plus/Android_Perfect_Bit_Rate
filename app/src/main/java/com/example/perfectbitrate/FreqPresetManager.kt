@@ -28,7 +28,8 @@ data class FreqPresetDef(
     var useLattice: Boolean,
     var useLrDither: Boolean,
     var useMsSpatial: Boolean,
-    var useDynamicSbr: Boolean
+    var useDynamicSbr: Boolean,
+    var qmfCrossoverHz: Float
 )
 
 object FreqPresetManager {
@@ -42,19 +43,21 @@ object FreqPresetManager {
     val GAIN_VALUES = floatArrayOf(0.16f, 0.18f, 0.20f, 0.22f, 0.24f, 0.26f)
     val FREQ_OPTIONS = arrayOf("10,000 Hz", "11,500 Hz", "12,000 Hz", "12,500 Hz", "13,000 Hz", "13,500 Hz", "13,800 Hz")
     val FREQ_VALUES = floatArrayOf(10000.0f, 11500.0f, 12000.0f, 12500.0f, 13000.0f, 13500.0f, 13800.0f)
+    val QMF_XOVER_OPTIONS = arrayOf("13,000 Hz", "14,300 Hz", "15,600 Hz", "16,250 Hz", "16,900 Hz", "18,200 Hz", "19,500 Hz")
+    val QMF_XOVER_VALUES = floatArrayOf(13000f, 14300f, 15600f, 16250f, 16900f, 18200f, 19500f)
 
     // ★ 280曲実測プロファイル完全適合プリセット初期値
     val DEFAULT_PRESETS = listOf(
-        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 13000f, false, false, false, false, false, false),
-        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.22f, 13000f, true, true, true, true, true, true),
+        FreqPresetDef(0, "OFF", 0, 0, 0, 0.0f, 13000f, false, false, false, false, false, false, 16900f),
+        FreqPresetDef(1, "Auto AI", 2, 1, 0, 0.22f, 13000f, true, true, true, true, true, true, 16900f),
         // 男性ボーカル: 格子型(Lattice), M/S空間, SBR をOFFにして太い芯と定位を最優先
-        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.20f, 12000f, true, true, false, true, false, false),
+        FreqPresetDef(2, "男性ボーカル", 2, 1, 0, 0.20f, 12000f, true, true, false, true, false, false, 15600f),
         // 女性ボーカル: 格子型とSBRをOFF、サ行刺さり防止と残響エアーをON
-        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.22f, 12500f, true, true, false, true, true, false),
+        FreqPresetDef(3, "女性ボーカル", 2, 1, 0, 0.22f, 12500f, true, true, false, true, true, false, 16250f),
         // パーカッション: アタック鈍化(-0.04dB)適合・QMFと空間拡散を排してパンチ最大化
-        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.18f, 13800f, false, true, true, true, false, false),
+        FreqPresetDef(4, "パーカッション", 2, 2, 2, 0.18f, 13800f, false, true, true, true, false, false, 18200f),
         // ストリングス: 弦摩擦音・自然倍音K2・撥弦追従Lattice
-        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.22f, 12500f, true, true, true, true, true, true)
+        FreqPresetDef(5, "ストリングス", 2, 3, 1, 0.22f, 12500f, true, true, true, true, true, true, 16250f)
     )
 
     val PRESETS = DEFAULT_PRESETS.map { it.copy() }.toMutableList()
@@ -115,12 +118,16 @@ object FreqPresetManager {
             NativeAudioEngine.nativeSetDynamicSbr(false)
             NativeAudioEngine.nativeSetTransientCustomParams(false, false)
             NativeAudioEngine.nativeSetFreqCustomParams(0.0f, 13000.0f)
+            // ★ 項目1: OFF 時も詳細パラメータを明示送信し、前プリセットの値が native に残留しないようにする
+            NativeAudioEngine.nativeSetFreqAdvancedParams(0, false, 16900f)
         } else {
             NativeAudioEngine.nativeSetFirFilterType(p.firType)
             NativeAudioEngine.nativeSetTransientMode(p.transientMode)
             NativeAudioEngine.nativeSetTransientCustomParams(p.useGroupDelay, p.useLattice)
             NativeAudioEngine.nativeSetFreqMode(p.id)
             NativeAudioEngine.nativeSetFreqCustomParams(p.gain, p.extractFreq)
+            // ★ 項目1: LPC アルゴリズム / QMF サブバンド分割 / QMF クロスオーバーを native へ配線
+            NativeAudioEngine.nativeSetFreqAdvancedParams(p.lpcAlgo, p.useQmf, p.qmfCrossoverHz)
             NativeAudioEngine.nativeSetMsSpatial(p.useMsSpatial)
             NativeAudioEngine.nativeSetDynamicSbr(p.useDynamicSbr)
         }
@@ -224,8 +231,9 @@ object FreqPresetManager {
                 val lpcView = dialogView.findViewById<View>(R.id.devSpinnerLpcAlgo) as? Spinner
                 val gainView = dialogView.findViewById<View>(R.id.devSpinnerGain) as? Spinner
                 val freqView = dialogView.findViewById<View>(R.id.devSpinnerExtractFreq) as? Spinner
+                val xoverView = dialogView.findViewById<View>(R.id.devSpinnerQmfXover) as? Spinner
 
-                listOf(transView, lpcView, gainView, freqView).forEach { v ->
+                listOf(transView, lpcView, gainView, freqView, xoverView).forEach { v ->
                     (v?.parent as? View)?.let {
                         it.isEnabled = !isOff
                         it.alpha = disableAlpha
@@ -255,6 +263,19 @@ object FreqPresetManager {
                     var minD = Float.MAX_VALUE
                     for (i in FREQ_VALUES.indices) {
                         val d = abs(FREQ_VALUES[i] - p.extractFreq)
+                        if (d < minD) {
+                            minD = d
+                            best = i
+                        }
+                    }
+                    sp.setSelection(best)
+                }
+
+                xoverView?.let { sp ->
+                    var best = 0
+                    var minD = Float.MAX_VALUE
+                    for (i in QMF_XOVER_VALUES.indices) {
+                        val d = abs(QMF_XOVER_VALUES[i] - p.qmfCrossoverHz)
                         if (d < minD) {
                             minD = d
                             best = i
@@ -338,6 +359,7 @@ object FreqPresetManager {
             val devSpLpc = setupAdapter(R.id.devSpinnerLpcAlgo, LPC_OPTIONS)
             val devSpGain = setupAdapter(R.id.devSpinnerGain, GAIN_OPTIONS)
             val devSpFreq = setupAdapter(R.id.devSpinnerExtractFreq, FREQ_OPTIONS)
+            val devSpQmfXover = setupAdapter(R.id.devSpinnerQmfXover, QMF_XOVER_OPTIONS)
 
             backDialogViewRef = WeakReference(dialogView)
 
@@ -359,6 +381,7 @@ object FreqPresetManager {
                 devSpLpc?.let { p.lpcAlgo = it.selectedItemPosition }
                 devSpGain?.let { p.gain = GAIN_VALUES[it.selectedItemPosition.coerceIn(0, GAIN_VALUES.size - 1)] }
                 devSpFreq?.let { p.extractFreq = FREQ_VALUES[it.selectedItemPosition.coerceIn(0, FREQ_VALUES.size - 1)] }
+                devSpQmfXover?.let { p.qmfCrossoverHz = QMF_XOVER_VALUES[it.selectedItemPosition.coerceIn(0, QMF_XOVER_VALUES.size - 1)] }
 
                 (dialogView.findViewById<View>(R.id.devSwitchQmf) as? SwitchCompat)?.let { p.useQmf = it.isChecked }
                 (dialogView.findViewById<View>(R.id.devSwitchGroupDelay) as? SwitchCompat)?.let { p.useGroupDelay = it.isChecked }
@@ -381,6 +404,7 @@ object FreqPresetManager {
             devSpLpc?.onItemSelectedListener = itemListener
             devSpGain?.onItemSelectedListener = itemListener
             devSpFreq?.onItemSelectedListener = itemListener
+            devSpQmfXover?.onItemSelectedListener = itemListener
 
             listOf(
                 R.id.devSwitchQmf, R.id.devSwitchGroupDelay, R.id.devSwitchLattice,
@@ -397,7 +421,7 @@ object FreqPresetManager {
                 sb.append("// ★ 実測最適化プリセット設定コード\n")
                 sb.append("// ========================================================\n")
                 PRESETS.forEach { pr ->
-                    sb.append("FreqPresetDef(${pr.id}, \"${pr.name}\", ${pr.firType}, ${pr.transientMode}, ${pr.lpcAlgo}, ${pr.gain}f, ${pr.extractFreq}f, ${pr.useQmf}, ${pr.useGroupDelay}, ${pr.useLattice}, ${pr.useLrDither}, ${pr.useMsSpatial}, ${pr.useDynamicSbr}),\n")
+                    sb.append("FreqPresetDef(${pr.id}, \"${pr.name}\", ${pr.firType}, ${pr.transientMode}, ${pr.lpcAlgo}, ${pr.gain}f, ${pr.extractFreq}f, ${pr.useQmf}, ${pr.useGroupDelay}, ${pr.useLattice}, ${pr.useLrDither}, ${pr.useMsSpatial}, ${pr.useDynamicSbr}, ${pr.qmfCrossoverHz}f),\n")
                 }
                 val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cb.setPrimaryClip(ClipData.newPlainText("PresetConfig", sb.toString()))

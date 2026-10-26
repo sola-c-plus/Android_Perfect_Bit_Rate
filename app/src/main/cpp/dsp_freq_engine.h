@@ -12,6 +12,11 @@ public:
     // 係数の差し替えは次回 processStereo の先頭でブロック境界でのみ行う。
     void setDynamicSbrState(double extractCapHz, double gainScale);
 
+    // Freq 詳細パラメータ: lpcAlgo は今回保持のみ (LPC の音響処理は次 PR で実装)。
+    // useQmf / qmfCrossoverHz は QMF サブバンド分割 (LR4 クロスオーバー) を駆動する。
+    // 制御値のため configure() では消去されず、reset() ではフィルタ状態のみ消去される。
+    void setAdvancedParams(int lpcAlgo, bool useQmf, double qmfCrossoverHz);
+
     void setRichHarmonics(bool enabled) {
         if (isRichHarmonics_ != enabled) {
             isRichHarmonics_ = enabled;
@@ -23,6 +28,7 @@ public:
 private:
     void updateInputHp(double fExtractHz);
     double effectiveExtractHz() const;
+    void updateQmfCrossover();
 
     FreqMode mode_ = FreqMode::AUTO_AI;
     PerformanceMode perfMode_ = PerformanceMode::STANDARD;
@@ -37,6 +43,27 @@ private:
     double dynGainScale_ = 1.0;
     bool dynDirty_ = false;
     double lastAppliedEffExtract_ = 13000.0;
+
+    // QMF / LPC の制御状態 (フィルタ状態ではないため reset() では消去しない)
+    int lpcAlgo_ = 0;              // 今回は保持のみ。音響処理は次 PR で実装する
+    bool useQmf_ = false;
+    double qmfXoverHz_ = 16900.0;  // ユーザー設定値 (実効値は updateQmfCrossover でクランプ)
+
+    // QMF クロスオーバー係数 (LR4: LP/HP とも RBJ Butterworth 双2次×2段、両段で同一係数)
+    double qmf_lp_b0_ = 1.0, qmf_lp_b1_ = 0.0, qmf_lp_b2_ = 0.0;
+    double qmf_lp_a1_ = 0.0, qmf_lp_a2_ = 0.0;
+    double qmf_hp_b0_ = 1.0, qmf_hp_b1_ = -2.0, qmf_hp_b2_ = 1.0;
+    double qmf_hp_a1_ = 0.0, qmf_hp_a2_ = 0.0;
+
+    // QMF クロスオーバーのフィルタ状態 (Mid/Side × LP/HP × 2段、reset() で消去)
+    double qmf_lp1_s1_mid_ = 0.0, qmf_lp1_s2_mid_ = 0.0;
+    double qmf_lp2_s1_mid_ = 0.0, qmf_lp2_s2_mid_ = 0.0;
+    double qmf_hp1_s1_mid_ = 0.0, qmf_hp1_s2_mid_ = 0.0;
+    double qmf_hp2_s1_mid_ = 0.0, qmf_hp2_s2_mid_ = 0.0;
+    double qmf_lp1_s1_side_ = 0.0, qmf_lp1_s2_side_ = 0.0;
+    double qmf_lp2_s1_side_ = 0.0, qmf_lp2_s2_side_ = 0.0;
+    double qmf_hp1_s1_side_ = 0.0, qmf_hp1_s2_side_ = 0.0;
+    double qmf_hp2_s1_side_ = 0.0, qmf_hp2_s2_side_ = 0.0;
 
     double in_hp_b0_ = 1.0, in_hp_b1_ = -2.0, in_hp_b2_ = 1.0;
     double in_hp_a1_ = 0.0, in_hp_a2_ = 0.0;

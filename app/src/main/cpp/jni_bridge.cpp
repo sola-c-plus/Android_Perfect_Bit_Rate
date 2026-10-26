@@ -27,6 +27,9 @@ static bool g_useGroupDelay = true;
 static bool g_useLattice = false;
 static bool g_isMsSpatial = false;
 static bool g_isDynamicSbr = false;
+static int g_currentLpcAlgo = 0;
+static bool g_isQmfEnabled = false;
+static float g_qmfCrossoverHz = 16900.0f;
 static bool g_isEqEnabled = false;
 static float g_currentEqGains[10] = {0.0f};
 
@@ -51,6 +54,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
         g_upsampler->setTransientCustomParams(g_useGroupDelay, g_useLattice);
         g_upsampler->setMsSpatial(g_isMsSpatial);
         g_upsampler->setDynamicSbr(g_isDynamicSbr);
+        g_upsampler->setFreqAdvancedParams(g_currentLpcAlgo, g_isQmfEnabled, static_cast<double>(g_qmfCrossoverHz));
         g_upsampler->getEqualizer().setEnabled(g_isEqEnabled);
         g_upsampler->getEqualizer().setAllGains(g_currentEqGains);
     }
@@ -161,6 +165,17 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(
     g_currentFreqExtractFreq = extractFreq;
     if (!g_upsampler) g_upsampler = new DspUpsampler();
     g_upsampler->setFreqCustomParams(gain, extractFreq);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqAdvancedParams(
+        JNIEnv *env, jobject thiz, jint lpcAlgo, jboolean useQmf, jfloat qmfCrossoverHz) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_currentLpcAlgo = lpcAlgo;
+    g_isQmfEnabled = (useQmf == JNI_TRUE);
+    g_qmfCrossoverHz = qmfCrossoverHz;
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setFreqAdvancedParams(g_currentLpcAlgo, g_isQmfEnabled, static_cast<double>(g_qmfCrossoverHz));
 }
 
 JNIEXPORT void JNICALL
