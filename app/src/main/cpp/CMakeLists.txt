@@ -4,10 +4,8 @@ project("perfectbitrate")
 add_library(
     native_audio_engine
     SHARED
-    aaudio_engine.cpp
     dsp_equalizer.cpp
     dsp_fir_stage.cpp
-    dsp_preecho.cpp
     dsp_transient.cpp
     dsp_freq_engine.cpp
     dsp_dc_phase.cpp
@@ -19,10 +17,8 @@ target_compile_options(native_audio_engine PRIVATE -std=c++17 -O3 -ffast-math -f
 target_link_options(native_audio_engine PRIVATE "-Wl,-z,max-page-size=16384" -flto)
 
 find_library(log-lib log)
-find_library(aaudio-lib aaudio)
 
 target_link_libraries(
     native_audio_engine
-    ${aaudio-lib}
     ${log-lib}
 )

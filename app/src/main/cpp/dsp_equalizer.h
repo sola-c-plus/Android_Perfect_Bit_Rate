@@ -16,7 +16,6 @@ public:
     ~DspEqualizer() = default;
 
     void setSampleRate(double sampleRate);
-    void setBandGain(int band, float gainDb);
     void setAllGains(const float* gains);
     void setEnabled(bool enabled);
     bool isEnabled() const { return enabled_; }

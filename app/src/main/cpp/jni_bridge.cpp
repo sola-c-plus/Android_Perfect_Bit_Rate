@@ -140,18 +140,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeMode(
-        JNIEnv *env, jobject thiz, jint mode) {
-    Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqMode(env, thiz, mode);
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetDseeCustomParams(
-        JNIEnv *env, jobject thiz, jint lpcAlgo, jfloat gain, jfloat extractFreq, jboolean useQmf) {
-    Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetFreqCustomParams(env, thiz, gain, extractFreq);
-}
-
-JNIEXPORT void JNICALL
 Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTransientMode(
         JNIEnv *env, jobject thiz, jint mode) {
     std::lock_guard<std::mutex> lock(g_dspMutex);
@@ -270,45 +258,6 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeProcessUpsample(
         env->SetByteArrayRegion(result, 0, static_cast<jsize>(outSize), reinterpret_cast<const jbyte*>(g_outDspBuffer.data()));
     }
     return result;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeOpen(
-        JNIEnv *env, jobject thiz,
-        jint sample_rate, jint channel_count, jint encoding, jint device_id) {
-    return 1;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeStart(JNIEnv *env, jobject thiz) {
-    return JNI_TRUE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeStop(JNIEnv *env, jobject thiz) {
-    return JNI_TRUE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeFlush(JNIEnv *env, jobject thiz) {
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeClose(JNIEnv *env, jobject thiz) {
-}
-
-JNIEXPORT jint JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeWriteByteArray(
-        JNIEnv *env, jobject thiz,
-        jbyteArray byte_array, jint offset, jint length) {
-    return length;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_example_perfectbitrate_NativeAudioEngine_nativeWriteDirect(
-        JNIEnv *env, jobject thiz,
-        jobject byte_buffer, jint offset, jint length) {
-    return length;
 }
 
 }

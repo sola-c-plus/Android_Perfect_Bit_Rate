@@ -36,8 +36,8 @@ YouTube Music に混在する **44.1kHz（AAC）音源を 48kHz に変換する�
 ### 2. 本アプリのアプローチ
 * **Android 14+ ハードウェアクロック完全同期 (`setPreferredMixerAttributes`):**  
   USB DAC 接続時に `MIXER_BEHAVIOR_BIT_PERFECT` を要求。音源のネイティブサンプリングレート（44.1kHz / 48kHz）に合わせて **DAC 内部の物理水晶発振器（クロック）をダイレクトに切り替え** ます。
-* **C++ AAudio 排他モードフォールバック (`AAudioEngine`):**  
-  48kHz 固定 MMAP を回避する `AAUDIO_PERFORMANCE_MODE_NONE` ＋ `AAUDIO_SHARING_MODE_EXCLUSIVE` による Lock-Free リングバッファ直結パイプライン。
+* **AudioTrack による直接出力:**  
+  再生は `BitPerfectPlaybackService` の AudioTrack 経由で行います。かつて用意されていた C++ AAudio 経路（`AAudioEngine`）は実際には接続されておらず未使用だったため、削除しました。
 * **GeckoView 内部 Web Audio API キャプチャ:**  
   内蔵 WebExtension により、デコードされた非圧縮 32-bit 浮動小数点 PCM をブラウザエンジンから直接インターセプト。OS 標準のオーディオ出力を一切経由しません。
 * **スタジオ級 64-bit DSP パイプライン:**  
@@ -117,13 +117,12 @@ YouTube Music に混在する **44.1kHz（AAC）音源を 48kHz に変換する�
 │  [Step 1] Polyphase Sinc FIR Upsampling (NEON 1x/2x/4x/8x)  │
 │           - Multistage Cascade (255 → 63 → 39 taps)         │
 │           - Linear / Minimum Phase Filter Transform         │
-│  [Step 2] Anti-Preecho & Bit Continuity (Ultra HQ)          │
-│  [Step 3] Transient Restorer (Lattice PARCOR & Group Delay) │
-│  [Step 4] FREQ Engine (直交多項式展開 & Rich Harmonics)     │
-│  [Step 5] M/S Spatial Ambience & 32-Band FFT Analysis       │
-│  [Step 6] 64-bit Double Precision 10-Band Biquad EQ         │
-│  [Step 7] DC Phase Linearizer (Analog Low-End Phase)        │
-│  [Step 8] Dithering (TPDF / High-Pass / Psychoacoustic SBM) │
+│  [Step 2] Transient Restorer (Lattice PARCOR & Group Delay) │
+│  [Step 3] FREQ Engine (直交多項式展開 & Rich Harmonics)     │
+│  [Step 4] M/S Spatial Ambience & 32-Band FFT Analysis       │
+│  [Step 5] 64-bit Double Precision 10-Band Biquad EQ         │
+│  [Step 6] DC Phase Linearizer (Analog Low-End Phase)        │
+│  [Step 7] Dithering (TPDF / High-Pass / Psychoacoustic SBM) │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                ┌───────────────┴───────────────┐
@@ -152,45 +151,39 @@ YouTube Music に混在する **44.1kHz（AAC）音源を 48kHz に変換する�
 └──────────────────────────────┬──────────────────────────────┘
 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 2. Anti-Preecho & Bit Continuity (Ultra HQ モード) │
-│ - 約3.5ms ルックアヘッドによるプリリンギング抑制 │
-│ - 2階差分予測による微小振幅ビット段差のスムージング │
-└──────────────────────────────┬──────────────────────────────┘
-▼
-┌─────────────────────────────────────────────────────────────┐
-│ 3. Transient Restorer │
+│ 2. Transient Restorer │
 │ - Lattice (PARCOR) 格子型適応予測器による過渡応答強調 │
 │ - 微分成分に基づく群遅延 (Group Delay) 補正 │
 └──────────────────────────────┬──────────────────────────────┘
 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 4. FREQ ENGINE (超高域倍音復元) │
+│ 3. FREQ ENGINE (超高域倍音復元) │
 │ - 3.2kHz フォルマント抽出によるブレス/子音サ行判定 │
 │ - 直交多項式展開による 2次・3次・4次高調波適応合成 │
 │ - RICH HARMONICS: 16kHz〜 偶数次倍音 (78%) ブレンド │
 └──────────────────────────────┬──────────────────────────────┘
 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 5. M/S Spatial Ambience & 32-Band FFT Spectrum Analyzer │
+│ 4. M/S Spatial Ambience & 32-Band FFT Spectrum Analyzer │
 │ - Side チャンネル過渡差分強調による残響空間超解像 │
 │ - 2048点 FFT デュアル解析 (低域補間 ＋ 40kHz ハイレゾ域) │
 └──────────────────────────────┬──────────────────────────────┘
 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 6. 64-bit Double Precision 10-Band Equalizer │
+│ 5. 64-bit Double Precision 10-Band Equalizer │
 │ - 64bit 倍精度 IIR バイカッド (桁落ちノイズゼロ化) │
 │ - 最適化 Q値 (1.15) による隣接帯域干渉排除 │
 │ - 自動クリップ防止 (Auto Headroom Attenuation) │
 └──────────────────────────────┬──────────────────────────────┘
 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 7. DC Phase Linearizer │
+│ 6. DC Phase Linearizer │
 │ - アナログアンプの低域結合トランス位相歪み再現 │
 │ - Type A / Type B (Low / Std / High: 2Hz〜8Hz) │
 └──────────────────────────────┬──────────────────────────────┘
 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 8. Dithering & Psychoacoustic Noise Shaping │
+│ 7. Dithering & Psychoacoustic Noise Shaping │
 │ - TPDF / High-Pass / SBM 模倣 Psychoacoustic シェービング│
 │ - LR 独立擬似乱数シードによるステレオ空間拡散 │
 └──────────────────────────────┬──────────────────────────────┘
@@ -254,15 +247,7 @@ YouTube Music に混在する **44.1kHz（AAC）音源を 48kHz に変換する�
 
 ---
 
-### 6. Anti-Preecho & ビット連続性補正 (`dsp_preecho.cpp`)
-* **Anti-Preecho (Ultra HQ モード):**  
-  約 3.5ms のルックアヘッドリングバッファを常時展開。直後に巨大なアタック（衝撃波）が控えていることを検知した場合、直前の微小信号に含まれる不自然なプリリンギングをピンポイントでアッテネート。
-* **Bit Continuity:**  
-  微小振幅領域（$-50\text{dB}$ 以下）における 2 階差分 $\Delta_1 - \Delta_2$ の不連続性を監視し、圧縮コーデック特有の階段状量子化ノイズを滑らかなカーブへと微細補間。
-
----
-
-### 7. ディザリング & ノイズシェービング (`dsp_upsampler.cpp`)
+### 6. ディザリング & ノイズシェービング (`dsp_upsampler.cpp`)
 * **TPDF:** 2系統の独立擬似乱数ジェネレータ（線形合同法）を用いた三角確率密度関数ディザー。
 * **High-Pass Shaped:** 1 次差分エラーフィードバックにより、量子化ノイズのエネルギーを可聴外の高域端へシフト。
 * **Psychoacoustic:** 4 次エラーフィードバックフィルター（係数: $+2.033, -2.165, +1.959, -0.827$）を採用。人間の最小可聴限界（等ラウドネス曲線）に基づき、耳が最も敏感な 2kHz〜5kHz の量子化ノイズを徹底的にマスキング（Walkman SBM 模倣）。
@@ -270,7 +255,7 @@ YouTube Music に混在する **44.1kHz（AAC）音源を 48kHz に変換する�
 
 ---
 
-### 8. 32-Band リアルタイム FFT スペクトラム解析 (`dsp_upsampler.cpp`)
+### 7. 32-Band リアルタイム FFT スペクトラム解析 (`dsp_upsampler.cpp`)
 * 2048 点の Hanning 窓 FFT をデュアル展開。
 * 低域（31.25Hz〜396Hz）は 2 倍間引き平均（実効分解能 2 倍）で精密解析し、高域は 2048 点フルレートで解析。
 * 31.25Hz から 40.0kHz までの全 32 バンドについて真の対数実効値（RMS dBFS）を算出し、ハイレゾ再生時の 20kHz 超の倍音成分まで UI 上にリアルタイム描画します。
@@ -400,13 +385,11 @@ Perfect_Bit_Rate/
 │   │   │   └── manifest.json            # GeckoView 組み込み WebExtension 定義
 │   │   ├── cpp/                         # C++17 ARM NEON ネイティブ DSP エンジン
 │   │   │   ├── CMakeLists.txt           # -O3, -ffast-math, -flto, 16KB Page Alignment
-│   │   │   ├── aaudio_engine.cpp / .h   # AAudio 排他モード & Lock-Free RingBuffer
 │   │   │   ├── dsp_types.h              # アライメントアロケータ, 共通定数・列挙型
 │   │   │   ├── dsp_equalizer.cpp / .h   # 64-bit 倍精度 10-Band Biquad EQ (Auto Headroom)
 │   │   │   ├── dsp_fir_stage.cpp / .h   # 単段 2x NEON FIR (多段カスケード用)
 │   │   │   ├── dsp_freq_engine.cpp / .h # FREQ ENGINE (超高域倍音復元 & Rich Harmonics)
 │   │   │   ├── dsp_transient.cpp / .h   # トランジェント復元 (Lattice PARCOR & Group Delay)
-│   │   │   ├── dsp_preecho.cpp / .h     # プリエコー抑制 & 微小振幅ビット連続性補正
 │   │   │   ├── dsp_dc_phase.cpp / .h    # DC Phase Linearizer (低域アナログ位相)
 │   │   │   ├── dsp_upsampler.cpp / .h   # 統合アップサンプラー, FFT スペクトラム, ディザ
 │   │   │   └── jni_bridge.cpp           # Kotlin ↔ C++ JNI インターフェース
