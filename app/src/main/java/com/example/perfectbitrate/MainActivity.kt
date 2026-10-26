@@ -95,6 +95,16 @@ class MainActivity : AppCompatActivity() {
     private var lastBitResetTime = 0L
     private var lastPcmTime = 0L
 
+    // ★ 再生ストール検出（ウォッチドッグ）用定数・状態。
+    //   ページ側メディア要素がストールすると paused=false のまま PCM だけが途絶するため、
+    //   isPlayingState だけでは検知できない。PCM の途絶時間で段階的に復旧を試みる。
+    private val STALL_THRESHOLD_MS = 3000L       // 再生中なのに PCM がこの時間来なければストールとみなす
+    private val STALL_STEP_INTERVAL_MS = 5000L   // 復旧ステップの間隔
+    private val WATCHDOG_RELOAD_COOLDOWN_MS = 60000L // ページ reload の最小間隔
+    private var stallRecoveryStep = 0            // 0=正常, 1=resume_audio 済, 2=play 済, 3=reload 済/見送り（以後は自動復旧しない）
+    private var lastStallActionTime = 0L
+    private var lastWatchdogReloadTime = 0L
+
     private var currentQueueSize = 0
     private var currentLatencyMs = 0
 
@@ -118,6 +128,8 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(-60f, -60f)
             }
 
+            checkPlaybackStall(now)
+
             if (isPlayingState && appPrefs.isSpectrumEnabled) {
                 NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
                 activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
@@ -130,6 +142,56 @@ class MainActivity : AppCompatActivity() {
             updateStatus()
             updateDialogPlayerUi()
             uiHandler.postDelayed(this, 30)
+        }
+    }
+
+    // ★ play_pause 判定: 通常は isPlayingState で切り替えるが、ストール中（再生状態だが
+    //   PCM が途絶）は pause ではなく play を送り、復旧を試みる。
+    private fun isPcmFlowing(): Boolean =
+        lastPcmTime != 0L && System.currentTimeMillis() - lastPcmTime <= STALL_THRESHOLD_MS
+
+    private fun resolvePlayPauseCommand(): String =
+        if (isPlayingState && isPcmFlowing()) "pause" else "play"
+
+    // ★ PCM ストール・ウォッチドッグ: 再生中なのに PCM が途絶していたら、resume_audio →
+    //   play → ページ reload の順に段階的に復旧を試みる。PCM が復帰するか一時停止されれば
+    //   エピソードはリセットされ、reload は 60 秒に 1 回までしか行わない。
+    private fun checkPlaybackStall(now: Long) {
+        if (!isPlayingState || lastPcmTime == 0L) {
+            stallRecoveryStep = 0
+            return
+        }
+        val pcmGap = now - lastPcmTime
+        if (pcmGap <= STALL_THRESHOLD_MS) {
+            stallRecoveryStep = 0
+            return
+        }
+        // 再生中なのに PCM が途絶している（ページ側ストールの疑い）→ 段階的に復旧を試みる
+        if (stallRecoveryStep == 0) {
+            stallRecoveryStep = 1
+            lastStallActionTime = now
+            Log.w("MainActivity", "★ PCM stall detected (${pcmGap}ms), sending resume_audio")
+            geckoController.sendCommand("resume_audio")
+        } else if (now - lastStallActionTime >= STALL_STEP_INTERVAL_MS) {
+            lastStallActionTime = now
+            when (stallRecoveryStep) {
+                1 -> {
+                    stallRecoveryStep = 2
+                    Log.w("MainActivity", "★ PCM stall persists, sending play")
+                    geckoController.sendCommand("play")
+                }
+                2 -> {
+                    stallRecoveryStep = 3
+                    if (now - lastWatchdogReloadTime >= WATCHDOG_RELOAD_COOLDOWN_MS) {
+                        lastWatchdogReloadTime = now
+                        Log.w("MainActivity", "★ PCM stall persists, reloading page")
+                        geckoController.reload()
+                    } else {
+                        Log.w("MainActivity", "★ PCM stall persists, reload skipped (cooldown)")
+                    }
+                }
+                else -> { /* step 3 以降は自動復旧しない（ユーザー操作に委ねる） */ }
+            }
         }
     }
 
@@ -498,7 +560,7 @@ class MainActivity : AppCompatActivity() {
             },
             onPlayerCommand = { cmd ->
                 if (cmd == "play_pause") {
-                    geckoController.sendCommand(if (isPlayingState) "pause" else "play")
+                    geckoController.sendCommand(resolvePlayPauseCommand())
                 } else {
                     geckoController.sendCommand(cmd)
                 }
@@ -532,7 +594,7 @@ class MainActivity : AppCompatActivity() {
             },
             onPlayerCommand = { cmd ->
                 if (cmd == "play_pause") {
-                    geckoController.sendCommand(if (isPlayingState) "pause" else "play")
+                    geckoController.sendCommand(resolvePlayPauseCommand())
                 } else {
                     geckoController.sendCommand(cmd)
                 }
