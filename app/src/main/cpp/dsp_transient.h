@@ -27,4 +27,11 @@ private:
     double envFastL_ = 0.0, envSlowL_ = 0.0;
     double envFastR_ = 0.0, envSlowR_ = 0.0;
     double prevSampleL_ = 0.0, prevSampleR_ = 0.0;
+
+    // 群遅延補正用オールパス (1次×2段直列、L/R独立)。係数は configure() で設定。
+    double gdA_ = 0.0;
+    double gdX1L_ = 0.0, gdY1L_ = 0.0;
+    double gdX2L_ = 0.0, gdY2L_ = 0.0;
+    double gdX1R_ = 0.0, gdY1R_ = 0.0;
+    double gdX2R_ = 0.0, gdY2R_ = 0.0;
 };
