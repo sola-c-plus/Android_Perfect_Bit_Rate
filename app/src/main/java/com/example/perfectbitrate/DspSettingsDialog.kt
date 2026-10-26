@@ -587,9 +587,18 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        btnPlayPause?.setOnClickListener { onPlayerCommand("play_pause") }
-        btnPrev.setOnClickListener { onPlayerCommand("prev") }
-        btnNext.setOnClickListener { onPlayerCommand("next") }
+        btnPlayPause?.setOnClickListener {
+            it.hapticTick(appPrefs)
+            onPlayerCommand("play_pause")
+        }
+        btnPrev.setOnClickListener {
+            it.hapticTick(appPrefs)
+            onPlayerCommand("prev")
+        }
+        btnNext.setOnClickListener {
+            it.hapticTick(appPrefs)
+            onPlayerCommand("next")
+        }
 
         seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -617,7 +626,10 @@ class DspSettingsDialog(
         textCurrentTime?.setOnClickListener(dismissClickListener)
         textTotalTime?.setOnClickListener(dismissClickListener)
 
-        btnClose.setOnClickListener { bottomSheetDialog.dismiss() }
+        btnClose.setOnClickListener {
+            it.hapticTick(appPrefs)
+            bottomSheetDialog.dismiss()
+        }
 
         bottomSheetDialog.setOnDismissListener {
             walkmanEqView = null

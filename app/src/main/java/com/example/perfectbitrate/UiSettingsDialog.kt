@@ -62,6 +62,7 @@ class UiSettingsDialog(
         val btnClose = view.findViewById<ImageButton>(R.id.btnUiDialogClose)
         val switchAdBlock = view.findViewById<SwitchCompat>(R.id.dialogSwitchAdBlock)
         val switchSysMonitor = view.findViewById<SwitchCompat>(R.id.dialogSwitchSysMonitor)
+        val switchHaptic = view.findViewById<SwitchCompat>(R.id.dialogSwitchHaptic)
         val spinnerTheme = view.findViewById<Spinner>(R.id.dialogSpinnerTheme)
         val btnBatteryIgnore = view.findViewById<Button>(R.id.btnBatteryIgnore)
 
@@ -79,7 +80,7 @@ class UiSettingsDialog(
         val appPrefs = AppPreferences.get()
 
         if (!isDarkTheme) {
-            applyLightModeStyle(view, btnClose, switchAdBlock, switchSysMonitor, spinnerTheme, btnPrev, btnNext, btnPlayPause!!)
+            applyLightModeStyle(view, btnClose, switchAdBlock, switchSysMonitor, switchHaptic, spinnerTheme, btnPrev, btnNext, btnPlayPause!!)
         }
 
         bottomSheetDialog.setOnShowListener {
@@ -138,9 +139,25 @@ class UiSettingsDialog(
             onAdBlockChanged(isChecked)
         }
 
-        btnPlayPause?.setOnClickListener { onPlayerCommand("play_pause") }
-        btnPrev.setOnClickListener { onPlayerCommand("prev") }
-        btnNext.setOnClickListener { onPlayerCommand("next") }
+        switchHaptic.isChecked = appPrefs.isHapticFeedbackEnabled
+        switchHaptic.setOnCheckedChangeListener { _, isChecked ->
+            appPrefs.isHapticFeedbackEnabled = isChecked
+            // ON にした瞬間にスイッチ自身で1回鳴らしてプレビューにする
+            if (isChecked) switchHaptic.hapticTick(appPrefs)
+        }
+
+        btnPlayPause?.setOnClickListener {
+            it.hapticTick(appPrefs)
+            onPlayerCommand("play_pause")
+        }
+        btnPrev.setOnClickListener {
+            it.hapticTick(appPrefs)
+            onPlayerCommand("prev")
+        }
+        btnNext.setOnClickListener {
+            it.hapticTick(appPrefs)
+            onPlayerCommand("next")
+        }
 
         seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -170,7 +187,10 @@ class UiSettingsDialog(
         textCurrentTime?.setOnClickListener(dismissClickListener)
         textTotalTime?.setOnClickListener(dismissClickListener)
 
-        btnClose.setOnClickListener { bottomSheetDialog.dismiss() }
+        btnClose.setOnClickListener {
+            it.hapticTick(appPrefs)
+            bottomSheetDialog.dismiss()
+        }
 
         bottomSheetDialog.setOnDismissListener {
             textTrackTitle = null
@@ -252,6 +272,7 @@ class UiSettingsDialog(
         btnClose: ImageButton,
         switchAdBlock: SwitchCompat,
         switchSysMonitor: SwitchCompat,
+        switchHaptic: SwitchCompat,
         spinnerTheme: Spinner,
         btnPrev: ImageButton,
         btnNext: ImageButton,
@@ -266,8 +287,11 @@ class UiSettingsDialog(
         view.findViewById<TextView>(R.id.textSysMonitorSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<TextView>(R.id.textAdBlockTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textAdBlockSub)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<TextView>(R.id.textHapticTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+        view.findViewById<TextView>(R.id.textHapticSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<View>(R.id.dividerUi1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
         view.findViewById<View>(R.id.dividerUi2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+        view.findViewById<View>(R.id.dividerUi3)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
 
         val swTrackLight = ContextCompat.getDrawable(activity, R.drawable.switch_track_walkman_outline_light)
         val swThumbLight = ContextCompat.getDrawable(activity, R.drawable.switch_thumb_light)
@@ -275,6 +299,8 @@ class UiSettingsDialog(
         switchAdBlock.thumbDrawable = swThumbLight
         switchSysMonitor.trackDrawable = swTrackLight
         switchSysMonitor.thumbDrawable = swThumbLight
+        switchHaptic.trackDrawable = swTrackLight
+        switchHaptic.thumbDrawable = swThumbLight
 
         btnClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
         btnClose.setColorFilter(Color.parseColor("#1C1C1E"))

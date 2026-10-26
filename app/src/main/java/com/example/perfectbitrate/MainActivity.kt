@@ -443,14 +443,23 @@ class MainActivity : AppCompatActivity() {
         registerAudioDeviceCallback()
         applyThemeUi(currentThemeMode)
 
-        btnReload.setOnClickListener { reloadDirectStream() }
-        btnDspSettings.setOnClickListener { showDspSettingsDialog() }
+        btnReload.setOnClickListener {
+            it.hapticTick(appPrefs)
+            reloadDirectStream()
+        }
+        btnDspSettings.setOnClickListener {
+            it.hapticTick(appPrefs)
+            showDspSettingsDialog()
+        }
         btnDspSettings.setOnLongClickListener {
             Toast.makeText(this, "DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
             showDevPresetsDialog()
             true
         }
-        btnUiSettings.setOnClickListener { showUiSettingsDialog() }
+        btnUiSettings.setOnClickListener {
+            it.hapticTick(appPrefs)
+            showUiSettingsDialog()
+        }
 
         uiHandler.post(uiUpdateRunnable)
     }
@@ -651,6 +660,8 @@ class MainActivity : AppCompatActivity() {
                 if (event?.repeatCount == 0) {
                     if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) geckoController.sendCommand("next")
                     else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) geckoController.sendCommand("prev")
+                    // 曲送りが発火した押下でのみ1回鳴らす（長押しリピートでは鳴らさない）
+                    mainRootLayout.hapticTick(appPrefs)
                 }
                 return true
             }
