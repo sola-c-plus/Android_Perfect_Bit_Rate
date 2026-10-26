@@ -101,9 +101,31 @@ class MainActivity : AppCompatActivity() {
     private val STALL_THRESHOLD_MS = 3000L       // 再生中なのに PCM がこの時間来なければストールとみなす
     private val STALL_STEP_INTERVAL_MS = 5000L   // 復旧ステップの間隔
     private val WATCHDOG_RELOAD_COOLDOWN_MS = 60000L // ページ reload の最小間隔
-    private var stallRecoveryStep = 0            // 0=正常, 1=resume_audio 済, 2=play 済, 3=reload 済/見送り（以後は自動復旧しない）
+    private var stallRecoveryStep = 0            // 0=正常, 1=resume_audio 済, 2=play 済, 3=reload 段, 4=セッション再生成 済（以後は自動復旧しない）
     private var lastStallActionTime = 0L
     private var lastWatchdogReloadTime = 0L
+
+    // ★ 最終段: GeckoSession 再生成（ページ reload でも PCM が戻らない場合のみ）。
+    //   実機で「通知系（progress/meta/flush）は生きているのに PCM だけ全途絶し、
+    //   スキップでもページ reload でも直らず、アプリ再起動でのみ復活する」事象を
+    //   2 回観測したための段。ページ内操作では届かない、セッション寿命に紐づく
+    //   捕捉経路の死を想定し、セッション自体を作り直す。
+    private val SESSION_RECREATE_DELAY_MS = 10000L     // reload 後、PCM 復帰を待つ時間
+    private val SESSION_RECREATE_COOLDOWN_MS = 300000L // セッション再生成の最小間隔（5分）
+    private val RECREATE_PLAY_DELAY_MS = 5000L         // 再生成後、play を送るまでの最小待ち時間
+    private val RECREATE_FOLLOWUP_TIMEOUT_MS = 60000L  // 再生成フォローアップの打ち切り
+    private var watchdogReloadDoneInEpisode = false    // このエピソードで reload を実際に実施したか
+    private var sessionRecreateDoneInEpisode = false   // このエピソードで再生成段を処理済みか（発火/見送り共通）
+    private var lastSessionRecreateTime = 0L           // 最後にセッション再生成を実施した時刻（クールダウン判定）
+    private var sessionRecreatePendingTime = 0L        // 再生成を実施し復帰フォローアップ中の時刻（0=フォローアップなし）
+    private var lastPageSignalTime = 0L                // content.js から通知が最後に届いた時刻（ページ生存判定用）
+
+    // ★ ユーザーの再生意思: アプリ経由の明示操作で最後に送ったコマンドから保持する。
+    //   isPlayingState はページ要素の paused で毎秒上書きされ、Gecko 側都合のポーズと
+    //   ユーザーのポーズを区別できないため、セッション再生成の発火条件にはこちらを使う。
+    //   明示ポーズで false、明示 play/next/prev で true。ページ UI 上のポーズは
+    //   isPlayingState 経由でエピソード自体を閉じるので、そちらでも守られる。
+    private var userWantsPlayback = true
 
     private var currentQueueSize = 0
     private var currentLatencyMs = 0
@@ -129,6 +151,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             checkPlaybackStall(now)
+            checkRecreateFollowUp(now)
 
             if (isPlayingState && appPrefs.isSpectrumEnabled) {
                 NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
@@ -154,16 +177,19 @@ class MainActivity : AppCompatActivity() {
         if (isPlayingState && isPcmFlowing()) "pause" else "play"
 
     // ★ PCM ストール・ウォッチドッグ: 再生中なのに PCM が途絶していたら、resume_audio →
-    //   play → ページ reload の順に段階的に復旧を試みる。PCM が復帰するか一時停止されれば
-    //   エピソードはリセットされ、reload は 60 秒に 1 回までしか行わない。
+    //   play → ページ reload → GeckoSession 再生成 の順に段階的に復旧を試みる。
+    //   PCM が復帰するか一時停止されればエピソードはリセットされ、reload は 60 秒に
+    //   1 回まで、セッション再生成は 5 分に 1 回までしか行わない。
+    //   ステップ 1〜3 の発火条件・タイミングは従来どおりで、ステップ 4（再生成）だけが
+    //   追加の発火条件（reload 実施済み + ユーザーの再生意思）を持つ。
     private fun checkPlaybackStall(now: Long) {
         if (!isPlayingState || lastPcmTime == 0L) {
-            stallRecoveryStep = 0
+            resetStallEpisode()
             return
         }
         val pcmGap = now - lastPcmTime
         if (pcmGap <= STALL_THRESHOLD_MS) {
-            stallRecoveryStep = 0
+            resetStallEpisode()
             return
         }
         // 再生中なのに PCM が途絶している（ページ側ストールの疑い）→ 段階的に復旧を試みる
@@ -184,14 +210,106 @@ class MainActivity : AppCompatActivity() {
                     stallRecoveryStep = 3
                     if (now - lastWatchdogReloadTime >= WATCHDOG_RELOAD_COOLDOWN_MS) {
                         lastWatchdogReloadTime = now
+                        watchdogReloadDoneInEpisode = true
                         Log.w("MainActivity", "★ PCM stall persists, reloading page")
                         geckoController.reload()
                     } else {
                         Log.w("MainActivity", "★ PCM stall persists, reload skipped (cooldown)")
                     }
                 }
-                else -> { /* step 3 以降は自動復旧しない（ユーザー操作に委ねる） */ }
+                3 -> trySessionRecreate(now)
+                else -> { /* step 4 以降は自動復旧しない（ユーザー操作に委ねる） */ }
             }
+        }
+    }
+
+    private fun resetStallEpisode() {
+        stallRecoveryStep = 0
+        watchdogReloadDoneInEpisode = false
+        sessionRecreateDoneInEpisode = false
+    }
+
+    // ★ 最終段: ページ reload でも PCM が戻らない場合に限り、GeckoSession 自体を
+    //   作り直す。発火条件は全て満たすこと:
+    //   - このエピソードで reload を実際に実施済みで、実施から
+    //     SESSION_RECREATE_DELAY_MS 経っても PCM が戻っていない
+    //     （この関数自体が PCM 途絶中のステップ 3 からしか呼ばれない）
+    //   - ユーザーが再生意思を持っている（明示ポーズが記録されていない）
+    //   - セッション再生成のクールダウン（5 分）を過ぎている
+    //   発火・見送りいずれの場合も 1 エピソードに 1 回だけ判定し、以後は繰り返さない。
+    private fun trySessionRecreate(now: Long) {
+        if (sessionRecreateDoneInEpisode) return
+        if (!watchdogReloadDoneInEpisode) return
+        if (now - lastWatchdogReloadTime < SESSION_RECREATE_DELAY_MS) return
+        sessionRecreateDoneInEpisode = true
+
+        if (!userWantsPlayback) {
+            Log.w("MainActivity", "★ Session recreate skipped (user pause intent)")
+            return
+        }
+        if (now - lastSessionRecreateTime < SESSION_RECREATE_COOLDOWN_MS) {
+            Log.w("MainActivity", "★ Session recreate skipped (cooldown)")
+            return
+        }
+
+        stallRecoveryStep = 4
+        lastSessionRecreateTime = now
+        Log.w("MainActivity", "★ PCM stall persists after page reload, recreating Gecko session")
+        playbackService?.resetBuffer("session")
+        if (geckoController.recreateSession()) {
+            // 復帰フォローアップへ: 新ページの生存が確認できたら checkRecreateFollowUp が play を 1 回送る
+            sessionRecreatePendingTime = now
+        } else {
+            Log.w("MainActivity", "★ Session recreate failed, giving up this episode")
+        }
+    }
+
+    // ★ セッション再生成後の復帰フォローアップ（uiUpdateRunnable から周期的に呼ばれる）。
+    //   新セッションのページから通知（progress/meta/state = lastPageSignalTime）が届き、
+    //   再生成から RECREATE_PLAY_DELAY_MS 以上経っても PCM が戻っていなければ、
+    //   ユーザーが再生中だった場合に限り play を 1 回送って復帰を試みる。
+    //   "play" は content.js 側でキャプチャの再アタッチも兼ねるため、ページ側の
+    //   自動再生状態に依存せず復帰を試みられる。PCM が復帰したら成功として終了し、
+    //   ページの生存が確認できないまま RECREATE_FOLLOWUP_TIMEOUT_MS を過ぎたら打ち切る。
+    //   このフォローアップはストール・エピソードの状態（stallRecoveryStep）とは独立に
+    //   動く: 再生成直後の新ページは「停止中」と報告し得て、エピソード側は閉じても
+    //   play の送出まではこちらで担保するため。
+    private fun checkRecreateFollowUp(now: Long) {
+        if (sessionRecreatePendingTime == 0L) return
+        if (lastPcmTime > sessionRecreatePendingTime) {
+            Log.i("MainActivity", "★ PCM recovered after session recreate")
+            sessionRecreatePendingTime = 0L
+            return
+        }
+        if (!userWantsPlayback) {
+            // ユーザーが再生を止めた → play は送らずフォローアップを終了する
+            sessionRecreatePendingTime = 0L
+            return
+        }
+        val pageAlive = lastPageSignalTime > sessionRecreatePendingTime
+        if (pageAlive && now - sessionRecreatePendingTime >= RECREATE_PLAY_DELAY_MS) {
+            Log.w("MainActivity", "★ Sending play after session recreate")
+            geckoController.sendCommand("play")
+            sessionRecreatePendingTime = 0L
+        } else if (now - sessionRecreatePendingTime > RECREATE_FOLLOWUP_TIMEOUT_MS) {
+            Log.w("MainActivity", "★ Session recreate follow-up timed out (no page signal)")
+            sessionRecreatePendingTime = 0L
+        }
+    }
+
+    // ★ ユーザーの明示操作による再生/ポーズ意思の記録（セッション再生成の発火条件用）。
+    //   追跡経路はアプリ経由の操作だけ:
+    //   - ダイアログのプレイヤーボタン（play_pause は解決後の実際のコマンドで記録）
+    //   - 通知/メディアセッション経由（Service の onCommandListener。ただし呼び出し側で
+    //     "pause" は渡されない: DAC 切断時の自動ポーズも同じ経路で流れ、区別できないため。
+    //     通知ポーズはページ側 paused の伝播で isPlayingState が落ち、エピソード自体が
+    //     成立しなくなるので、記録しなくても意図せぬ再生成にはつながらない）
+    //   - Vol ロック時の音量キー曲送り
+    //   ウォッチドッグ自身の送信（resume_audio/play）はここを通らないため影響しない。
+    private fun noteUserPlaybackIntent(command: String) {
+        when (command) {
+            "pause" -> userWantsPlayback = false
+            "play", "next", "prev" -> userWantsPlayback = true
         }
     }
 
@@ -287,7 +405,13 @@ class MainActivity : AppCompatActivity() {
                 walkmanLevelMeter?.setLevels(dbL, dbR)
             }
 
-            playbackService?.onCommandListener = { cmd -> geckoController.sendCommand(cmd) }
+            playbackService?.onCommandListener = { cmd ->
+                // ★ 再生意思の記録: 通知/メディアセッションの明示操作（play/next/prev）のみ。
+                //   "pause" は DAC 切断時の自動ポーズも同じ経路で流れるため記録しない
+                //   （noteUserPlaybackIntent のコメント参照）。
+                if (cmd != "pause") noteUserPlaybackIntent(cmd)
+                geckoController.sendCommand(cmd)
+            }
             playbackService?.onSeekListener = { pos -> geckoController.sendSeek(pos) }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -375,6 +499,7 @@ class MainActivity : AppCompatActivity() {
                     updateStatus()
                 }
                 override fun onMetadata(title: String, artist: String, artworkUrl: String) {
+                    lastPageSignalTime = System.currentTimeMillis()
                     currentTitle = title
                     currentArtist = artist
                     playbackService?.updateMetadata(title, artist, artworkUrl)
@@ -393,6 +518,7 @@ class MainActivity : AppCompatActivity() {
                     updateDialogPlayerUi()
                 }
                 override fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean) {
+                    lastPageSignalTime = System.currentTimeMillis()
                     currentPosition = currentMs
                     currentDuration = durationMs
                     isPlayingState = isPlaying
@@ -400,6 +526,7 @@ class MainActivity : AppCompatActivity() {
                     updateDialogPlayerUi()
                 }
                 override fun onState(isPlaying: Boolean) {
+                    lastPageSignalTime = System.currentTimeMillis()
                     isPlayingState = isPlaying
                     if (!isPlaying) {
                         peakDbL = -60f
@@ -568,11 +695,9 @@ class MainActivity : AppCompatActivity() {
                 updateStatus()
             },
             onPlayerCommand = { cmd ->
-                if (cmd == "play_pause") {
-                    geckoController.sendCommand(resolvePlayPauseCommand())
-                } else {
-                    geckoController.sendCommand(cmd)
-                }
+                val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
+                noteUserPlaybackIntent(resolved)
+                geckoController.sendCommand(resolved)
             },
             onSeekTo = { pos -> geckoController.sendSeek(pos) },
             onDismiss = {
@@ -602,11 +727,9 @@ class MainActivity : AppCompatActivity() {
                 updateStatus()
             },
             onPlayerCommand = { cmd ->
-                if (cmd == "play_pause") {
-                    geckoController.sendCommand(resolvePlayPauseCommand())
-                } else {
-                    geckoController.sendCommand(cmd)
-                }
+                val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
+                noteUserPlaybackIntent(resolved)
+                geckoController.sendCommand(resolved)
             },
             onSeekTo = { pos -> geckoController.sendSeek(pos) },
             onDismiss = { activePlayerDialog = null }
@@ -658,8 +781,13 @@ class MainActivity : AppCompatActivity() {
             if (isUsbDevice(activeOutputDevice)) {
                 playbackService?.lockSystemVolumeToMax()
                 if (event?.repeatCount == 0) {
-                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) geckoController.sendCommand("next")
-                    else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) geckoController.sendCommand("prev")
+                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                        noteUserPlaybackIntent("next")
+                        geckoController.sendCommand("next")
+                    } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                        noteUserPlaybackIntent("prev")
+                        geckoController.sendCommand("prev")
+                    }
                     // 曲送りが発火した押下でのみ1回鳴らす（長押しリピートでは鳴らさない）
                     mainRootLayout.hapticTick(appPrefs)
                 }

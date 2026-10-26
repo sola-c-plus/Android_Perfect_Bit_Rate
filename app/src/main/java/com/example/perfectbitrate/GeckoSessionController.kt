@@ -45,6 +45,30 @@ class GeckoSessionController(
         return false
     }
 
+    // ★ 拡張からのメッセージ受け口。セッション再生成時も同じデリゲートを使い回し、
+    //   新セッションに対しても installExtensionAndLoad() で登録し直す。
+    private val messageDelegate = object : WebExtension.MessageDelegate {
+        override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
+            safeToJson(message)?.let { handleIncomingMessage(it) }
+            return GeckoResult.fromValue(JSONObject())
+        }
+
+        override fun onConnect(port: WebExtension.Port) {
+            activePort = port
+            sendAdBlock(listener.isAdBlockEnabled())
+            sendWebTheme(listener.isDarkTheme())
+
+            port.setDelegate(object : WebExtension.PortDelegate {
+                override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                    safeToJson(message)?.let { handleIncomingMessage(it) }
+                }
+                override fun onDisconnect(port: WebExtension.Port) {
+                    if (activePort == port) activePort = null
+                }
+            })
+        }
+    }
+
     fun init() {
         val runtimeSettings = GeckoRuntimeSettings.Builder()
             .consoleOutput(true)
@@ -52,6 +76,13 @@ class GeckoSessionController(
             .build()
 
         geckoRuntime = GeckoRuntime.getDefault(activity)
+        openSession()
+    }
+
+    // ★ セッションの生成 → open → View へのアタッチ → 拡張インストール → 初期ナビゲーション。
+    //   起動時（init）と再生成（recreateSession）で全く同じ手順を踏むための共通処理。
+    private fun openSession() {
+        val runtime = geckoRuntime ?: return
 
         val sessionSettings = GeckoSessionSettings.Builder()
             .usePrivateMode(false)
@@ -60,16 +91,16 @@ class GeckoSessionController(
             .allowJavascript(true)
             .build()
 
-        geckoSession = GeckoSession(sessionSettings)
-        geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
+        val session = GeckoSession(sessionSettings)
+        session.setPriorityHint(GeckoSession.PRIORITY_HIGH)
 
-        geckoSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
+        session.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 this@GeckoSessionController.canGoBack = canGoBack
             }
         }
 
-        geckoSession.permissionDelegate = object : GeckoSession.PermissionDelegate {
+        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
             override fun onContentPermissionRequest(
                 session: GeckoSession,
                 perm: GeckoSession.PermissionDelegate.ContentPermission
@@ -83,54 +114,68 @@ class GeckoSessionController(
             }
         }
 
-        geckoRuntime?.let { runtime ->
-            geckoSession.open(runtime)
-            geckoView.setSession(geckoSession)
-            geckoSession.setActive(true)
-            geckoSession.setFocused(true)
-            geckoSession.setPriorityHint(GeckoSession.PRIORITY_HIGH)
+        geckoSession = session
+        canGoBack = false
 
-            val extensionLocation = "resource://android/assets/yt_capture_extension/"
-            val extensionId = "yt_capture@example.com"
+        session.open(runtime)
+        geckoView.setSession(session)
+        session.setActive(true)
+        session.setFocused(true)
+        session.setPriorityHint(GeckoSession.PRIORITY_HIGH)
 
-            val messageDelegate = object : WebExtension.MessageDelegate {
-                override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
-                    safeToJson(message)?.let { handleIncomingMessage(it) }
-                    return GeckoResult.fromValue(JSONObject())
-                }
+        installExtensionAndLoad()
+    }
 
-                override fun onConnect(port: WebExtension.Port) {
-                    activePort = port
-                    sendAdBlock(listener.isAdBlockEnabled())
-                    sendWebTheme(listener.isDarkTheme())
+    // ★ WebExtension をインストールし、デリゲート登録後に YouTube Music へ遷移する。
+    //   セッション側の setMessageDelegate はセッション毎に必要なため、再生成時も必ず通る。
+    private fun installExtensionAndLoad() {
+        val runtime = geckoRuntime ?: return
 
-                    port.setDelegate(object : WebExtension.PortDelegate {
-                        override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                            safeToJson(message)?.let { handleIncomingMessage(it) }
-                        }
-                        override fun onDisconnect(port: WebExtension.Port) {
-                            if (activePort == port) activePort = null
-                        }
-                    })
-                }
-            }
+        val extensionLocation = "resource://android/assets/yt_capture_extension/"
+        val extensionId = "yt_capture@example.com"
 
-            runtime.webExtensionController
-                .ensureBuiltIn(extensionLocation, extensionId)
-                .accept({ extension ->
-                    if (extension != null) {
-                        activity.runOnUiThread {
-                            extension.setMessageDelegate(messageDelegate, "browser")
-                            geckoSession.webExtensionController.setMessageDelegate(extension, messageDelegate, "browser")
-                            geckoSession.loadUri("https://music.youtube.com")
-                        }
-                    }
-                }, { e ->
-                    Log.e("GeckoController", "WebExtension error", e)
+        runtime.webExtensionController
+            .ensureBuiltIn(extensionLocation, extensionId)
+            .accept({ extension ->
+                if (extension != null) {
                     activity.runOnUiThread {
+                        extension.setMessageDelegate(messageDelegate, "browser")
+                        geckoSession.webExtensionController.setMessageDelegate(extension, messageDelegate, "browser")
                         geckoSession.loadUri("https://music.youtube.com")
                     }
-                })
+                }
+            }, { e ->
+                Log.e("GeckoController", "WebExtension error", e)
+                activity.runOnUiThread {
+                    geckoSession.loadUri("https://music.youtube.com")
+                }
+            })
+    }
+
+    // ★ セッション再生成: 現セッションを閉じ、起動時と同一手順で新規セッションを作り直す。
+    //   ページ reload では復旧しない PCM 全途絶（セッション寿命に紐づく捕捉経路の死に、
+    //   アプリ再起動でのみ直る事象）に対する最終復旧段として MainActivity の
+    //   ウォッチドッグから呼ばれる。失敗しても例外を外へ漏らさず false を返す
+    //   （呼び出し側はそこで打ち切り、通常利用を壊さない）。
+    fun recreateSession(): Boolean {
+        if (geckoRuntime == null || !::geckoSession.isInitialized) {
+            Log.w("GeckoController", "★ Session recreate skipped (not initialized)")
+            return false
+        }
+        return try {
+            Log.w("GeckoController", "★ Recreating Gecko session")
+            activePort = null
+            try {
+                geckoSession.close()
+            } catch (e: Exception) {
+                Log.w("GeckoController", "★ Old session close failed", e)
+            }
+            openSession()
+            Log.w("GeckoController", "★ Gecko session recreated")
+            true
+        } catch (e: Exception) {
+            Log.e("GeckoController", "★ Session recreate failed", e)
+            false
         }
     }
 
