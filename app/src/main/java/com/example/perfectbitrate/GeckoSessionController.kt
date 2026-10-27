@@ -24,6 +24,7 @@ class GeckoSessionController(
         fun onMetadata(title: String, artist: String, artworkUrl: String)
         fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean)
         fun onState(isPlaying: Boolean)
+        fun onPlaybackIntent(wantsPlaying: Boolean)
         fun isDarkTheme(): Boolean
         fun isAdBlockEnabled(): Boolean
     }
@@ -287,6 +288,11 @@ class GeckoSessionController(
             "state" -> {
                 val isPlaying = msg.optBoolean("playing", true)
                 listener.onState(isPlaying)
+                // ページ側の再生意思（state 通知に含まれている場合のみ）。
+                // ページ UI の操作も含めた意思の追跡に使う（MainActivity 側参照）。
+                if (msg.has("userWantsPlaying")) {
+                    listener.onPlaybackIntent(msg.optBoolean("userWantsPlaying", true))
+                }
             }
         }
     }

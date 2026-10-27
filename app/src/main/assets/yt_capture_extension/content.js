@@ -240,14 +240,27 @@ function attachAudioPipeline(mediaEl) {
         mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
         mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
 
+        // ★ 'pause' イベントは Gecko / OS 都合の強制ポーズでも発火するため、ここでは
+        //   再生意思（userWantsPlaying）を落とさない。意思を落とすのは明示的な pause()
+        //   呼び出し（下の prototype フック）とネイティブ 'pause' コマンドだけにする。
+        //   強制ポーズで意思が残ることで、keepPlayingInBackground の再開とアプリ側
+        //   ウォッチドッグの段階復旧が届くようになる（従来はここで意思が落ち、
+        //   両経路とも止まる二重ロックになっていた）。
+        //   state 通知には現在の意思も含め、アプリ側がページ側の意思を追跡できるようにする。
         mediaEl.addEventListener('pause', () => {
-            userWantsPlaying = false;
-            postNativeMessage({ type: "state", playing: false });
+            postNativeMessage({ type: "state", playing: false, userWantsPlaying: userWantsPlaying });
         }, { passive: true });
 
         mediaEl.addEventListener('play', () => {
             userWantsPlaying = true;
-            postNativeMessage({ type: "state", playing: true });
+            postNativeMessage({ type: "state", playing: true, userWantsPlaying: userWantsPlaying });
+        }, { passive: true });
+
+        // ★ 自然終了は「再生を続けたい意思なし」として扱い、終了した要素を
+        //   ウォッチドッグ等に蘇生させない。
+        mediaEl.addEventListener('ended', () => {
+            userWantsPlaying = false;
+            postNativeMessage({ type: "state", playing: false, userWantsPlaying: userWantsPlaying });
         }, { passive: true });
     }
 
@@ -274,7 +287,7 @@ function attachAudioPipeline(mediaEl) {
                 if (mediaEl.paused || mediaEl.ended) return;
                 if (!userWantsPlaying) {
                     userWantsPlaying = true;
-                    postNativeMessage({ type: "state", playing: true });
+                    postNativeMessage({ type: "state", playing: true, userWantsPlaying: userWantsPlaying });
                 }
                 if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
                     ctx.resume().catch(() => {});
@@ -325,14 +338,14 @@ HTMLMediaElement.prototype.play = function() {
     scanStreamCodec();
     attachAudioPipeline(mediaEl);
     getAudioContext();
-    postNativeMessage({ type: "state", playing: true });
+    postNativeMessage({ type: "state", playing: true, userWantsPlaying: userWantsPlaying });
     return origPlay.apply(this, arguments);
 };
 
 const origPause = HTMLMediaElement.prototype.pause;
 HTMLMediaElement.prototype.pause = function() {
     userWantsPlaying = false;
-    postNativeMessage({ type: "state", playing: false });
+    postNativeMessage({ type: "state", playing: false, userWantsPlaying: userWantsPlaying });
     return origPause.apply(this, arguments);
 };
 

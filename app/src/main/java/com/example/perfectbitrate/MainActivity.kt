@@ -105,26 +105,32 @@ class MainActivity : AppCompatActivity() {
     private var lastStallActionTime = 0L
     private var lastWatchdogReloadTime = 0L
 
-    // ★ 最終段: GeckoSession 再生成（ページ reload でも PCM が戻らない場合のみ）。
+    // ★ 最終段: GeckoSession 再生成（ステップ 3 でも PCM が戻らない場合のみ）。
     //   実機で「通知系（progress/meta/flush）は生きているのに PCM だけ全途絶し、
     //   スキップでもページ reload でも直らず、アプリ再起動でのみ復活する」事象を
     //   2 回観測したための段。ページ内操作では届かない、セッション寿命に紐づく
     //   捕捉経路の死を想定し、セッション自体を作り直す。
-    private val SESSION_RECREATE_DELAY_MS = 10000L     // reload 後、PCM 復帰を待つ時間
+    private val SESSION_RECREATE_DELAY_MS = 10000L     // ステップ 3 到達後、再生成段の判定まで待つ時間
     private val SESSION_RECREATE_COOLDOWN_MS = 300000L // セッション再生成の最小間隔（5分）
     private val RECREATE_PLAY_DELAY_MS = 5000L         // 再生成後、play を送るまでの最小待ち時間
     private val RECREATE_FOLLOWUP_TIMEOUT_MS = 60000L  // 再生成フォローアップの打ち切り
-    private var watchdogReloadDoneInEpisode = false    // このエピソードで reload を実際に実施したか
+    private var stallStep3Since = 0L                   // ステップ 3（reload 段）に到達した時刻（再生成段の遅延判定の起点）
     private var sessionRecreateDoneInEpisode = false   // このエピソードで再生成段を処理済みか（発火/見送り共通）
     private var lastSessionRecreateTime = 0L           // 最後にセッション再生成を実施した時刻（クールダウン判定）
     private var sessionRecreatePendingTime = 0L        // 再生成を実施し復帰フォローアップ中の時刻（0=フォローアップなし）
     private var lastPageSignalTime = 0L                // content.js から通知が最後に届いた時刻（ページ生存判定用）
 
-    // ★ ユーザーの再生意思: アプリ経由の明示操作で最後に送ったコマンドから保持する。
-    //   isPlayingState はページ要素の paused で毎秒上書きされ、Gecko 側都合のポーズと
-    //   ユーザーのポーズを区別できないため、セッション再生成の発火条件にはこちらを使う。
-    //   明示ポーズで false、明示 play/next/prev で true。ページ UI 上のポーズは
-    //   isPlayingState 経由でエピソード自体を閉じるので、そちらでも守られる。
+    // ★ ユーザーの再生意思: ウォッチドッグ全体の発火条件はこちらを主軸にする。
+    //   isPlayingState はページ要素の paused で毎秒上書きされ、Gecko 側都合の
+    //   強制ポーズとユーザーのポーズを区別できないため、ゲートには使わない。
+    //   記録経路は2つで、最後の操作が勝つ:
+    //   - アプリ経由の明示操作（noteUserPlaybackIntent: ポーズで false、
+    //     play/next/prev で true）
+    //   - content.js の state 通知に含まれるページ側の意思（onPlaybackIntent）。
+    //     ページ UI のポーズも pause() フック経由で意思 false として届く。一方、
+    //     要素の 'pause' イベントだけでは意思は落ちない（強制ポーズでも発火する
+    //     ため、content.js 側でそう実装されている）ので、強制ポーズ時は意思が
+    //     true のまま残り、ウォッチドッグの段階復旧が届く。
     private var userWantsPlayback = true
 
     private var currentQueueSize = 0
@@ -176,14 +182,16 @@ class MainActivity : AppCompatActivity() {
     private fun resolvePlayPauseCommand(): String =
         if (isPlayingState && isPcmFlowing()) "pause" else "play"
 
-    // ★ PCM ストール・ウォッチドッグ: 再生中なのに PCM が途絶していたら、resume_audio →
-    //   play → ページ reload → GeckoSession 再生成 の順に段階的に復旧を試みる。
-    //   PCM が復帰するか一時停止されればエピソードはリセットされ、reload は 60 秒に
-    //   1 回まで、セッション再生成は 5 分に 1 回までしか行わない。
-    //   ステップ 1〜3 の発火条件・タイミングは従来どおりで、ステップ 4（再生成）だけが
-    //   追加の発火条件（reload 実施済み + ユーザーの再生意思）を持つ。
+    // ★ PCM ストール・ウォッチドッグ: ユーザーが再生を望んでいるのに PCM が途絶
+    //   していたら、resume_audio → play → ページ reload → GeckoSession 再生成の
+    //   順に段階的に復旧を試みる。ゲートは「再生意思（userWantsPlayback）があり、
+    //   PCM が途絶している」ことなので、メディア要素が paused に倒れる型の
+    //   ストールでも全段が届く。逆に、意図的な一時停止中（再生意思なし）は
+    //   絶対に発火しない。
+    //   PCM が復帰するか再生意思がなくなればエピソードはリセットされ、reload は
+    //   60 秒に 1 回まで、セッション再生成は 5 分に 1 回までしか行わない。
     private fun checkPlaybackStall(now: Long) {
-        if (!isPlayingState || lastPcmTime == 0L) {
+        if (!userWantsPlayback || lastPcmTime == 0L) {
             resetStallEpisode()
             return
         }
@@ -208,9 +216,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 2 -> {
                     stallRecoveryStep = 3
+                    stallStep3Since = now
                     if (now - lastWatchdogReloadTime >= WATCHDOG_RELOAD_COOLDOWN_MS) {
                         lastWatchdogReloadTime = now
-                        watchdogReloadDoneInEpisode = true
                         Log.w("MainActivity", "★ PCM stall persists, reloading page")
                         geckoController.reload()
                     } else {
@@ -225,22 +233,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun resetStallEpisode() {
         stallRecoveryStep = 0
-        watchdogReloadDoneInEpisode = false
+        stallStep3Since = 0L
         sessionRecreateDoneInEpisode = false
     }
 
-    // ★ 最終段: ページ reload でも PCM が戻らない場合に限り、GeckoSession 自体を
-    //   作り直す。発火条件は全て満たすこと:
-    //   - このエピソードで reload を実際に実施済みで、実施から
-    //     SESSION_RECREATE_DELAY_MS 経っても PCM が戻っていない
-    //     （この関数自体が PCM 途絶中のステップ 3 からしか呼ばれない）
-    //   - ユーザーが再生意思を持っている（明示ポーズが記録されていない）
+    // ★ 最終段: ステップ 3（reload 段）でも PCM が戻らない場合に限り、GeckoSession
+    //   自体を作り直す。発火条件は全て満たすこと:
+    //   - ステップ 3 に到達してから SESSION_RECREATE_DELAY_MS 経っても PCM が
+    //     戻っていない（この関数自体が PCM 途絶中のステップ 3 からしか呼ばれない）。
+    //     reload がクールダウンでスキップされたエピソードでも、reload の実施有無に
+    //     依存せずここへ到達する
+    //   - ユーザーが再生意思を持っている（checkPlaybackStall のゲートでも
+    //     保証されるが、ここでも再確認する）
     //   - セッション再生成のクールダウン（5 分）を過ぎている
     //   発火・見送りいずれの場合も 1 エピソードに 1 回だけ判定し、以後は繰り返さない。
     private fun trySessionRecreate(now: Long) {
         if (sessionRecreateDoneInEpisode) return
-        if (!watchdogReloadDoneInEpisode) return
-        if (now - lastWatchdogReloadTime < SESSION_RECREATE_DELAY_MS) return
+        if (now - stallStep3Since < SESSION_RECREATE_DELAY_MS) return
         sessionRecreateDoneInEpisode = true
 
         if (!userWantsPlayback) {
@@ -254,7 +263,7 @@ class MainActivity : AppCompatActivity() {
 
         stallRecoveryStep = 4
         lastSessionRecreateTime = now
-        Log.w("MainActivity", "★ PCM stall persists after page reload, recreating Gecko session")
+        Log.w("MainActivity", "★ PCM stall persists in step 3, recreating Gecko session")
         playbackService?.resetBuffer("session")
         if (geckoController.recreateSession()) {
             // 復帰フォローアップへ: 新ページの生存が確認できたら checkRecreateFollowUp が play を 1 回送る
@@ -297,13 +306,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ★ ユーザーの明示操作による再生/ポーズ意思の記録（セッション再生成の発火条件用）。
-    //   追跡経路はアプリ経由の操作だけ:
+    // ★ ユーザーの明示操作による再生/ポーズ意思の記録（ウォッチドッグの発火条件用）。
+    //   記録経路のうちアプリ経由分がこちら（ページ側分は onPlaybackIntent）:
     //   - ダイアログのプレイヤーボタン（play_pause は解決後の実際のコマンドで記録）
     //   - 通知/メディアセッション経由（Service の onCommandListener。ただし呼び出し側で
     //     "pause" は渡されない: DAC 切断時の自動ポーズも同じ経路で流れ、区別できないため。
-    //     通知ポーズはページ側 paused の伝播で isPlayingState が落ち、エピソード自体が
-    //     成立しなくなるので、記録しなくても意図せぬ再生成にはつながらない）
+    //     通知ポーズは 'pause' コマンドを受けた content.js が意思 false を state 通知で
+    //     返し、onPlaybackIntent 経由で記録されるので、ここで記録しなくても意図せぬ
+    //     復旧・再生成にはつながらない）
     //   - Vol ロック時の音量キー曲送り
     //   ウォッチドッグ自身の送信（resume_audio/play）はここを通らないため影響しない。
     private fun noteUserPlaybackIntent(command: String) {
@@ -539,6 +549,13 @@ class MainActivity : AppCompatActivity() {
                     }
                     playbackService?.updatePlaybackState(isPlaying)
                     updateDialogPlayerUi()
+                }
+                override fun onPlaybackIntent(wantsPlaying: Boolean) {
+                    // ページ側の再生意思をアプリ側の記録へ反映する（ページ UI の
+                    // 操作を含む）。アプリ経由の記録（noteUserPlaybackIntent）と
+                    // 最後の操作が勝つ。強制ポーズでは意思は落ちてこない
+                    // （content.js 側の仕様）。
+                    userWantsPlayback = wantsPlaying
                 }
                 override fun isDarkTheme(): Boolean = isDarkThemeActive()
                 override fun isAdBlockEnabled(): Boolean = appPrefs.isAdBlockEnabled
