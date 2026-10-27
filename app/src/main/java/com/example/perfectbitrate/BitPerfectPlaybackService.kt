@@ -260,6 +260,11 @@ class BitPerfectPlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // AppPreferences の初期化は MainActivity.onCreate だけに依存していたため、
+        // Service 単独で生成される経路では onAdjustVolume の AppPreferences.get() が
+        // 未初期化で IllegalStateException になりうる。init は冪等（初期化済みなら
+        // 何もしない）ので、Service 側でも初期化を保証しておく。
+        AppPreferences.init(this)
         NativeAudioEngine.nativeInit()
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
