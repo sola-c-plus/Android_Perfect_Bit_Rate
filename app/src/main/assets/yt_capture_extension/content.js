@@ -14,6 +14,12 @@ let port = null;
 let lastCodecName = "";
 let adBlockEnabled = true;
 let userWantsPlaying = false;
+let lastUserGestureAt = 0;
+// ★ ページ UI の意図的ポーズ判定ウィンドウ: 'pause' イベント直前この時間以内に
+//   ページ内ユーザー操作（pointerdown / keydown 等）があれば、ユーザーのポーズと
+//   みなして再生意思を落とす。操作が無い 'pause' は Gecko / OS 都合の強制ポーズ
+//   として意思を維持する（詳細は attachAudioPipeline の 'pause' リスナ参照）。
+const USER_GESTURE_PAUSE_WINDOW_MS = 500;
 let detectedStreamRate = 48000;
 let isWhiteThemeActive = false;
 
@@ -240,14 +246,24 @@ function attachAudioPipeline(mediaEl) {
         mediaEl.addEventListener('loadedmetadata', onTrackChanged, { passive: true });
         mediaEl.addEventListener('emptied', onTrackChanged, { passive: true });
 
-        // ★ 'pause' イベントは Gecko / OS 都合の強制ポーズでも発火するため、ここでは
-        //   再生意思（userWantsPlaying）を落とさない。意思を落とすのは明示的な pause()
-        //   呼び出し（下の prototype フック）とネイティブ 'pause' コマンドだけにする。
-        //   強制ポーズで意思が残ることで、keepPlayingInBackground の再開とアプリ側
-        //   ウォッチドッグの段階復旧が届くようになる（従来はここで意思が落ち、
-        //   両経路とも止まる二重ロックになっていた）。
+        // ★ 'pause' イベントの扱い。ページ UI のポーズと Gecko / OS 都合の強制ポーズを
+        //   ここで判別する。prototype フック（下の origPause 上書き）は content script の
+        //   分離ワールドでしか効かず、ページ側スクリプトからの pause() 呼び出しは
+        //   捕捉できないため、ページ UI のポーズを伝える唯一の手がかりはこのイベントと
+        //   直前のユーザー操作の有無になる。
+        //   - 直近 USER_GESTURE_PAUSE_WINDOW_MS 以内にページ内ユーザー操作があれば
+        //     意図的ポーズとみなし、再生意思を落とす（keepPlayingInBackground や
+        //     ウォッチドッグに即座に再開されないようにする）。
+        //   - 操作が無ければ強制ポーズとして意思を維持し、keepPlayingInBackground の
+        //     再開とアプリ側ウォッチドッグの段階復旧が届くようにする（従来はここで
+        //     無条件に意思が落ち、両経路とも止まる二重ロックになっていた）。
+        //   ネイティブ 'pause' コマンド経由では handleNativeMessage が先に意思を
+        //   落としてから pause() を呼ぶため、この判定と競合しない。
         //   state 通知には現在の意思も含め、アプリ側がページ側の意思を追跡できるようにする。
         mediaEl.addEventListener('pause', () => {
+            if (userWantsPlaying && Date.now() - lastUserGestureAt <= USER_GESTURE_PAUSE_WINDOW_MS) {
+                userWantsPlaying = false;
+            }
             postNativeMessage({ type: "state", playing: false, userWantsPlaying: userWantsPlaying });
         }, { passive: true });
 
@@ -471,6 +487,9 @@ setInterval(checkMetadata, 1500);
 
 ['click', 'touchstart', 'touchend', 'pointerdown', 'keydown'].forEach(evt => {
     document.addEventListener(evt, () => {
+        // ★ ページ UI の意図的ポーズ判定用に、最終ユーザー操作時刻を記録する
+        //   （'pause' イベントリスナが USER_GESTURE_PAUSE_WINDOW_MS と照合する）。
+        lastUserGestureAt = Date.now();
         getAudioContext();
         findAndAttachVideo();
     }, { passive: true, capture: true });
