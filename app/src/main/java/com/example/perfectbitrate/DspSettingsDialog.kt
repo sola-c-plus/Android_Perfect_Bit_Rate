@@ -82,6 +82,8 @@ class DspSettingsDialog(
 
     private val perfModeOptions = arrayOf("Eco (省電力)", "普通 (標準)", "超高音質 (フルスペック)")
 
+    private val truePeakCeilingOptions = arrayOf("0 dBTP", "-0.5 dBTP", "-1.0 dBTP (推奨)", "-2.0 dBTP")
+
     data class BuiltinEqPreset(val id: String, val name: String, val gains: FloatArray)
 
     private val builtinPresets = listOf(
@@ -141,6 +143,9 @@ class DspSettingsDialog(
 
         val layoutSectionEq = view.findViewById<View>(R.id.layoutSectionEq)
         val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
+        val layoutSectionTruePeak = view.findViewById<View>(R.id.layoutSectionTruePeak)
+        val switchTruePeak = view.findViewById<SwitchCompat>(R.id.dialogSwitchTruePeak)
+        val spinnerTruePeakCeiling = view.findViewById<Spinner>(R.id.dialogSpinnerTruePeakCeiling)
         val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
         val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
         val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
@@ -171,7 +176,8 @@ class DspSettingsDialog(
                 view, btnClose, switchDirectSource, switchEqEnable, switchSpectrumEnable,
                 switchCascadeFir, switchVolLock, btnEqEdit, btnEqSave, btnEqDelete!!, btnEqFlat, btnEqPlus, btnEqMinus,
                 textEqBandFreq, textEqGainValue, spinnerBitDepth, spinnerDither, spinnerDcPhase,
-                spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!
+                spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!,
+                switchTruePeak, spinnerTruePeakCeiling
             )
         }
 
@@ -198,6 +204,16 @@ class DspSettingsDialog(
         switchRichHarmonics?.setOnCheckedChangeListener { _, isChecked ->
             appPrefs.isRichHarmonicsEnabled = isChecked
             NativeAudioEngine.nativeSetRichHarmonics(isChecked)
+        }
+
+        // ★ True Peak ガード: Prefs 保存＋native 即時送信 (RichHarmonics と同型)。
+        //   天井スピナーはスイッチ ON のときだけ有効 (Direct 時は updateDspSectionsState が優先)。
+        switchTruePeak.isChecked = appPrefs.isTruePeakGuardEnabled
+        spinnerTruePeakCeiling.isEnabled = !appPrefs.isDirectSource && appPrefs.isTruePeakGuardEnabled
+        switchTruePeak.setOnCheckedChangeListener { _, isChecked ->
+            appPrefs.isTruePeakGuardEnabled = isChecked
+            NativeAudioEngine.nativeSetTruePeakGuard(isChecked, appPrefs.truePeakCeilingDb())
+            spinnerTruePeakCeiling.isEnabled = !appPrefs.isDirectSource && isChecked
         }
 
         walkmanEqView?.isLightMode = !isDarkTheme
@@ -230,10 +246,13 @@ class DspSettingsDialog(
 
             layoutSectionEq.alpha = dspAlpha
             layoutSectionDither.alpha = dspAlpha
+            layoutSectionTruePeak.alpha = dspAlpha
             layoutSectionDcPhase.alpha = dspAlpha
             layoutSectionUpsample.alpha = dspAlpha
 
             spinnerDither.isEnabled = dspEnabled
+            switchTruePeak.isEnabled = dspEnabled
+            spinnerTruePeakCeiling.isEnabled = dspEnabled && switchTruePeak.isChecked
             spinnerDcPhase.isEnabled = dspEnabled
             spinnerUpsample.isEnabled = dspEnabled
 
@@ -559,6 +578,19 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
+        val truePeakCeilingAdapter = ArrayAdapter(activity, spinnerLayout, truePeakCeilingOptions).apply { setDropDownViewResource(spinnerLayout) }
+        spinnerTruePeakCeiling.adapter = truePeakCeilingAdapter
+        spinnerTruePeakCeiling.setSelection(appPrefs.selectedTruePeakCeiling.coerceIn(0, truePeakCeilingOptions.lastIndex))
+        spinnerTruePeakCeiling.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                if (appPrefs.selectedTruePeakCeiling != position) {
+                    appPrefs.selectedTruePeakCeiling = position
+                    NativeAudioEngine.nativeSetTruePeakGuard(appPrefs.isTruePeakGuardEnabled, appPrefs.truePeakCeilingDb())
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
         val perfAdapter = ArrayAdapter(activity, spinnerLayout, perfModeOptions).apply { setDropDownViewResource(spinnerLayout) }
         spinnerPerfMode?.adapter = perfAdapter
         spinnerPerfMode?.setSelection(appPrefs.selectedPerfMode.coerceIn(0, 2))
@@ -738,7 +770,9 @@ class DspSettingsDialog(
         spinnerEqPreset: Spinner,
         btnPrev: ImageButton,
         btnNext: ImageButton,
-        btnPlayPause: ImageButton
+        btnPlayPause: ImageButton,
+        switchTruePeak: SwitchCompat,
+        spinnerTruePeakCeiling: Spinner
     ) {
         view.setBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
         view.findViewById<View>(R.id.layoutSectionDirectSource)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
@@ -750,6 +784,12 @@ class DspSettingsDialog(
         view.findViewById<TextView>(R.id.textBitDepthSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<TextView>(R.id.textDitherTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textDitherSub)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<TextView>(R.id.textTruePeakTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+        view.findViewById<TextView>(R.id.textTruePeakSub)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<TextView>(R.id.textTruePeakCeilingLabel)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<View>(R.id.dividerDspTruePeak)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+        spinnerTruePeakCeiling.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+        spinnerTruePeakCeiling.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
         view.findViewById<TextView>(R.id.textDcPhaseTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textDcPhaseSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<TextView>(R.id.textPerfModeTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
@@ -788,7 +828,7 @@ class DspSettingsDialog(
 
         val swTrackLight = ContextCompat.getDrawable(activity, R.drawable.switch_track_walkman_outline_light)
         val swThumbLight = ContextCompat.getDrawable(activity, R.drawable.switch_thumb_light)
-        listOf(switchDirectSource, switchEqEnable, switchSpectrumEnable, switchCascadeFir, switchVolLock).forEach { sw ->
+        listOf(switchDirectSource, switchEqEnable, switchSpectrumEnable, switchCascadeFir, switchVolLock, switchTruePeak).forEach { sw ->
             sw.trackDrawable = swTrackLight
             sw.thumbDrawable = swThumbLight
         }

@@ -9,6 +9,7 @@ add_library(
     dsp_transient.cpp
     dsp_freq_engine.cpp
     dsp_dc_phase.cpp
+    dsp_true_peak_guard.cpp
     dsp_upsampler.cpp
     jni_bridge.cpp
 )

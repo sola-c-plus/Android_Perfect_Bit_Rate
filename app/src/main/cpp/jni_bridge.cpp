@@ -32,6 +32,8 @@ static bool g_isQmfEnabled = false;
 static float g_qmfCrossoverHz = 16900.0f;
 static bool g_isEqEnabled = false;
 static float g_currentEqGains[10] = {0.0f};
+static bool g_isTruePeakGuardEnabled = true;
+static float g_truePeakCeilingDb = -1.0f;
 
 extern "C" {
 
@@ -57,6 +59,7 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeInit(JNIEnv *env, jobjec
         g_upsampler->setFreqAdvancedParams(g_currentLpcAlgo, g_isQmfEnabled, static_cast<double>(g_qmfCrossoverHz));
         g_upsampler->getEqualizer().setEnabled(g_isEqEnabled);
         g_upsampler->getEqualizer().setAllGains(g_currentEqGains);
+        g_upsampler->setTruePeakGuard(g_isTruePeakGuardEnabled, static_cast<double>(g_truePeakCeilingDb));
     }
 }
 
@@ -258,6 +261,34 @@ Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetSpectrum(
     jfloat* dst = env->GetFloatArrayElements(out_array, nullptr);
     if (dst) {
         g_upsampler->getSpectrum(dst);
+        env->ReleaseFloatArrayElements(out_array, dst, 0);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeSetTruePeakGuard(
+        JNIEnv *env, jobject thiz, jboolean enabled, jfloat ceiling_db) {
+    std::lock_guard<std::mutex> lock(g_dspMutex);
+    g_isTruePeakGuardEnabled = (enabled == JNI_TRUE);
+    g_truePeakCeilingDb = ceiling_db;
+    if (!g_upsampler) g_upsampler = new DspUpsampler();
+    g_upsampler->setTruePeakGuard(g_isTruePeakGuardEnabled, static_cast<double>(g_truePeakCeilingDb));
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_perfectbitrate_NativeAudioEngine_nativeGetTruePeakStats(
+        JNIEnv *env, jobject thiz, jfloatArray out_array) {
+    if (!out_array) return;
+    std::lock_guard<std::mutex> lock(g_dspMutex);
+    jfloat* dst = env->GetFloatArrayElements(out_array, nullptr);
+    if (dst) {
+        // [現在低減 dB, 最大低減 dB, 発動回数, キャップ到達回数] (表示専用)
+        float stats[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        if (g_upsampler) g_upsampler->getTruePeakStats(stats);
+        jsize len = env->GetArrayLength(out_array);
+        for (jsize i = 0; i < len && i < 4; ++i) {
+            dst[i] = stats[i];
+        }
         env->ReleaseFloatArrayElements(out_array, dst, 0);
     }
 }

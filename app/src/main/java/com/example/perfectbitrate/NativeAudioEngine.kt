@@ -36,6 +36,9 @@ object NativeAudioEngine {
     external fun nativeSetEqualizer(enabled: Boolean, gains: FloatArray)
     external fun nativeGetSpectrum(outArray: FloatArray)
 
+    external fun nativeSetTruePeakGuard(enabled: Boolean, ceilingDb: Float)
+    external fun nativeGetTruePeakStats(outArray: FloatArray)
+
     external fun nativeProcessUpsample(
         inBytes: ByteArray,
         inLength: Int,

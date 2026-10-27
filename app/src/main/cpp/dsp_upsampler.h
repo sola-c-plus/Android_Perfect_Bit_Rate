@@ -2,6 +2,7 @@
 
 #include "dsp_types.h"
 #include "dsp_equalizer.h"
+#include "dsp_true_peak_guard.h"
 #include "dsp_fir_stage.h"
 #include "dsp_transient.h"
 #include "dsp_freq_engine.h"
@@ -55,6 +56,14 @@ public:
 
     void setDynamicSbr(bool enabled);
     bool isDynamicSbr() const { return isDynamicSbr_; }
+
+    // True Peak ガード (独立最終段)。enabled と天井 (dBTP) を保持し、
+    // 実績出力レートでガードを構成する。Direct 時は process のバイパス分岐に
+    // 入らないため構造的に無効。
+    void setTruePeakGuard(bool enabled, double ceilingDb);
+    bool isTruePeakGuardEnabled() const { return truePeakEnabled_; }
+    // 統計: [現在低減 dB, 最大低減 dB, 発動回数, キャップ到達回数] (表示専用)
+    void getTruePeakStats(float* out4) const;
 
     size_t process(
         const uint8_t* inPcm,
@@ -120,6 +129,10 @@ private:
     double errHistR_[4] = {0.0, 0.0, 0.0, 0.0};
 
     DspEqualizer equalizer_;
+    DspTruePeakGuard truePeakGuard_;
+    // True Peak ガードの保持設定 (再構成でも失われないよう DspUpsampler が正を持つ)
+    bool truePeakEnabled_ = true;
+    double truePeakCeilingDb_ = -1.0;
     DspDcPhaseLinearizer dcPhaseLinearizer_;
     DspTransientRestorer transientRestorer_;
     DspFreqEngine freqEngine_;
