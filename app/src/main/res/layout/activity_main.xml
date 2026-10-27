@@ -150,9 +150,11 @@
         </LinearLayout>
 
         <!-- 段 3: PEAK L/R + バッファ健全度(BUF) & レンダリング遅延(LAT) + 有効ビット深度(BIT ACTIVE) -->
+        <!-- 高さ固定 (18dp): SysMonitor 文字列の伸長でこの行が縦に伸びると、下の GeckoView が
+             その分リサイズされてしまうため、行の高さ変動そのものを無くす。子は center_vertical で中央揃え。 -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="18dp"
             android:orientation="horizontal"
             android:layout_marginTop="2dp"
             android:gravity="center_vertical">
@@ -165,7 +167,9 @@
                 android:text="PEAK  L: -inf / R: -inf"
                 android:textColor="#B0B0B0"
                 android:textSize="9.5sp"
-                android:fontFamily="@font/font_dap_mono" />
+                android:fontFamily="@font/font_dap_mono"
+                android:ellipsize="end"
+                android:maxLines="1" />
 
             <!-- ★ バッファ健全度 & 真のDAC出力遅延 LAT (SW連動で一括表示/非表示) -->
             <TextView
