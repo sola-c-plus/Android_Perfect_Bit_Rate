@@ -45,11 +45,16 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_EQ_ENABLED = "eq_enabled"
         private const val KEY_SYS_MONITOR_ENABLED = "sys_monitor_enabled"
         private const val KEY_HAPTIC_FEEDBACK_ENABLED = "haptic_feedback_enabled"
+        private const val KEY_TRUE_PEAK_GUARD_ENABLED = "true_peak_guard_enabled"
+        private const val KEY_TRUE_PEAK_CEILING = "true_peak_ceiling"
         private const val KEY_SELECTED_EQ_ID = "selected_eq_id"
         private const val KEY_CURRENT_EQ_GAIN_PREFIX = "current_eq_gain_"
         private const val KEY_WORKING_CUSTOM_GAIN_PREFIX = "working_custom_gain_"
         private const val KEY_CUSTOM_EQ_PRESETS_JSON = "custom_eq_presets_json"
         private const val KEY_FREQ_PRESETS_JSON = "freq_presets_json"
+
+        // True Peak ガードの天井選択肢 (インデックス → dBTP)
+        val TRUE_PEAK_CEILING_DB_VALUES = floatArrayOf(0.0f, -0.5f, -1.0f, -2.0f)
 
         @Volatile
         private var instance: AppPreferences? = null
@@ -92,6 +97,21 @@ class AppPreferences private constructor(context: Context) {
     var isHapticFeedbackEnabled: Boolean
         get() = prefs.getBoolean(KEY_HAPTIC_FEEDBACK_ENABLED, false)
         set(value) = prefs.edit { putBoolean(KEY_HAPTIC_FEEDBACK_ENABLED, value) }
+
+    // True Peak ガード: デフォルト ON / 天井 -1.0dBTP (インデックス 2)。
+    // 天井インデックスと dBTP の対応は TRUE_PEAK_CEILING_DB_VALUES が正。
+    var isTruePeakGuardEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TRUE_PEAK_GUARD_ENABLED, true)
+        set(value) = prefs.edit { putBoolean(KEY_TRUE_PEAK_GUARD_ENABLED, value) }
+
+    var selectedTruePeakCeiling: Int
+        get() = prefs.getInt(KEY_TRUE_PEAK_CEILING, 2)
+        set(value) = prefs.edit { putInt(KEY_TRUE_PEAK_CEILING, value) }
+
+    fun truePeakCeilingDb(): Float {
+        val idx = selectedTruePeakCeiling.coerceIn(0, TRUE_PEAK_CEILING_DB_VALUES.lastIndex)
+        return TRUE_PEAK_CEILING_DB_VALUES[idx]
+    }
 
     var uiThemeMode: String
         get() = prefs.getString(KEY_UI_THEME_MODE, "dark") ?: "dark"

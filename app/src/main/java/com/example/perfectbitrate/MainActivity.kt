@@ -379,6 +379,7 @@ class MainActivity : AppCompatActivity() {
 
             NativeAudioEngine.nativeSetPerformanceMode(appPrefs.selectedPerfMode)
             NativeAudioEngine.nativeSetRichHarmonics(appPrefs.isRichHarmonicsEnabled)
+            NativeAudioEngine.nativeSetTruePeakGuard(appPrefs.isTruePeakGuardEnabled, appPrefs.truePeakCeilingDb())
             NativeAudioEngine.nativeSetCascadeFir(appPrefs.isCascadeFir)
             NativeAudioEngine.nativeSetDitherMode(appPrefs.selectedDitherMode)
             NativeAudioEngine.nativeSetLrIndependentDither(appPrefs.isLrIndependentDither)
@@ -963,7 +964,13 @@ class MainActivity : AppCompatActivity() {
             val flushPage = svc?.bufferFlushPageCount?.get() ?: 0L
             val und = svc?.bufferUnderrunCount?.get() ?: 0L
             val res = svc?.bufferResumeCount?.get() ?: 0L
-            textBufferLatency.text = "BUF:${bufPercent}%  LAT:${latStr}  DROP:${drop}(${dropMs}ms) FL:${flush}(p${flushPage}) UND:${und}/${res}"
+            // ★ True Peak ガードの現在低減量（Service の表示専用キャッシュから読む）。
+            //   Direct 時・未バインド時・ガード OFF 時はガードが働かないため "-" 表示にする。
+            //   OFF 時は native 側の統計が最後の低減量を保持し続けるため、表示側で Prefs の
+            //   ON/OFF を見て "-" に倒す（キャッシュや Prefs への書き戻しはしない）。
+            val tpCurrent = svc?.truePeakCurrentReductionDb ?: 0f
+            val tpStr = if (svc != null && !svc.isDirectSource && appPrefs.isTruePeakGuardEnabled) String.format(java.util.Locale.US, "-%.1f", tpCurrent) else "-"
+            textBufferLatency.text = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMs}ms) FL:${flush}(p${flushPage}) UND:${und}/${res} TP:${tpStr}dB"
             textBufferLatency.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
         } else {
             textCpuRamMonitor.visibility = View.GONE

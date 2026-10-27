@@ -287,6 +287,29 @@ void DspUpsampler::setDynamicSbr(bool enabled) {
     isDynamicSbr_ = enabled;
 }
 
+void DspUpsampler::setTruePeakGuard(bool enabled, double ceilingDb) {
+    const bool wasEnabled = truePeakEnabled_;
+    truePeakEnabled_ = enabled;
+    truePeakCeilingDb_ = ceilingDb;
+    if (enabled && !wasEnabled) {
+        // OFF→ON の遷移では、遅延線に古い信号を残さないよう実績レートで構成し直す
+        // (configure は状態リセットを含む)。ON のままの天井変更では状態を保持し、
+        // 次のブロックから新しい天井が反映される。
+        const double outRate = static_cast<double>(inSampleRate_) * (isDirectSource_ ? 1 : factor_);
+        truePeakGuard_.configure(outRate, ceilingDb);
+    } else if (enabled) {
+        truePeakGuard_.setCeilingDb(ceilingDb);
+    }
+}
+
+void DspUpsampler::getTruePeakStats(float* out4) const {
+    if (!out4) return;
+    out4[0] = static_cast<float>(truePeakGuard_.currentReductionDb());
+    out4[1] = static_cast<float>(truePeakGuard_.maxReductionDb());
+    out4[2] = static_cast<float>(truePeakGuard_.activationCount());
+    out4[3] = static_cast<float>(truePeakGuard_.capHitCount());
+}
+
 // Dynamic SBR のカットオフ検出。
 // 入力モノラル信号の 16kHz 1ポールHP エネルギー比から実効カットオフを推定し、
 // 512 サンプルブロック毎に FreqEngine へ「抽出開始点の上限キャップ」と
@@ -359,6 +382,7 @@ void DspUpsampler::configure(int factor, float inSampleRate) {
 
     float currentFs = inSampleRate_ * (isDirectSource_ ? 1 : factor_);
     equalizer_.setSampleRate(static_cast<double>(currentFs));
+    truePeakGuard_.configure(static_cast<double>(currentFs), truePeakCeilingDb_);
     dcPhaseLinearizer_.configure(dcPhaseType_, static_cast<double>(currentFs));
     transientRestorer_.configure(transientMode_, static_cast<double>(currentFs), customUseGroupDelay_, customUseLattice_);
     freqEngine_.configure(freqMode_, static_cast<double>(currentFs), customFreqGain_, customFreqExtractFreq_);
@@ -383,6 +407,7 @@ void DspUpsampler::reset() {
     sbrBlockCount_ = 0;
     detectedCutoffHz_ = 20000.0f;
     equalizer_.reset();
+    truePeakGuard_.reset();
     dcPhaseLinearizer_.reset();
     transientRestorer_.reset();
     freqEngine_.reset();
@@ -765,6 +790,14 @@ size_t DspUpsampler::process(
         curPos = (curPos + 1) & 4095;
     }
     specRingPos_.store(curPos, std::memory_order_release);
+
+    // ★ True Peak ガード (独立最終段): 全 DSP の後段・出力変換 (ディザ/量子化) の
+    //   直前でサンプル間ピークを先読みで抑える。Direct バイパス分岐には入らない
+    //   ため Direct 時は構造的に無効。OFF 時はこの呼び出し自体が無く、
+    //   出力は従来とバイト同一になる。
+    if (truePeakEnabled_) {
+        truePeakGuard_.processStereo(tempOutL_.data(), tempOutR_.data(), numOutFrames);
+    }
 
     size_t outTotalBytes = numOutFrames * outBytesPerSample * 2;
     outBuffer.resize(outTotalBytes);

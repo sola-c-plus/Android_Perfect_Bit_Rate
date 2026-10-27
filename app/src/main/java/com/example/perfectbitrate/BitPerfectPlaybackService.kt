@@ -122,6 +122,15 @@ class BitPerfectPlaybackService : Service() {
     val bufferResumeCount = AtomicLong(0)   // アンダーラン後にプリロール再開した回数
     private val underrunOpen = AtomicBoolean(false) // アンダーラン中（再開待ち）か
 
+    // ★ True Peak ガードの低減量の表示専用キャッシュ。低減量の正は native であり、
+    //   ここは nativeGetTruePeakStats のポーリング結果を保持するだけ。
+    //   要求値や Prefs へは絶対に書き戻さない（状態統一 Phase 4 の原則）。
+    @Volatile var truePeakCurrentReductionDb: Float = 0f
+    @Volatile var truePeakMaxReductionDb: Float = 0f
+    @Volatile var truePeakActivationCount: Long = 0L
+    @Volatile var truePeakCapHitCount: Long = 0L
+    private val truePeakStatsBuffer = FloatArray(4)
+
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
@@ -1246,6 +1255,13 @@ class BitPerfectPlaybackService : Service() {
         } else {
             0
         }
+
+        // ★ True Peak ガードの低減量を表示用にポーリングする（native が正、表示専用）
+        NativeAudioEngine.nativeGetTruePeakStats(truePeakStatsBuffer)
+        truePeakCurrentReductionDb = truePeakStatsBuffer[0]
+        truePeakMaxReductionDb = truePeakStatsBuffer[1]
+        truePeakActivationCount = truePeakStatsBuffer[2].toLong()
+        truePeakCapHitCount = truePeakStatsBuffer[3].toLong()
 
         onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, queueSize, latencyMs)
     }
