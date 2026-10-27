@@ -107,6 +107,15 @@ class BitPerfectPlaybackService : Service() {
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
+    // ★ ポーズで閉じた AudioTrack の再生成時に、停止前のシステム音量を維持するための保留記録。
+    //   ウィジェット/通知ポーズは forceCloseDacStream() で AudioTrack を破棄するため、再再生時の
+    //   再生成で restoreVolumeForDevice() が走り、接続/切断時の安全策（USB は音量0から開始、
+    //   デバイスなしは forceResetSpeakerVolume で 0 化）が誤って適用され、音量が 0 のまま残っていた。
+    //   forceCloseDacStream() が閉じた時点の出力デバイスを記録し、同一デバイスへの再生成でのみ
+    //   安全側の 0 化をスキップする。デバイスが変わる再生成や切断フローでは従来どおり安全側に倒す。
+    @Volatile private var volumePreservePending = false
+    @Volatile private var volumePreserveDeviceId = -1 // -1 = デバイスなし（内蔵スピーカー）
+
     private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
@@ -368,7 +377,21 @@ class BitPerfectPlaybackService : Service() {
         } catch (e: Exception) {}
     }
 
+    // ★ ポーズ（forceCloseDacStream）で閉じた AudioTrack の再生成かどうかを判定し、保留を消費する。
+    //   同一デバイスへの再生成なら true を返し、呼び出し側は restoreVolumeForDevice() の安全側 0 化を
+    //   スキップして停止前の音量をそのまま維持する（ストリーム音量には触らない）。
+    //   Vol Lock 中はロック側（最大化）が正なので対象外。デバイスが変わっていた場合も保留を破棄して
+    //   false を返し、従来の安全側動作（接続時は 0 から開始）に倒す。
+    private fun consumeVolumePreserve(targetDevice: AudioDeviceInfo?): Boolean {
+        if (!volumePreservePending) return false
+        volumePreservePending = false
+        if (isVolumeLocked) return false
+        return (targetDevice?.id ?: -1) == volumePreserveDeviceId
+    }
+
     fun handleBecomingNoisyOrDisconnected() {
+        // 切断フローでは音量 0 化こそが意図的な安全策なので、ポーズ由来の音量維持の保留は破棄する
+        volumePreservePending = false
         isVolumeLocked = false
         isCurrentlyPlaying = false
         updateVolumeControlMode()
@@ -434,6 +457,11 @@ class BitPerfectPlaybackService : Service() {
         val changed = (activeOutputDevice?.id != device?.id)
         val prevDev = activeOutputDevice
         activeOutputDevice = device
+
+        if (changed) {
+            // 出力デバイスが切り替わる再生成は「接続時」の安全側動作が正。ポーズ由来の保留は破棄する
+            volumePreservePending = false
+        }
 
         if (device == null) {
             isVolumeLocked = false
@@ -651,6 +679,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun forceCloseDacStream() {
+        // ★ この閉じ方は「同一デバイスでの再生成」が前提のポーズ経路。デバイス切替・切断と区別する
+        //   ため、閉じた時点の出力デバイスを音量維持の保留として記録する（再生成時に消費される）。
+        volumePreservePending = true
+        volumePreserveDeviceId = activeOutputDevice?.id ?: -1
         isCurrentlyPlaying = false
         isBuffering.set(true)
         pcmQueue.clear()
@@ -1053,7 +1085,11 @@ class BitPerfectPlaybackService : Service() {
 
                         if (track.state == AudioTrack.STATE_INITIALIZED) {
                             targetDevice?.let { track.setPreferredDevice(it) }
-                            restoreVolumeForDevice(targetDevice)
+                            // ★ ポーズ後の同一デバイス再生成では接続時の安全策（音量 0 化）を
+                            //   適用せず、停止前の音量を維持する。それ以外は従来どおり。
+                            if (!consumeVolumePreserve(targetDevice)) {
+                                restoreVolumeForDevice(targetDevice)
+                            }
                             track.setVolume(1.0f)
                             track.play()
                             createdTrack = track
