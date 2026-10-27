@@ -174,8 +174,9 @@
                 android:layout_height="wrap_content"
                 android:text="BUF:100% LAT:0ms"
                 android:textColor="#888888"
-                android:textSize="9.5sp"
+                android:textSize="9sp"
                 android:fontFamily="@font/font_dap_mono"
+                android:maxLines="1"
                 android:layout_marginEnd="8dp"
                 android:visibility="gone" />
 

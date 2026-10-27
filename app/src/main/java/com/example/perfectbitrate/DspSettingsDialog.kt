@@ -208,12 +208,17 @@ class DspSettingsDialog(
 
         // ★ True Peak ガード: Prefs 保存＋native 即時送信 (RichHarmonics と同型)。
         //   天井スピナーはスイッチ ON のときだけ有効 (Direct 時は updateDspSectionsState が優先)。
+        //   スピナーの背景には無効状態の見た目がないため、グレーアウトは EQ プリセットと
+        //   同じく alpha 併用で表す。alpha はスイッチの ON/OFF だけに連動させ、Direct 時の
+        //   減光はセクション全体の alpha に任せる。
         switchTruePeak.isChecked = appPrefs.isTruePeakGuardEnabled
         spinnerTruePeakCeiling.isEnabled = !appPrefs.isDirectSource && appPrefs.isTruePeakGuardEnabled
+        spinnerTruePeakCeiling.alpha = if (appPrefs.isTruePeakGuardEnabled) 1.0f else 0.35f
         switchTruePeak.setOnCheckedChangeListener { _, isChecked ->
             appPrefs.isTruePeakGuardEnabled = isChecked
             NativeAudioEngine.nativeSetTruePeakGuard(isChecked, appPrefs.truePeakCeilingDb())
             spinnerTruePeakCeiling.isEnabled = !appPrefs.isDirectSource && isChecked
+            spinnerTruePeakCeiling.alpha = if (isChecked) 1.0f else 0.35f
         }
 
         walkmanEqView?.isLightMode = !isDarkTheme
@@ -253,6 +258,7 @@ class DspSettingsDialog(
             spinnerDither.isEnabled = dspEnabled
             switchTruePeak.isEnabled = dspEnabled
             spinnerTruePeakCeiling.isEnabled = dspEnabled && switchTruePeak.isChecked
+            spinnerTruePeakCeiling.alpha = if (switchTruePeak.isChecked) 1.0f else 0.35f
             spinnerDcPhase.isEnabled = dspEnabled
             spinnerUpsample.isEnabled = dspEnabled
 
