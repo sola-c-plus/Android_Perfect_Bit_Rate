@@ -451,8 +451,13 @@ class MainActivity : AppCompatActivity() {
 
         isDirectSource = appPrefs.isDirectSource
         currentThemeMode = appPrefs.uiThemeMode
-        // ★ 項目7: Vol Lock は永続化された前回状態を復元する（従来は起動時に無条件で false だった）
-        isVolLockOn = appPrefs.isVolLockEnabled
+        // ★ Vol Lock は起動時は常に OFF で開始する（安全対策として PR #38 の復元仕様を変更）。
+        // 前回 ON のまま終了していた場合にその状態を復元すると、Vol Lock 非対応の機器を
+        // 繋いだ起動でも音量が最大側に固定され、爆音になる恐れがある。
+        // 保存値も OFF に揃えて実状態と一致させる（状態変更時は両方を書く本アプリの規約に合わせる）。
+        // セッション中にユーザーが ON にする分は従来どおり有効で、次回起動時にまた OFF から始まる。
+        isVolLockOn = false
+        appPrefs.isVolLockEnabled = false
         currentBitMode = appPrefs.selectedBitMode
         upsampleFactor = appPrefs.selectedUpsampleFactor
 
