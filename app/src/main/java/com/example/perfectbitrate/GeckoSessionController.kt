@@ -26,6 +26,9 @@ class GeckoSessionController(
         fun onState(isPlaying: Boolean)
         fun isDarkTheme(): Boolean
         fun isAdBlockEnabled(): Boolean
+        // ★ コンテンツプロセスのクラッシュ（kind="crash"）/ キル（kind="kill"）検知。
+        //   セッションは GeckoView 側で既に閉じられている。復旧判断は MainActivity 側で行う。
+        fun onContentProcessGone(kind: String)
     }
 
     private lateinit var geckoSession: GeckoSession
@@ -75,7 +78,10 @@ class GeckoSessionController(
             .aboutConfigEnabled(true)
             .build()
 
-        geckoRuntime = GeckoRuntime.getDefault(activity)
+        // ★ 以前は build した runtimeSettings を渡さず getDefault() を使っていたため、
+        //   ランタイム設定が一切効かない構造だった。create() に切り替えて設定を実際に
+        //   適用する（設定内容自体は従来の build のまま変えていない）。
+        geckoRuntime = GeckoRuntime.create(activity, runtimeSettings)
         openSession()
     }
 
@@ -111,6 +117,24 @@ class GeckoSessionController(
                     return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
                 }
                 return null
+            }
+        }
+
+        // ★ コンテンツプロセスの異常終了（クラッシュ / OS によるキル）を検知する。
+        //   GeckoView 121 では ContentDelegate に onCrash / onKill の両方がある
+        //   （geckoview 121.0.20231230165955 の実物で確認）。発火時点でセッションは
+        //   GeckoView 側で close 済みのため、ここでは記録と通知のみ行い、再生成の
+        //   判断（再生意思・クールダウン）は MainActivity 側に委ねる。
+        //   openSession() 経由で再生成後の新セッションにも毎回設定される。
+        session.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onCrash(session: GeckoSession) {
+                Log.e("GeckoController", "★ Content process crashed")
+                listener.onContentProcessGone("crash")
+            }
+
+            override fun onKill(session: GeckoSession) {
+                Log.e("GeckoController", "★ Content process killed")
+                listener.onContentProcessGone("kill")
             }
         }
 
