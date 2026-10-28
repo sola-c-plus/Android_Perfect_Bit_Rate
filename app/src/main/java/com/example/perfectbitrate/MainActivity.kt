@@ -13,6 +13,9 @@ import android.graphics.Color
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -126,6 +129,25 @@ class MainActivity : AppCompatActivity() {
     //   明示ポーズで false、明示 play/next/prev で true。ページ UI 上のポーズは
     //   isPlayingState 経由でエピソード自体を閉じるので、そちらでも守られる。
     private var userWantsPlayback = true
+
+    // ★ コンテンツプロセスのクラッシュ/キル検知からの再生成（ContentDelegate 経由）用。
+    //   ウォッチドッグの時間ベース検知とは独立のイベント駆動経路だが、再生成の
+    //   総量抑制のため lastSessionRecreateTime はウォッチドッグ側と共有する。
+    private val CRASH_RECREATE_COOLDOWN_MS = 60000L // クラッシュ由来の再生成の最小間隔
+    private var lastCrashRecreateTime = 0L           // 最後にクラッシュ由来で再生成した時刻
+
+    // ★ ネットワーク切替検知（ConnectivityManager.NetworkCallback）用。
+    //   デフォルトネットワークの切替を購読し、切替イベントを UND 総数付きで記録する
+    //   （症状3「回線切替時にくるくる」とアンダーランの相関を後から追えるように）。
+    //   新ネットワークが使えるようになったら、デバウンス後に再生中のみ resume_audio を
+    //   1 回先回りで送る。ACCESS_NETWORK_STATE 権限は宣言済み（追加権限なし）。
+    private val NETWORK_NUDGE_DEBOUNCE_MS = 500L      // 切替直後のイベントを1回にまとめる待ち
+    private val NETWORK_NUDGE_MIN_INTERVAL_MS = 10000L // nudge の最小間隔（連発の間引き）
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkInitialAvailablePending = false // 登録時に既存ネットワークで即時呼ばれる onAvailable を切替と誤認しない
+    private var lastNetworkNudgeTime = 0L
+    private val networkNudgeRunnable = Runnable { nudgePlaybackAfterNetworkChange() }
 
     private var currentQueueSize = 0
     private var currentLatencyMs = 0
@@ -311,6 +333,103 @@ class MainActivity : AppCompatActivity() {
             "pause" -> userWantsPlayback = false
             "play", "next", "prev" -> userWantsPlayback = true
         }
+    }
+
+    // ★ コンテンツプロセスのクラッシュ/キル検知（ContentDelegate）への対応。
+    //   発火時点でセッションは GeckoView 側で閉じられているため、再生意思がある場合に
+    //   限り既存の再生成経路で即時復旧を試みる。再生成後の play フォローアップは
+    //   ウォッチドッグ側と同じ checkRecreateFollowUp が担う（sessionRecreatePendingTime）。
+    //   クラッシュが短時間に繰り返す場合の暴走防止に専用クールダウン（60 秒）を設け、
+    //   ウォッチドッグ側の再生成直後にも発火しないよう lastSessionRecreateTime を共有する。
+    private fun handleContentProcessGone(kind: String) {
+        val now = System.currentTimeMillis()
+        Log.e("MainActivity", "★ Content process gone ($kind), userWantsPlayback=$userWantsPlayback")
+        if (!userWantsPlayback) {
+            Log.w("MainActivity", "★ Session recreate skipped after $kind (user pause intent)")
+            return
+        }
+        if (now - lastCrashRecreateTime < CRASH_RECREATE_COOLDOWN_MS ||
+            now - lastSessionRecreateTime < CRASH_RECREATE_COOLDOWN_MS
+        ) {
+            Log.w("MainActivity", "★ Session recreate skipped after $kind (crash cooldown)")
+            return
+        }
+        lastCrashRecreateTime = now
+        lastSessionRecreateTime = now
+        Log.w("MainActivity", "★ Recreating Gecko session after content process $kind")
+        playbackService?.resetBuffer("session")
+        if (geckoController.recreateSession()) {
+            sessionRecreatePendingTime = now
+        } else {
+            Log.w("MainActivity", "★ Session recreate failed after content process $kind")
+        }
+    }
+
+    // ★ デフォルトネットワークの切替検知を登録する。コールバックは uiHandler の
+    //   スレッド（メインスレッド）で呼ばれるようハンドラ付きで登録する。
+    //   registerDefaultNetworkCallback は登録時点でデフォルトネットワークが存在すると
+    //   onAvailable を即時にも呼ぶため、その初回だけは「切替」と誤認しないよう
+    //   フラグで見分ける（起動直後に不要な nudge を送らない）。
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivityManager = cm
+        networkInitialAvailablePending = cm.activeNetwork != null
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val und = playbackService?.bufferUnderrunCount?.get() ?: -1L
+                Log.i(
+                    "MainActivity",
+                    "★ Network available (transport=${networkTransportName(network)}, und=$und)"
+                )
+                if (networkInitialAvailablePending) {
+                    networkInitialAvailablePending = false
+                    return
+                }
+                // 切替時は onLost と対で来ることが多いので、デバウンスで1回にまとめる
+                uiHandler.removeCallbacks(networkNudgeRunnable)
+                uiHandler.postDelayed(networkNudgeRunnable, NETWORK_NUDGE_DEBOUNCE_MS)
+            }
+
+            override fun onLost(network: Network) {
+                val und = playbackService?.bufferUnderrunCount?.get() ?: -1L
+                Log.i("MainActivity", "★ Network lost (und=$und)")
+            }
+        }
+        networkCallback = callback
+        try {
+            cm.registerDefaultNetworkCallback(callback, uiHandler)
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Network callback registration failed", e)
+        }
+    }
+
+    private fun networkTransportName(network: Network): String {
+        val caps = try {
+            connectivityManager?.getNetworkCapabilities(network)
+        } catch (e: Exception) {
+            null
+        } ?: return "unknown"
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            else -> "other"
+        }
+    }
+
+    // ★ 回線の再確立を検知した後の先回り nudge: 再生意思があり実際に再生中の場合に
+    //   限り、resume_audio を 1 回送ってページ側の復帰（再アタッチ + AudioContext の
+    //   resume）を促す。ウォッチドッグの 3 秒検知を待たずにストールを短くする狙いで、
+    //   resume_audio 自体は既存の冪等な復旧コマンドのため空振りしても害はない。
+    //   送信条件・段階エスカレーションなどウォッチドッグ側の仕様には触れない。
+    private fun nudgePlaybackAfterNetworkChange() {
+        val now = System.currentTimeMillis()
+        if (now - lastNetworkNudgeTime < NETWORK_NUDGE_MIN_INTERVAL_MS) return
+        if (!userWantsPlayback || !isPlayingState) return
+        lastNetworkNudgeTime = now
+        val und = playbackService?.bufferUnderrunCount?.get() ?: -1L
+        Log.i("MainActivity", "★ Network changed, sending resume_audio nudge (und=$und)")
+        geckoController.sendCommand("resume_audio")
     }
 
     private fun sampleSystemResources() {
@@ -540,6 +659,9 @@ class MainActivity : AppCompatActivity() {
                     playbackService?.updatePlaybackState(isPlaying)
                     updateDialogPlayerUi()
                 }
+                override fun onContentProcessGone(kind: String) {
+                    handleContentProcessGone(kind)
+                }
                 override fun isDarkTheme(): Boolean = isDarkThemeActive()
                 override fun isAdBlockEnabled(): Boolean = appPrefs.isAdBlockEnabled
             }
@@ -569,6 +691,7 @@ class MainActivity : AppCompatActivity() {
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         registerAudioDeviceCallback()
+        registerNetworkCallback()
         applyThemeUi(currentThemeMode)
 
         btnReload.setOnClickListener {
@@ -1005,6 +1128,13 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         uiHandler.removeCallbacks(uiUpdateRunnable)
         uiHandler.removeCallbacks(deviceDetectRunnable)
+        uiHandler.removeCallbacks(networkNudgeRunnable)
+        networkCallback?.let { callback ->
+            try {
+                connectivityManager?.unregisterNetworkCallback(callback)
+            } catch (e: Exception) { /* 登録に失敗していた場合は何もしない */ }
+        }
+        networkCallback = null
         if (appWakeLock?.isHeld == true) appWakeLock?.release()
         btCodecTracker.stop()
         geckoController.onDestroy()
