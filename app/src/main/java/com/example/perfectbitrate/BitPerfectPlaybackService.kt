@@ -110,7 +110,13 @@ class BitPerfectPlaybackService : Service() {
     private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
     
-    private val PREROLL_THRESHOLD = 3
+    // ★ プリロール閾値（再生開始・再開時に何チャンク溜まってから出し始めるか）。
+    //   1チャンク = 4096フレーム。48kHz 換算で 1チャンク ≒ 85ms なので、
+    //   6チャンク ≒ 0.5秒分の先読みになる（実時間はソースのサンプルレートで変動）。
+    //   旧値3（≒256ms）では数百ms 級の供給瞬断でキューが枯れ、再開時に遅延分が
+    //   吸着して「一瞬進みが飛ぶ」症状2になっていたため引き上げた（案8）。
+    //   吸収力と操作感（開始遅延）の調整はこの1箇所の値だけで行う。
+    private val PREROLL_THRESHOLD = 6
     private val isBuffering = AtomicBoolean(true)
 
     // ★ バッファ破棄の計測カウンタ（診断用、サービス起動以来の累計。再生挙動には影響しない）
