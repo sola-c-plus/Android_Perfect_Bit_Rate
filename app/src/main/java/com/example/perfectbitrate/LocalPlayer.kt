@@ -58,6 +58,16 @@ class LocalPlayer(
     //   playOrder[orderPosition] == currentIndex を保つ。
     private var playOrder: List<Int> = emptyList()
     private var orderPosition = -1
+
+    // ★ 順序表が「仮決め」の間 true。setQueue でキューの中身が変わると
+    //   立ち、再生開始（playAt / play）で「実際に再生を始める曲」を
+    //   アンカーに順序表を作り直して下ろす。閲覧だけでは setQueue
+    //   自体が呼ばれなくなったため（キューはタップ再生でのみ確定
+    //   する）、仮決めの順序表がそのまま再生に使われることはない。
+    //   これにより、シャッフル ON で新しいキューから再生を始めたら
+    //   必ず開始曲を先頭にしたシャッフル順になり、アイコン表示
+    //   （prefs の ON/OFF）と実順序がずれない。
+    private var orderStale = false
     private var decoder: FfmpegDecoder? = null
     private var decodeFuture: Future<*>? = null
 
@@ -105,16 +115,18 @@ class LocalPlayer(
 
     fun setQueue(tracks: List<LibraryRepository.Track>) {
         synchronized(stateLock) {
-            // ★ キューはライブラリブラウザの表示中リストで差し替わる
-            //   （フィルタ / ソート / グループの適用結果。Phase 2-1）。
+            // ★ キューの確定は「リストで曲をタップして再生する瞬間」
+            //   だけ（MainActivity のタップ経路からのみ呼ばれる）。
+            //   タブ切替・検索・ソート等の閲覧では呼ばれないため、
+            //   再生中キューが表示に引きずられて差し替わることはない。
             //   再生中の曲が新しいキューに含まれていれば、その位置へ
             //   インデックスを寄せ直し、次曲送りや自動進行が別の曲へ
             //   飛ばないようにする。含まれていない場合は従来どおり
             //   範囲外なら -1 へ丸める。
-            // ★ 中身（URI の並び）が前と同じなら順序表は作り直さない。
-            //   setQueue はブラウザ再描画のたびに呼ばれるため、シャッフル
-            //   中に毎回振り直すと再生順が定まらなくなる（WALKMAN と
-            //   同じく、順序は内容が変わるまで保持する）。
+            // ★ 中身（URI の並び）が前と同じなら順序表は作り直さない
+            //   （WALKMAN と同じく、順序は内容が変わるまで保持する）。
+            //   中身が変わった場合は順序表を仮決めにし（orderStale）、
+            //   直後の再生開始（playAt）で開始曲をアンカーに作り直す。
             val sameContent = tracks.size == queue.size &&
                 tracks.indices.all { tracks[it].uri == queue[it].uri }
             queue = tracks
@@ -134,6 +146,7 @@ class LocalPlayer(
                     if (currentIndex in queue.indices) playOrder.indexOf(currentIndex) else -1
             } else {
                 rebuildOrderLocked(if (anchor >= 0) anchor else currentIndex)
+                orderStale = true
             }
         }
     }
@@ -204,8 +217,10 @@ class LocalPlayer(
         AppPreferences.get().localShuffleEnabled = enabled
         synchronized(stateLock) {
             // ★ 切替えたその場で順序表を作り直す（再生中の曲はそのまま、
-            //   ON では現在曲が先頭に固定される）。
+            //   ON では現在曲が先頭に固定される）。作り直した順序表は
+            //   現在のキューに対する確定順なので仮決めフラグも下ろす。
             rebuildOrderLocked(currentIndex)
+            orderStale = false
         }
     }
 
@@ -238,6 +253,16 @@ class LocalPlayer(
     fun playAt(index: Int) {
         synchronized(stateLock) {
             if (index < 0 || index >= queue.size) return
+            if (orderStale) {
+                // ★ 新しいキューでの再生開始: 順序表は「この開始曲」を
+                //   アンカーに作り直してから確定する。シャッフル ON
+                //   なら開始曲を先頭に残りをシャッフルし、OFF なら
+                //   元の並び順になる。setQueue 時点の仮決め（旧再生曲
+                //   アンカー）のまま再生を始めると、アイコンの ON
+                //   表示と実順序が食い違うため、必ずここで作り直す。
+                rebuildOrderLocked(index)
+                orderStale = false
+            }
             startTrackLocked(index, 0L)
         }
     }
@@ -245,6 +270,13 @@ class LocalPlayer(
     fun play() {
         synchronized(stateLock) {
             if (isPlaying) return
+            if (orderStale) {
+                // playAt を経ない再生開始（ポーズ解除の再開など）でも、
+                // 仮決めの順序表が残っていたら現在曲アンカーで確定
+                // させてから進む（実効順の先頭を使う分岐の前提）。
+                rebuildOrderLocked(currentIndex)
+                orderStale = false
+            }
             if (decoder != null && currentTrack != null) {
                 // ポーズで保持したデコーダを現在位置から再開する
                 val gen = ++generation

@@ -788,8 +788,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ★ 一覧の反映（キャッシュ表示・スキャン結果で共通）。
-    //   実際の表示（タブ / 検索 / ソート / ドリルダウンの適用と、表示中
-    //   リスト＝再生キューの同期）は refreshLocalBrowser に集約する。
+    //   実際の表示（タブ / 検索 / ソート / ドリルダウンの適用）は
+    //   refreshLocalBrowser に集約する。ライブラリが更新されても
+    //   再生中キューには触らない（キューはタップ再生でのみ確定）。
     private fun applyLocalTracks(tracks: List<LibraryRepository.Track>) {
         localTracks = tracks
         localTrackUriSet = tracks.mapTo(HashSet()) { it.uri.toString() }
@@ -847,8 +848,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshLocalBrowser() {
         if (!::localTrackList.isInitialized) return
-        // ★ 「再生」タブ表示中はブラウザ側（一覧の導出・キューの
-        //   同期）には触らず、ページの出し分けだけを行う。
+        // ★ 「再生」タブ表示中はブラウザ側（一覧の導出）には触らず、
+        //   ページの出し分けだけを行う。
         if (localTab == LocalTab.NOW_PLAYING) {
             updateLocalPageVisibility()
             updateLocalTabStyles()
@@ -911,8 +912,9 @@ class MainActivity : AppCompatActivity() {
     //   そのプレイリストの曲一覧（追加順）を出す。曲一覧では
     //   ライブラリから消えた曲も、追加時点のスナップショットで
     //   行自体は残してグレー表示にする（行を消すと長押しでの
-    //   「プレイリストから削除」もできなくなるため）。再生キュー
-    //   への同期は showLocalTrackPage 側で実在する曲だけに絞る。
+    //   「プレイリストから削除」もできなくなるため）。表示は
+    //   専用で、再生キューはタップ時（onLocalListItemClicked）に
+    //   実在する曲だけへ絞って確定させる。
     private fun refreshPlaylistTab() {
         val drillId = localPlaylistDrillId
         if (drillId == null) {
@@ -984,9 +986,9 @@ class MainActivity : AppCompatActivity() {
 
     // ★ ライブラリに実在しないプレイリスト項目の表示用プレース
     //   ホルダ。追加時点のスナップショット（タイトル等）だけを持ち、
-    //   再生キューには入らない（showLocalTrackPage の絞り込みと
-    //   タップ時の判定で除外される）。行側は URI がライブラリに
-    //   無いことで判別してグレー表示にする。
+    //   再生キューには入らない（タップ時に実在する曲だけへ絞る
+    //   onLocalListItemClicked の判定で除外される）。行側は URI が
+    //   ライブラリに無いことで判別してグレー表示にする。
     private fun missingPlaylistTrack(item: PlaylistStore.Item): LibraryRepository.Track {
         return LibraryRepository.Track(
             uri = Uri.parse(item.uri),
@@ -1006,19 +1008,18 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // 曲リストを表示し、その並びを再生キューとして LocalPlayer へ渡す。
-    // キューには現在のライブラリに実在する曲だけを入れる（通常の
-    // タブでは表示＝全曲実在するため素通しになり、プレイリストの
-    // ドリルダウンでのみ「消えた曲」が静かに外れる）。
+    // 曲リストを表示する（表示専用）。再生キューはここでは一切
+    // 触らない: キューが決まるのは、リストで曲をタップして再生する
+    // 瞬間（onLocalListItemClicked の setQueue → playAt）だけ。
+    // 以前は再描画のたびに「表示中リスト＝再生キュー」として
+    // setQueue していたため、タブ切替・検索・ソート・ドリルダウン・
+    // 再スキャン完了などの閲覧/更新操作が再生中キューを勝手に
+    // 差し替えてしまうバグがあった。
     private fun showLocalTrackPage(tracks: List<LibraryRepository.Track>) {
         localDisplayedTracks = tracks
         val adapter = LocalTrackAdapter(tracks)
         localTrackAdapter = adapter
         localTrackList.adapter = adapter
-        if (::localPlayer.isInitialized) {
-            val queue = tracks.filter { it.uri.toString() in localTrackUriSet }
-            localPlayer.setQueue(if (queue.size == tracks.size) tracks else queue)
-        }
         updateLocalEmptyMessage(tracks.size, isTrackPage = true)
     }
 
