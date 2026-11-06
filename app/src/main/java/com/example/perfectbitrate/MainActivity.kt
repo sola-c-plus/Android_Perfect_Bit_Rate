@@ -875,6 +875,10 @@ class MainActivity : AppCompatActivity() {
 
         libraryRepository = LibraryRepository(this)
         localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
+        // ★ LocalPlayer のフロー制御用に Service の PCM キュー残量を渡す。
+        //   未バインド時は 0（容量 0 = フロー制御なし）として扱われる。
+        localPlayer.queueSizeProvider = { playbackService?.pcmQueueSize ?: 0 }
+        localPlayer.queueCapacityProvider = { playbackService?.pcmQueueCapacity ?: 0 }
 
         isDirectSource = appPrefs.isDirectSource
         currentThemeMode = appPrefs.uiThemeMode

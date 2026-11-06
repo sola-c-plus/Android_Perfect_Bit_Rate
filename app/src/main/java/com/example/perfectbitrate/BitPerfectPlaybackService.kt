@@ -118,7 +118,13 @@ class BitPerfectPlaybackService : Service() {
 
     private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
-    
+
+    // ★ Local 再生（LocalPlayer）のフロー制御・進捗補正用の読み取り口。
+    //   キューの操作（offer/poll/clear）自体は従来どおり Service 内部と
+    //   pushPcm / resetBuffer 経由に限る。ここは残量の参照だけを公開する。
+    val pcmQueueSize: Int get() = pcmQueue.size
+    val pcmQueueCapacity: Int get() = MAX_QUEUE_CAPACITY
+
     // ★ プリロール閾値（再生開始・再開時に何チャンク溜まってから出し始めるか）。
     //   1チャンク = 4096フレーム。48kHz 換算で 1チャンク ≒ 85ms なので、
     //   6チャンク ≒ 0.5秒分の先読みになる（実時間はソースのサンプルレートで変動）。

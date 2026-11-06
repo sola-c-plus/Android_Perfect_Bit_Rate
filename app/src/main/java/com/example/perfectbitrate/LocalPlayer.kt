@@ -2,6 +2,7 @@ package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.SystemClock
 import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -16,6 +17,12 @@ import java.util.concurrent.TimeUnit
 //   - デコードは FfmpegDecoder を専用スレッド（decodeExecutor）で回す。
 //   - 状態変更は全て stateLock で直列化し、デコード終了コールバックは
 //     世代（generation）で陳腐化を判定する。
+//   - 供給のフロー制御: デコードはファイル読み取り速度で進むため、そのまま
+//     流すと Service の pcmQueue（容量あり・満杯時は最古を破棄）が溢れて
+//     大半の PCM が捨てられ、曲が先へ飛ぶ。チャンク供給前に Service の
+//     キュー残量を見て高水位以上では待機し、実時間の消費に追従させる
+//     （awaitQueueRoom）。あわせて、曲送りはデコード完了ではなく Service
+//     側の PCM が再生し切ってから行う（scheduleAdvanceAfterDrain）。
 class LocalPlayer(
     private val context: Context,
     private val repository: LibraryRepository,
@@ -72,6 +79,19 @@ class LocalPlayer(
     @Volatile
     private var pendingSeekMs = -1L
 
+    // 現在の曲のデコードが完了した（Service 側の再生し切り待ち含む）か。
+    // シーク時の扱い（ネイティブシーク不可 → 曲の再開始）を切り替えるために使う。
+    @Volatile
+    private var decodeFinished = false
+
+    // ★ Service の PCM キュー残量の読み取り口（MainActivity が配線する）。
+    //   未配線（null）や容量 0 のときはフロー制御を行わない（従来動作）。
+    @Volatile
+    var queueSizeProvider: (() -> Int)? = null
+
+    @Volatile
+    var queueCapacityProvider: (() -> Int)? = null
+
     // ── キュー ──
 
     fun setQueue(tracks: List<LibraryRepository.Track>) {
@@ -126,7 +146,7 @@ class LocalPlayer(
             decoder?.requestStop()
             // デコーダは保持し、play() で現在位置から再開する（再オープンしない）
             listener.onState(false)
-            listener.onProgress(positionMs, durationMs, false)
+            listener.onProgress(displayPositionMs(), durationMs, false)
         }
     }
 
@@ -138,6 +158,7 @@ class LocalPlayer(
             stopAndReleaseDecoderLocked()
             positionMs = 0L
             pendingSeekMs = -1L
+            decodeFinished = false
         }
     }
 
@@ -173,8 +194,9 @@ class LocalPlayer(
     fun prev() {
         synchronized(stateLock) {
             if (queue.isEmpty()) return
-            // 再生開始から 3 秒以内は前曲、それ以外は曲頭へ（一般的なプレイヤーの作法）
-            if (isPlaying && positionMs > 3000L) {
+            // 再生開始から 3 秒以内は前曲、それ以外は曲頭へ（一般的なプレイヤーの作法）。
+            // 判定はユーザーが聞いている位置（表示位置）で行う。
+            if (isPlaying && displayPositionMs() > 3000L) {
                 seekTo(0L)
                 return
             }
@@ -191,6 +213,12 @@ class LocalPlayer(
         synchronized(stateLock) {
             val dec = decoder ?: return
             val clamped = targetMs.coerceIn(0L, if (durationMs > 0) durationMs else targetMs)
+            if (isPlaying && decodeFinished) {
+                // デコードは既に終わっていてネイティブシークが効かない
+                // （再生し切り待ちの間）。曲をシーク位置から開き直す。
+                startTrackLocked(currentIndex, clamped)
+                return
+            }
             positionMs = clamped
             listener.onFlush()
             if (isPlaying) {
@@ -235,11 +263,20 @@ class LocalPlayer(
         currentTrack = track
         positionMs = startAtMs
         pendingSeekMs = -1L
+        decodeFinished = false
 
         val dec = FfmpegDecoder(context)
         decoder = dec
         dec.callback = object : FfmpegDecoder.Callback {
             override fun onPcmChunk(pcmBytes: ByteArray, chunkPositionMs: Long) {
+                if (gen != generation) return
+                // ★ フロー制御（バックプレッシャー）: Service のキューに
+                //   空きができるまでデコードスレッド側で待つ。待たないと
+                //   デコード速度で PCM が溢れ、Service 側で最古チャンクが
+                //   破棄され続けて曲が先へ飛ぶ。待機中に世代が変わったら
+                //   （ポーズ/停止/曲変更）このチャンクは捨てて戻る
+                //   — 再開・再開始側が正しい位置からデコードし直す。
+                if (!awaitQueueRoom(gen)) return
                 if (gen != generation) return
                 positionMs = chunkPositionMs
                 val rate = currentInfo?.sampleRate ?: track.sampleRate
@@ -305,28 +342,108 @@ class LocalPlayer(
     private fun handleDecodeEnded(gen: Int, error: Boolean) {
         synchronized(stateLock) {
             if (gen != generation) return // 古い世代の終了は無視する
+            decodeFinished = true
             if (error) {
                 Log.w(TAG, "decode ended with error at index=$currentIndex")
+                isPlaying = false
+                listener.onState(false)
+                listener.onProgress(displayPositionMs(), durationMs, false)
+                return
             }
-            isPlaying = false
-            val hasNext = currentIndex + 1 < queue.size
-            if (!error && hasNext) {
+            // ★ デコード完了 ≠ 再生完了。Service のキューには未再生の PCM が
+            //   最大で容量分残っている。ここですぐ次曲へ進むと onFlush で
+            //   前曲の末尾が切り捨てられ、最終曲では onState(false) で
+            //   Service 側の消費自体が止まり末尾が再生されない。再生し切る
+            //   まで待ってから進む/終える（scheduleAdvanceAfterDrain）。
+            //   その間 isPlaying は true のまま（音はまだ出ている）。
+            scheduleAdvanceAfterDrain(gen)
+        }
+    }
+
+    // デコード完了後、Service のキューが空になる（＋ AudioTrack 側に残った
+    // 分が流れ切るまでの猶予）まで待ち、世代が変わらなければ次曲へ進むか、
+    // 最終曲なら終了処理を行う。待ちは decodeExecutor 上で stateLock を
+    // 保持せずに行う（その間のポーズ/停止/曲変更は世代変更で検知して中断）。
+    private fun scheduleAdvanceAfterDrain(gen: Int) {
+        decodeExecutor.execute { waitForDrainThenAdvance(gen) }
+    }
+
+    // decodeExecutor 上で動く（stateLock は最後の確定時のみ取る）。
+    private fun waitForDrainThenAdvance(gen: Int) {
+        var emptySinceMs = -1L
+        while (gen == generation) {
+            val size = queueSizeProvider?.invoke() ?: 0
+            val now = SystemClock.elapsedRealtime()
+            if (size > 0) {
+                emptySinceMs = -1L
+            } else if (emptySinceMs < 0L) {
+                emptySinceMs = now
+            } else if (now - emptySinceMs >= DRAIN_SETTLE_MS) {
+                break
+            }
+            try {
+                Thread.sleep(DRAIN_POLL_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                return
+            }
+        }
+        if (gen != generation) return
+        synchronized(stateLock) {
+            if (gen != generation) return
+            if (currentIndex + 1 < queue.size) {
                 // ★ 曲の終わり → 次曲へ自動送り（全曲リスト順、仕様書 §4.2）
                 startTrackLocked(currentIndex + 1, 0L)
             } else {
+                // キュー末尾まで再生し切った
+                isPlaying = false
                 listener.onState(false)
                 listener.onProgress(positionMs, durationMs, false)
-                if (!error) {
-                    // キュー末尾まで再生し切った
-                    positionMs = 0L
-                    decoder?.release()
-                    decoder = null
-                    decodeFuture = null
-                    currentInfo = null
-                }
+                positionMs = 0L
+                decoder?.release()
+                decoder = null
+                decodeFuture = null
+                currentInfo = null
             }
         }
     }
+
+    // ★ フロー制御: Service のキュー残量が高水位（容量の 75%）以上なら、
+    //   低水位（容量の 50%）まで下がるのを待つ（ヒステリシス付き）。
+    //   デコードスレッドから呼ばれる。世代が変わるか割り込まれたら false
+    //   （＝このチャンクは捨てる）。プロバイダ未配線なら常に true。
+    private fun awaitQueueRoom(gen: Int): Boolean {
+        val sizeProvider = queueSizeProvider ?: return true
+        val capacity = queueCapacityProvider?.invoke() ?: 0
+        if (capacity <= 0) return true
+        val highWater = (capacity * QUEUE_HIGH_WATER_RATIO).toInt().coerceAtLeast(1)
+        if (sizeProvider() < highWater) return true
+        val lowWater = (capacity * QUEUE_LOW_WATER_RATIO).toInt().coerceAtLeast(0)
+        while (gen == generation) {
+            if (sizeProvider() <= lowWater) return true
+            try {
+                Thread.sleep(QUEUE_POLL_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                return false
+            }
+        }
+        return false
+    }
+
+    // Service のキューに溜まっている未再生 PCM の時間（現在曲の ms 換算）。
+    // 1 チャンク = CHUNK_FRAMES フレーム（ソースレート基準）として計算する
+    // ため、後段のアップサンプリング倍率には依存しない。
+    private fun bufferedMs(): Long {
+        val size = queueSizeProvider?.invoke() ?: return 0L
+        if (size <= 0) return 0L
+        val rate = currentInfo?.sampleRate ?: currentTrack?.sampleRate ?: 0
+        if (rate <= 0) return 0L
+        return size.toLong() * CHUNK_FRAMES * 1000L / rate
+    }
+
+    // 表示用の再生位置。positionMs は「Service へ渡し終えた位置」（デコード
+    // 位置）なので、未再生バッファ分を差し引いて実際に鳴っている位置へ寄せる。
+    private fun displayPositionMs(): Long =
+        (positionMs - bufferedMs()).coerceAtLeast(0L)
 
     private var consecutiveOpenFailures = 0
 
@@ -380,11 +497,22 @@ class LocalPlayer(
         }
     }
 
-    // 進捗の定期通知用に現在位置を返す（MainActivity のタイマから参照）
-    fun positionSnapshot(): Pair<Long, Long> = positionMs to durationMs
+    // 進捗の定期通知用に現在位置を返す（MainActivity のタイマから参照）。
+    // 位置はデコード位置ではなく、未再生バッファを差し引いた再生位置。
+    fun positionSnapshot(): Pair<Long, Long> = displayPositionMs() to durationMs
 
     companion object {
         private const val TAG = "LocalPlayer"
         private const val MAX_CONSECUTIVE_FAILURES = 3
+        // ネイティブ側のチャンク粒度（cpp の CHUNK_FRAMES、Service の想定と一致）
+        private const val CHUNK_FRAMES = 4096L
+        // フロー制御の水位（Service キュー容量に対する比率）とポーリング間隔
+        private const val QUEUE_HIGH_WATER_RATIO = 0.75
+        private const val QUEUE_LOW_WATER_RATIO = 0.50
+        private const val QUEUE_POLL_INTERVAL_MS = 25L
+        // 再生し切り判定: キューが空になってから AudioTrack 側の残りが
+        // 流れ切るまで待つ猶予と、そのポーリング間隔
+        private const val DRAIN_POLL_INTERVAL_MS = 50L
+        private const val DRAIN_SETTLE_MS = 500L
     }
 }
