@@ -276,9 +276,17 @@ class MainActivity : AppCompatActivity() {
     private val STALL_THRESHOLD_MS = 3000L       // 再生中なのに PCM がこの時間来なければストールとみなす
     private val STALL_STEP_INTERVAL_MS = 5000L   // 復旧ステップの間隔
     private val WATCHDOG_RELOAD_COOLDOWN_MS = 60000L // ページ reload の最小間隔
-    private var stallRecoveryStep = 0            // 0=正常, 1=resume_audio 済, 2=play 済, 3=reload 段, 4=セッション再生成 済（以後は自動復旧しない）
+    private var stallRecoveryStep = 0            // 0=正常, 1=resume_audio 済, 2=play 済, 3=reload 段, 4=最終段到達（以後は低頻度リトライへ移行）
     private var lastStallActionTime = 0L
     private var lastWatchdogReloadTime = 0L
+
+    // ★ 第2層: 最終段（ステップ4）到達後も、再生意思が生きている間は低頻度で
+    //   再開試行を続ける（アラーム＋スヌーズのような長時間・反復割り込みで
+    //   復旧機会を使い切らないため）。暴走防止にエピソード開始からの上限を設ける。
+    private val STALL_LONG_RETRY_INTERVAL_MS = 30000L  // 最終段到達後の再開試行の間隔
+    private val STALL_LONG_RETRY_MAX_MS = 1800000L    // 低頻度リトライを続ける上限（エピソード開始から30分）
+    private var stallEpisodeStartTime = 0L             // 現在のエピソードの開始時刻（ステップ 0→1 で記録）
+    private var lastStallLongRetryTime = 0L            // 最後に低頻度リトライを送った時刻
 
     // ★ 最終段: GeckoSession 再生成（ステップ 3 でも PCM が戻らない場合のみ）。
     //   実機で「通知系（progress/meta/flush）は生きているのに PCM だけ全途絶し、
@@ -477,6 +485,13 @@ class MainActivity : AppCompatActivity() {
             resetStallEpisode()
             return
         }
+        if (playbackService?.isAudioFocusInterrupted == true) {
+            // ★ オーディオフォーカス割り込み中（アラーム等）は復旧ステップを
+            //   消費しない。復帰はフォーカス回復側（GAIN → handleAudioFocusGained）が
+            //   担う。エピソードは畳んでおき、回復後にまだ止まっていれば新規に始まる。
+            resetStallEpisode()
+            return
+        }
         if (!userWantsPlayback || lastPcmTime == 0L) {
             resetStallEpisode()
             return
@@ -489,6 +504,7 @@ class MainActivity : AppCompatActivity() {
         // 再生中なのに PCM が途絶している（ページ側ストールの疑い）→ 段階的に復旧を試みる
         if (stallRecoveryStep == 0) {
             stallRecoveryStep = 1
+            stallEpisodeStartTime = now
             lastStallActionTime = now
             Log.w("MainActivity", "★ PCM stall detected (${pcmGap}ms), sending resume_audio")
             geckoController.sendCommand("resume_audio")
@@ -512,7 +528,20 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 3 -> trySessionRecreate(now)
-                else -> { /* step 4 以降は自動復旧しない（ユーザー操作に委ねる） */ }
+                else -> {
+                    // ★ 第2層: 最終段到達後も打ち切りにせず、再生意思がある間は
+                    //   低頻度（30秒間隔）で再開を試み続ける。上限はエピソード
+                    //   開始から30分（長時間割り込み・スヌーズ反復への保険）。
+                    if (stallEpisodeStartTime != 0L &&
+                        now - stallEpisodeStartTime <= STALL_LONG_RETRY_MAX_MS &&
+                        now - lastStallLongRetryTime >= STALL_LONG_RETRY_INTERVAL_MS
+                    ) {
+                        lastStallLongRetryTime = now
+                        Log.w("MainActivity", "★ PCM stall long retry, sending resume_audio + play")
+                        geckoController.sendCommand("resume_audio")
+                        geckoController.sendCommand("play")
+                    }
+                }
             }
         }
     }
@@ -520,7 +549,39 @@ class MainActivity : AppCompatActivity() {
     private fun resetStallEpisode() {
         stallRecoveryStep = 0
         stallStep3Since = 0L
+        stallEpisodeStartTime = 0L
+        lastStallLongRetryTime = 0L
         sessionRecreateDoneInEpisode = false
+    }
+
+    // ★ オーディオフォーカス回復（AUDIOFOCUS_GAIN）時の再開。Service 側で
+    //   「割り込み前に再生中だった」ことは確認済みで、ここではユーザーの
+    //   再生意思（userWantsPlayback）が今も生きている場合だけ再開を再送する。
+    //   ユーザーが明示的に止めた場合とスリープタイマーで止めた場合はどちらも
+    //   userWantsPlayback が false になっているため、絶対に自動再開しない。
+    //   あわせてウォッチドッグのエピソードをリセットし、割り込み中に消費
+    //   されなかった復旧段を回復後から新規に使えるようにする。
+    private fun handleAudioFocusGained() {
+        resetStallEpisode()
+        if (!userWantsPlayback) {
+            Log.i("MainActivity", "★ Audio focus gained, but user intent is pause; not resuming")
+            return
+        }
+        when (currentPlaybackMode) {
+            PlaybackMode.YT_MUSIC -> {
+                if (::geckoController.isInitialized) {
+                    Log.i("MainActivity", "★ Audio focus gained, resuming YT playback")
+                    geckoController.sendCommand("resume_audio")
+                    geckoController.sendCommand("play")
+                }
+            }
+            PlaybackMode.LOCAL -> {
+                if (::localPlayer.isInitialized && !localPlayer.isPlaying && localPlayer.currentTrack != null) {
+                    Log.i("MainActivity", "★ Audio focus gained, resuming Local playback")
+                    localPlayer.handleCommand("play")
+                }
+            }
+        }
     }
 
     // ★ 最終段: ステップ 3（reload 段）でも PCM が戻らない場合に限り、GeckoSession
@@ -543,6 +604,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (now - lastSessionRecreateTime < SESSION_RECREATE_COOLDOWN_MS) {
+            // ★ 見送りでも再生成段の判定は完了したものとしてステップ4へ進める。
+            //   以後は第2層の低頻度リトライが引き継ぐ（従来はこのエピソードでは
+            //   二度と再判定されず、復旧機会を使い切っていた）。
+            stallRecoveryStep = 4
             Log.w("MainActivity", "★ Session recreate skipped (cooldown)")
             return
         }
@@ -3071,6 +3136,11 @@ class MainActivity : AppCompatActivity() {
                     PlaybackMode.LOCAL -> localPlayer.handleCommand(cmd)
                 }
             }
+            playbackService?.onAudioFocusGainedListener = {
+                // ★ フォーカス回復時の再開は UI スレッド側の状態（再生意思・
+                //   現在のモード）で判断するため、こちらへ寄せてから処理する。
+                runOnUiThread { handleAudioFocusGained() }
+            }
             playbackService?.onSeekListener = { pos ->
                 when (currentPlaybackMode) {
                     PlaybackMode.YT_MUSIC -> geckoController.sendSeek(pos)
@@ -4580,7 +4650,10 @@ class MainActivity : AppCompatActivity() {
             //   ON/OFF を見て "-" に倒す（キャッシュや Prefs への書き戻しはしない）。
             val tpCurrent = svc?.truePeakCurrentReductionDb ?: 0f
             val tpStr = if (svc != null && !svc.isDirectSource && appPrefs.isTruePeakGuardEnabled) String.format(java.util.Locale.US, "-%.1f", tpCurrent) else "-"
-            textBufferLatency.text = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMs}ms) TP:${tpStr}dB"
+            // ★ DROP の累計 ms は桁が増え続けステータス行を押し広げるため、
+            //   1 秒以上は秒表記（例: 1.2s）に短縮する。意味は ms 表記と同じ。
+            val dropMsStr = if (dropMs >= 1000L) String.format(java.util.Locale.US, "%.1fs", dropMs / 1000.0) else "${dropMs}ms"
+            textBufferLatency.text = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMsStr}) TP:${tpStr}dB"
             textBufferLatency.setTextColor(if (isDarkThemeActive()) ContextCompat.getColor(this@MainActivity, R.color.text_secondary) else ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
         } else {
             textCpuRamMonitor.visibility = View.GONE
