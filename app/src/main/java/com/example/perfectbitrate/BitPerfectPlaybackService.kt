@@ -134,6 +134,19 @@ class BitPerfectPlaybackService : Service() {
     private val PREROLL_THRESHOLD = 6
     private val isBuffering = AtomicBoolean(true)
 
+    // ★ Local の曲切り替え/シーク直後だけ使う小さいプリロール。
+    //   Local の供給は端末内デコードで速く安定しているため、YT 側の
+    //   供給瞬断対策である 6 チャンクまで待つ必要がなく、切り替え後の
+    //   再開を早められる。アームは resetBuffer("local") でのみ行い、
+    //   再開が成立した時点で消費される（再生中のアンダーラン回復では
+    //   使われず、従来どおり 6 チャンクで復帰する）。YT 由来の
+    //   フラッシュ（"page" / "mode"）では必ず解除し、YT 経路の
+    //   再開条件には影響させない。
+    private val LOCAL_PREROLL_THRESHOLD = 3
+    @Volatile private var localFastPrerollArmed = false
+    private fun activePrerollThreshold(): Int =
+        if (localFastPrerollArmed) LOCAL_PREROLL_THRESHOLD else PREROLL_THRESHOLD
+
     // ★ バッファ破棄の計測カウンタ（診断用、サービス起動以来の累計。再生挙動には影響しない）
     val bufferDropCount = AtomicLong(0)     // キューフルで最古パケットを落とした回数
     val bufferDropMs = AtomicLong(0)        // 落とした音の合計時間 (ms)
@@ -585,8 +598,9 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        if (isBuffering.get() && pcmQueue.size >= PREROLL_THRESHOLD) {
+        if (isBuffering.get() && pcmQueue.size >= activePrerollThreshold()) {
             isBuffering.set(false)
+            localFastPrerollArmed = false
             if (underrunOpen.compareAndSet(true, false)) {
                 bufferResumeCount.incrementAndGet()
             }
@@ -598,6 +612,10 @@ class BitPerfectPlaybackService : Service() {
         if (reason == "page") bufferFlushPageCount.incrementAndGet()
         Log.i("BitPerfect", "★ Buffer flush (reason=$reason) total=${bufferFlushCount.get()}")
         isBuffering.set(true)
+        // ★ 高速プリロールのアームは Local 由来のフラッシュだけ。
+        //   YT 由来（ページ/モード切替）では解除して持ち越さない。
+        if (reason == "local") localFastPrerollArmed = true
+        if (reason == "page" || reason == "mode") localFastPrerollArmed = false
         pcmQueue.clear()
         audioLock.lock()
         try {
@@ -1183,11 +1201,12 @@ class BitPerfectPlaybackService : Service() {
                     }
 
                     if (isBuffering.get()) {
-                        if (pcmQueue.size < PREROLL_THRESHOLD) {
+                        if (pcmQueue.size < activePrerollThreshold()) {
                             Thread.sleep(10)
                             continue
                         } else {
                             isBuffering.set(false)
+                            localFastPrerollArmed = false
                             if (underrunOpen.compareAndSet(true, false)) {
                                 bufferResumeCount.incrementAndGet()
                             }

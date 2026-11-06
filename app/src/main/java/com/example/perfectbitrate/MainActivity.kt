@@ -633,6 +633,24 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
             playbackService?.updateProgress(0L, 0L, false)
             ensureLocalLibrary()
+            // ★ Local で保持中の曲（YT へ行く前に再生していた曲）が
+            //   ある場合は、その曲の表示を復元する。タイトル /
+            //   アーティストは LocalPlayer の現在曲から戻し、
+            //   アートワークは再取得して適用する。切替のたびに
+            //   currentArtworkBitmap を null へ倒しているため、
+            //   再取得しないと再生画面のアートワークが音符
+            //   プレースホルダのままになる（LocalPlayer は曲開始
+            //   時にしかアートワークを送らない）。
+            if (::localPlayer.isInitialized) {
+                localPlayer.currentTrack?.let { held ->
+                    currentTitle = held.title
+                    currentArtist = held.artist
+                    playbackService?.updateMetadataWithBitmap(
+                        currentTitle, currentArtist, null
+                    )
+                    localPlayer.refreshCurrentArtwork()
+                }
+            }
         } else {
             // ★ YT へ戻す際は、Local 側が書き換えたソース依存のストリーム
             //   状態を YT の既定へ戻す。特に baseSampleRate: Local の
