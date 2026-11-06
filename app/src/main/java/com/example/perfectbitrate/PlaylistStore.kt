@@ -164,6 +164,31 @@ class PlaylistStore(context: Context) :
         return result
     }
 
+    // ★ 指定の曲が入っているプレイリストを一覧で返す（作成順）。
+    //   ★ の「外す」ダイアログ（どのプレイリストから外すか）の
+    //   選択肢に使う。
+    fun playlistsContaining(uri: String): List<Playlist> {
+        val result = mutableListOf<Playlist>()
+        readableDatabase.rawQuery(
+            "SELECT p.id, p.name, p.created_at, COUNT(i2.uri) " +
+                "FROM $TABLE_PLAYLISTS p " +
+                "JOIN $TABLE_ITEMS i ON i.playlist_id = p.id AND i.uri = ? " +
+                "LEFT JOIN $TABLE_ITEMS i2 ON i2.playlist_id = p.id " +
+                "GROUP BY p.id ORDER BY p.created_at ASC, p.id ASC",
+            arrayOf(uri)
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                result += Playlist(
+                    id = cursor.getLong(0),
+                    name = cursor.getString(1) ?: "",
+                    createdAtMs = cursor.getLong(2),
+                    itemCount = cursor.getInt(3)
+                )
+            }
+        }
+        return result
+    }
+
     fun contains(playlistId: Long, uri: String): Boolean {
         readableDatabase.query(
             TABLE_ITEMS, arrayOf("uri"),

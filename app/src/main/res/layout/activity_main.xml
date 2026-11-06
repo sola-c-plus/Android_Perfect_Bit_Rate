@@ -386,9 +386,10 @@
 
             <!-- ★ Local コンテンツ領域のページコンテナ: ブラウザ
                  ページ（検索 / ドリルダウン / 一覧）と再生ページ
-                 （「再生」タブ）を出し分ける。上部ステータスヘッダー
-                 （topInfoPanel）はこの外側にあるため、どちらのページ
-                 でも隠れず常時表示される。 -->
+                 （「再生」タブ）とキューページ（「キュー」タブ）を
+                 出し分ける。上部ステータスヘッダー（topInfoPanel）は
+                 この外側にあるため、どのページでも隠れず常時
+                 表示される。 -->
             <FrameLayout
                 android:id="@+id/localPageContainer"
                 android:layout_width="match_parent"
@@ -790,24 +791,74 @@
                         android:textSize="13sp"
                         android:visibility="gone" />
                 </FrameLayout>
+
+                <!-- ★ キューページ（「キュー」タブ）: LocalPlayer の
+                     実効再生順（シャッフル時はシャッフル後の順序）を
+                     一覧表示する。行の見た目はライブラリの曲行と共通
+                     （LocalTrackAdapter）で、再生中の曲がハイライト
+                     される。行タップでその曲へジャンプする。キューが
+                     無いときは空状態を出す。ブラウザページとは独立
+                     したページにし、検索 / ドリルダウンの状態と
+                     干渉しないようにする。 -->
+                <FrameLayout
+                    android:id="@+id/localQueuePage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone">
+
+                    <ListView
+                        android:id="@+id/localQueueList"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:divider="#1C1C1C"
+                        android:dividerHeight="1dp"
+                        android:cacheColorHint="@android:color/transparent"
+                        android:listSelector="@android:color/transparent" />
+
+                    <!-- ★ 空状態: キューが無いときの表示 -->
+                    <TextView
+                        android:id="@+id/textQueueEmpty"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:text="再生キューがありません"
+                        android:textColor="#888888"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+                </FrameLayout>
             </FrameLayout>
 
-            <!-- ★ ライブラリの下部タブバー: 左から 再生 / 全曲 /
-                 アルバム / アーティスト / プレイリスト。各タブはアイコン
-                 （ic_tab_*）＋ラベルの構成で、選択状態の配色（アイコン
-                 の tint とラベル色）はコード側でテーマに合わせて
-                 切り替える（updateLocalTabStyles）。「再生」は再生
-                 ページへの切替で、一覧で曲をタップして再生が始まった
-                 ときも自動で切り替わる（明示タップ起点のみ。自動進行
-                 や通知からの操作では切り替わらない）。ドリルダウン中も
-                 含め Local 表示中は常に出し、タブ切替でドリルダウン
-                 から抜けられるようにする。 -->
+            <!-- ★ ライブラリの下部タブバー: 左から キュー / 再生 /
+                 全曲 / アルバム / アーティスト / プレイリスト。各タブは
+                 アイコン（ic_tab_*）＋ラベルの構成で、選択状態の配色
+                 （アイコンの tint とラベル色）はコード側でテーマに
+                 合わせて切り替える（updateLocalTabStyles）。「再生」は
+                 再生ページへの切替で、一覧で曲をタップして再生が
+                 始まったときも自動で切り替わる（明示タップ起点のみ。
+                 自動進行や通知からの操作では切り替わらない）。ドリル
+                 ダウン中も含め Local 表示中は常に出し、タブ切替で
+                 ドリルダウンから抜けられるようにする。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tabLocalQueue"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_queue"
+                    android:drawablePadding="3dp"
+                    android:text="キュー"
+                    android:textColor="#888888"
+                    android:textSize="12sp"
+                    android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
                     android:id="@+id/tabLocalNowPlaying"

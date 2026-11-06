@@ -50,6 +50,14 @@ class LocalPlayer(
 
     private var queue: List<LibraryRepository.Track> = emptyList()
     private var currentIndex = -1
+
+    // ★ 実効再生順（順序表）: playOrder[実効位置] = キュー内インデックス。
+    //   次へ / 前へ / 自動進行はすべてこの順序表に従う。シャッフル OFF
+    //   では元の並び順そのもの、ON では「現在曲を先頭に固定した
+    //   ランダム順」。orderPosition は順序表上の現在位置で、有効な間は
+    //   playOrder[orderPosition] == currentIndex を保つ。
+    private var playOrder: List<Int> = emptyList()
+    private var orderPosition = -1
     private var decoder: FfmpegDecoder? = null
     private var decodeFuture: Future<*>? = null
 
@@ -97,13 +105,19 @@ class LocalPlayer(
 
     fun setQueue(tracks: List<LibraryRepository.Track>) {
         synchronized(stateLock) {
-            queue = tracks
             // ★ キューはライブラリブラウザの表示中リストで差し替わる
             //   （フィルタ / ソート / グループの適用結果。Phase 2-1）。
             //   再生中の曲が新しいキューに含まれていれば、その位置へ
             //   インデックスを寄せ直し、次曲送りや自動進行が別の曲へ
             //   飛ばないようにする。含まれていない場合は従来どおり
             //   範囲外なら -1 へ丸める。
+            // ★ 中身（URI の並び）が前と同じなら順序表は作り直さない。
+            //   setQueue はブラウザ再描画のたびに呼ばれるため、シャッフル
+            //   中に毎回振り直すと再生順が定まらなくなる（WALKMAN と
+            //   同じく、順序は内容が変わるまで保持する）。
+            val sameContent = tracks.size == queue.size &&
+                tracks.indices.all { tracks[it].uri == queue[it].uri }
+            queue = tracks
             val current = currentTrack
             val anchor = if (current != null) {
                 tracks.indexOfFirst { it.uri == current.uri }
@@ -115,19 +129,70 @@ class LocalPlayer(
             } else if (currentIndex >= tracks.size) {
                 currentIndex = -1
             }
+            if (sameContent && playOrder.size == queue.size) {
+                orderPosition =
+                    if (currentIndex in queue.indices) playOrder.indexOf(currentIndex) else -1
+            } else {
+                rebuildOrderLocked(if (anchor >= 0) anchor else currentIndex)
+            }
         }
+    }
+
+    // stateLock 保持必須。シャッフル状態に応じた順序表を生成する。
+    // anchorQueueIndex は現在曲のキュー内インデックス（無ければ -1）。
+    // シャッフル ON では現在曲を先頭（実効位置 0）に固定し、残りを
+    // ランダムに並べる。OFF では元の並び順で、現在位置は現在曲の
+    // 位置を引き継ぐ。
+    private fun rebuildOrderLocked(anchorQueueIndex: Int) {
+        if (queue.isEmpty()) {
+            playOrder = emptyList()
+            orderPosition = -1
+            return
+        }
+        playOrder = if (shuffleEnabled) {
+            if (anchorQueueIndex in queue.indices) {
+                val rest = queue.indices
+                    .filter { it != anchorQueueIndex }
+                    .shuffled(Random)
+                listOf(anchorQueueIndex) + rest
+            } else {
+                queue.indices.shuffled(Random)
+            }
+        } else {
+            queue.indices.toList()
+        }
+        orderPosition =
+            if (anchorQueueIndex in queue.indices) playOrder.indexOf(anchorQueueIndex) else -1
     }
 
     fun queueSize(): Int = synchronized(stateLock) { queue.size }
 
     fun currentIndex(): Int = synchronized(stateLock) { currentIndex }
 
+    // 実効再生順における現在位置（0 始まり）。再生画面の n / N 表示と
+    // キュータブの現在位置に使う。現在曲が決まっていなければ -1。
+    fun effectivePosition(): Int = synchronized(stateLock) { orderPosition }
+
+    // 実効再生順に並べた現在のキュー（キュータブ表示用）。
+    fun effectiveOrderTracks(): List<LibraryRepository.Track> =
+        synchronized(stateLock) { playOrder.map { queue[it] } }
+
+    // キュータブ等から、実効再生順の位置を指定して再生する。
+    fun playAtEffectivePosition(position: Int) {
+        synchronized(stateLock) {
+            val queueIndex = playOrder.getOrNull(position) ?: return
+            startTrackLocked(queueIndex, 0L)
+        }
+    }
+
     // ── シャッフル / リピート（Now Playing） ──
     //
-    // 状態の正は prefs（AppPreferences）で、ここは読み書きの窓口だけを
-    // 持つ。効くのは自動進行（computeAutoAdvanceIndex）のみで、手動の
-    // next / prev は従来どおり表示順の前後へ動く（シャッフル時の
-    // 「前へ」も履歴ではなく通常の前曲）。
+    // 状態の正は prefs（AppPreferences）で、ここは読み書きの窓口を持つ。
+    // シャッフルは「自動進行の行き先を都度ランダムに選ぶ」のではなく、
+    // WALKMAN と同じく実効再生順（順序表）を実際に生成して、その順で
+    // 再生する方式。手動の next / prev も順序表に従うため、シャッフル
+    // 時の「前へ」は実際に前に再生した曲へ戻る。リピートとの優先
+    // 順位は自動進行でのみ効く（リピート1曲 > 順序表の次）。
 
     val shuffleEnabled: Boolean
         get() = AppPreferences.get().localShuffleEnabled
@@ -137,6 +202,11 @@ class LocalPlayer(
 
     fun setShuffleEnabled(enabled: Boolean) {
         AppPreferences.get().localShuffleEnabled = enabled
+        synchronized(stateLock) {
+            // ★ 切替えたその場で順序表を作り直す（再生中の曲はそのまま、
+            //   ON では現在曲が先頭に固定される）。
+            rebuildOrderLocked(currentIndex)
+        }
     }
 
     // リピートを OFF → 全曲 → 1曲 の順に循環させ、新しい状態を返す。
@@ -146,22 +216,19 @@ class LocalPlayer(
         return next
     }
 
-    // stateLock 保持必須。自動進行の次インデックスを決める（-1 = 再生終了）。
-    // 優先順位: リピート1曲 > シャッフル > 通常順。リピート全曲は通常順の
-    // 末尾で先頭へ回す。シャッフルは現在曲以外から一様に選ぶ（曲が1つ
-    // だけのときは通常順に落ちる）。
+    // stateLock 保持必須。自動進行の行き先（キュー内インデックス、
+    // -1 = 再生終了）を順序表から決める。
+    // 優先順位: リピート1曲 > 順序表の次の位置。順序表の末尾では、
+    // リピート全曲なら先頭へ回し、それ以外は終了する。
     private fun computeAutoAdvanceIndexLocked(): Int {
         if (queue.isEmpty() || currentIndex !in queue.indices) return -1
         if (repeatMode == AppPreferences.LOCAL_REPEAT_ONE) return currentIndex
-        if (shuffleEnabled && queue.size > 1) {
-            var candidate = Random.nextInt(queue.size)
-            if (candidate == currentIndex) {
-                candidate = (candidate + 1) % queue.size
-            }
-            return candidate
+        if (orderPosition in playOrder.indices && orderPosition + 1 < playOrder.size) {
+            return playOrder[orderPosition + 1]
         }
-        if (currentIndex + 1 < queue.size) return currentIndex + 1
-        if (repeatMode == AppPreferences.LOCAL_REPEAT_ALL) return 0
+        if (repeatMode == AppPreferences.LOCAL_REPEAT_ALL && playOrder.isNotEmpty()) {
+            return playOrder.first()
+        }
         return -1
     }
 
@@ -193,7 +260,9 @@ class LocalPlayer(
             } else if (currentIndex in queue.indices) {
                 startTrackLocked(currentIndex, positionMs)
             } else if (queue.isNotEmpty()) {
-                startTrackLocked(0, 0L)
+                // 現在曲が決まっていない場合は実効再生順の先頭から
+                // （シャッフル中はシャッフル順の先頭）。
+                startTrackLocked(playOrder.firstOrNull() ?: 0, 0L)
             }
         }
     }
@@ -244,9 +313,10 @@ class LocalPlayer(
     fun next() {
         synchronized(stateLock) {
             if (queue.isEmpty()) return
-            val nextIndex = currentIndex + 1
-            if (nextIndex < queue.size) {
-                startTrackLocked(nextIndex, 0L)
+            // 順序表の次の位置へ（シャッフル中はシャッフル順の次曲）。
+            val nextPosition = orderPosition + 1
+            if (nextPosition in playOrder.indices) {
+                startTrackLocked(playOrder[nextPosition], 0L)
             }
         }
     }
@@ -260,9 +330,10 @@ class LocalPlayer(
                 seekTo(0L)
                 return
             }
-            val prevIndex = currentIndex - 1
-            if (prevIndex >= 0) {
-                startTrackLocked(prevIndex, 0L)
+            // 順序表の前の位置へ（シャッフル中は実際に前に再生した曲）。
+            val prevPosition = orderPosition - 1
+            if (prevPosition in playOrder.indices) {
+                startTrackLocked(playOrder[prevPosition], 0L)
             } else {
                 seekTo(0L)
             }
@@ -320,6 +391,9 @@ class LocalPlayer(
         stopAndReleaseDecoderLocked()
 
         currentIndex = index
+        // 順序表上の現在位置を追随させる（不変条件:
+        // playOrder[orderPosition] == currentIndex）。
+        orderPosition = playOrder.indexOf(index)
         currentTrack = track
         positionMs = startAtMs
         pendingSeekMs = -1L
@@ -516,8 +590,15 @@ class LocalPlayer(
             consecutiveOpenFailures = 0
             return
         }
-        val nextIndex = failedIndex + 1
-        if (nextIndex < queue.size && gen == generation) {
+        // 開けない曲は実効再生順の次へ送る（順序表に無い場合は
+        // キュー内の次の曲で代替する）。
+        val failedPosition = playOrder.indexOf(failedIndex)
+        val nextIndex = if (failedPosition >= 0) {
+            playOrder.getOrNull(failedPosition + 1)
+        } else {
+            (failedIndex + 1).takeIf { it < queue.size }
+        }
+        if (nextIndex != null && gen == generation) {
             startTrackLocked(nextIndex, 0L)
         }
     }

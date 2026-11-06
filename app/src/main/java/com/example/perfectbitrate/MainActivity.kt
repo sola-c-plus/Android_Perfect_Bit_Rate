@@ -92,6 +92,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textLocalUpdating: TextView
     // ★ ライブラリブラウザのクローム（Phase 2-1: タブ / 検索 / ソート /
     //   ドリルダウン用ヘッダー）
+    private lateinit var tabLocalQueue: TextView
     private lateinit var tabLocalNowPlaying: TextView
     private lateinit var tabLocalAll: TextView
     private lateinit var tabLocalAlbum: TextView
@@ -107,6 +108,13 @@ class MainActivity : AppCompatActivity() {
     //   ページとして表示する（上部ステータスヘッダーは常時表示）。
     private lateinit var localBrowserPage: View
     private lateinit var localNowPlaying: View
+    // ★ キューページ（「キュー」タブ）: LocalPlayer の実効再生順
+    //   （シャッフル時はシャッフル後の順序）をそのまま一覧表示する
+    //   専用ページ。ブラウザページとは独立させ、検索やドリルダウンの
+    //   状態と干渉しないようにする。
+    private lateinit var localQueuePage: View
+    private lateinit var localQueueList: ListView
+    private lateinit var textQueueEmpty: TextView
     private lateinit var localNpContent: View
     private lateinit var textNpEmpty: TextView
     private lateinit var textNpQueuePosition: TextView
@@ -147,12 +155,14 @@ class MainActivity : AppCompatActivity() {
     private var localScanUpdatingWanted = false
 
     // ★ ライブラリブラウザの状態（Phase 2-1、下部タブバー）。
-    //   localTab: 表示中のタブ（NOW_PLAYING = 再生ページ、それ以外は
-    //   ブラウザページ）。localGroupKey: ドリルダウン中のグループ
-    //   キー（null = 全曲リスト or グループ一覧を表示中）。
-    //   localDisplayedTracks: いま曲リストとして表示している並び
-    //   （＝ LocalPlayer へ渡しているキューと一致させる）。
-    private enum class LocalTab { NOW_PLAYING, ALL, ALBUM, ARTIST, PLAYLIST }
+    //   localTab: 表示中のタブ（QUEUE = キューページ、NOW_PLAYING =
+    //   再生ページ、それ以外はブラウザページ）。localGroupKey:
+    //   ドリルダウン中のグループキー（null = 全曲リスト or グループ
+    //   一覧を表示中）。localDisplayedTracks: いま曲リストとして
+    //   表示している並び（＝ LocalPlayer へ渡しているキューと
+    //   一致させる。キューページは LocalPlayer 側の順序表から
+    //   直接描くため、ここには入れない）。
+    private enum class LocalTab { QUEUE, NOW_PLAYING, ALL, ALBUM, ARTIST, PLAYLIST }
 
     private data class LocalGroup(
         val key: String,
@@ -580,6 +590,9 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 updateLocalPlayerChrome()
                 localTrackAdapter?.notifyDataSetChanged()
+                // ★ キュータブ表示中は、曲の進行に合わせて一覧と
+                //   ハイライトを追随させる。
+                if (localTab == LocalTab.QUEUE) refreshQueueTab()
             }
         }
     }
@@ -793,15 +806,19 @@ class MainActivity : AppCompatActivity() {
     // 間はキューに触らない。
 
     // ★ Local コンテンツ領域内のページ出し分け: 「再生」タブなら
-    //   再生ページ、それ以外はブラウザページ（検索 / 一覧）を出す。
+    //   再生ページ、「キュー」タブならキューページ、それ以外は
+    //   ブラウザページ（検索 / 一覧）を出す。
     //   上部ステータスヘッダー（topInfoPanel）はモード共通で常時
     //   表示される領域のため、ここでは一切触らない。選択中タブは
     //   localTab が唯一の正で、再描画のたびにここから復元される。
     private fun updateLocalPageVisibility() {
         if (!::localNowPlaying.isInitialized) return
         val showNowPlaying = localTab == LocalTab.NOW_PLAYING
+        val showQueue = localTab == LocalTab.QUEUE
         localNowPlaying.visibility = if (showNowPlaying) View.VISIBLE else View.GONE
-        localBrowserPage.visibility = if (showNowPlaying) View.GONE else View.VISIBLE
+        localQueuePage.visibility = if (showQueue) View.VISIBLE else View.GONE
+        localBrowserPage.visibility =
+            if (showNowPlaying || showQueue) View.GONE else View.VISIBLE
         if (showNowPlaying) {
             if (::localPlayer.isInitialized) {
                 updateLocalNowPlaying(localPlayer.currentTrack)
@@ -845,6 +862,13 @@ class MainActivity : AppCompatActivity() {
             updateLocalTabStyles()
             return
         }
+        if (localTab == LocalTab.QUEUE) {
+            // キューは LocalPlayer の順序表が導出元のため、専用
+            // 経路で描く（表示＝キューのため setQueue はしない）。
+            refreshQueueTab()
+            updateLocalTabStyles()
+            return
+        }
         val groupKey = localGroupKey
         if (groupKey != null && localTab != LocalTab.ALL) {
             // ドリルダウン中: 選択中グループの曲一覧（検索フィルタ適用、
@@ -871,10 +895,11 @@ class MainActivity : AppCompatActivity() {
                     localTrackList.adapter = adapter
                     updateLocalEmptyMessage(groups.size, isTrackPage = false)
                 }
-                LocalTab.PLAYLIST, LocalTab.NOW_PLAYING -> {
-                    // 到達しない分岐（網羅性のため）: PLAYLIST は冒頭の
-                    // 専用経路、NOW_PLAYING は関数冒頭の早期 return で
-                    // それぞれ処理済みのため、ここでは何もしない。
+                LocalTab.PLAYLIST, LocalTab.NOW_PLAYING, LocalTab.QUEUE -> {
+                    // 到達しない分岐（網羅性のため）: PLAYLIST / QUEUE
+                    // は冒頭の専用経路、NOW_PLAYING は関数冒頭の早期
+                    // return でそれぞれ処理済みのため、ここでは
+                    // 何もしない。
                 }
             }
         }
@@ -928,6 +953,32 @@ class MainActivity : AppCompatActivity() {
             // 行が出ている間は、ライブラリ側の空表示メッセージ
             // （ライブラリ未読込時の案内など）を重ねない。
             textLocalMessage.visibility = View.GONE
+        }
+    }
+
+    // ★ キュータブの描画。LocalPlayer の実効再生順（シャッフル ON
+    //   ならシャッフル後の順序、OFF なら元の並び）をそのまま一覧に
+    //   する。行の見た目と再生中ハイライトはライブラリの曲行と共通
+    //   （LocalTrackAdapter、ハイライトは URI 判定）。表示リスト
+    //   自体が再生キューのため、ここでは setQueue しない。キューが
+    //   無ければ空状態を出す。開いたときは現在曲の位置へスクロール
+    //   しておく。
+    private fun refreshQueueTab() {
+        if (!::localQueueList.isInitialized) return
+        val tracks = if (::localPlayer.isInitialized) {
+            localPlayer.effectiveOrderTracks()
+        } else {
+            emptyList()
+        }
+        localQueueList.adapter = LocalTrackAdapter(tracks)
+        val hasQueue = tracks.isNotEmpty()
+        localQueueList.visibility = if (hasQueue) View.VISIBLE else View.GONE
+        textQueueEmpty.visibility = if (hasQueue) View.GONE else View.VISIBLE
+        if (hasQueue && ::localPlayer.isInitialized) {
+            val pos = localPlayer.effectivePosition()
+            if (pos in tracks.indices) {
+                localQueueList.post { localQueueList.setSelection(pos) }
+            }
         }
     }
 
@@ -1086,6 +1137,50 @@ class MainActivity : AppCompatActivity() {
         if (localTab == LocalTab.PLAYLIST) refreshLocalBrowser()
     }
 
+    // ★ 曲をプレイリストから外す共通処理。外した後は ★ の表示も
+    //   同期する（他のプレイリストに残っていても、追加先から外れて
+    //   いれば ★ は輪郭に戻る現行ルールどおり）。
+    private fun removeTrackFromPlaylist(track: LibraryRepository.Track, playlist: PlaylistStore.Playlist) {
+        playlistStore.removeItem(playlist.id, track.uri.toString())
+        Toast.makeText(this, "「${playlist.name}」から外しました", Toast.LENGTH_SHORT).show()
+        updateNpStarState()
+        if (localTab == LocalTab.PLAYLIST) refreshLocalBrowser()
+    }
+
+    // ★ 「どのプレイリストから外すか」の選択ダイアログ。
+    //   ★ が塗りつぶし状態（追加先＝最後に作成したプレイリストに
+    //   現在曲が入っている）のときに ★ タップで開く。選択肢は
+    //   その曲が入っている全プレイリスト。
+    private fun showRemoveFromPlaylistPickerDialog(track: LibraryRepository.Track) {
+        val playlists = playlistStore.playlistsContaining(track.uri.toString())
+        if (playlists.isEmpty()) {
+            // 状態が変わっていた場合は追加側の作法に倒す
+            addTrackToLatestPlaylist(track)
+            return
+        }
+        val labels = playlists.map { it.name as CharSequence }
+        AlertDialog.Builder(this)
+            .setTitle("どのプレイリストから外しますか")
+            .setItems(labels.toTypedArray()) { _, which ->
+                removeTrackFromPlaylist(track, playlists[which])
+            }
+            .show()
+    }
+
+    // ★ ★タップ（輪郭状態）のクイック追加: 最後に作成した
+    //   プレイリストへ現在曲を追加する。プレイリストが1つも
+    //   無ければ新規作成へ誘導し、作成したリストへそのまま追加する。
+    private fun addTrackToLatestPlaylist(track: LibraryRepository.Track) {
+        val latest = playlistStore.latestPlaylist()
+        if (latest == null) {
+            showCreatePlaylistDialog { newId ->
+                playlistStore.getPlaylist(newId)?.let { addTrackToPlaylist(track, it) }
+            }
+        } else {
+            addTrackToPlaylist(track, latest)
+        }
+    }
+
     // ★ 追加先の選択ダイアログ（既存プレイリスト＋新規作成）。
     //   ★ の長押しと、曲リストの長押しで共用する。
     private fun showAddToPlaylistDialog(track: LibraryRepository.Track) {
@@ -1242,6 +1337,7 @@ class MainActivity : AppCompatActivity() {
         val colorSelected = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
         val colorNormal = Color.parseColor(if (isDark) "#888888" else "#636366")
         val tabs = listOf(
+            tabLocalQueue to LocalTab.QUEUE,
             tabLocalNowPlaying to LocalTab.NOW_PLAYING,
             tabLocalAll to LocalTab.ALL,
             tabLocalAlbum to LocalTab.ALBUM,
@@ -1268,6 +1364,7 @@ class MainActivity : AppCompatActivity() {
     //   when は LocalTab の全値を網羅すること。
     private fun localTabIconRes(tab: LocalTab): Int {
         return when (tab) {
+            LocalTab.QUEUE -> R.drawable.ic_tab_queue
             LocalTab.NOW_PLAYING -> R.drawable.ic_tab_now_playing
             LocalTab.ALL -> R.drawable.ic_tab_all
             LocalTab.ALBUM -> R.drawable.ic_tab_album
@@ -1364,7 +1461,7 @@ class MainActivity : AppCompatActivity() {
         return when (tab) {
             LocalTab.ALBUM -> track.album.ifBlank { unknownAlbumLabel }
             LocalTab.ARTIST -> track.artist.ifBlank { unknownArtistLabel }
-            LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST -> ""
+            LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE -> ""
         }
     }
 
@@ -1720,6 +1817,7 @@ class MainActivity : AppCompatActivity() {
         textLocalScanCurrent = findViewById(R.id.textLocalScanCurrent)
         localScanUpdating = findViewById(R.id.localScanUpdating)
         textLocalUpdating = findViewById(R.id.textLocalUpdating)
+        tabLocalQueue = findViewById(R.id.tabLocalQueue)
         tabLocalNowPlaying = findViewById(R.id.tabLocalNowPlaying)
         tabLocalAll = findViewById(R.id.tabLocalAll)
         tabLocalAlbum = findViewById(R.id.tabLocalAlbum)
@@ -1732,6 +1830,9 @@ class MainActivity : AppCompatActivity() {
         textLocalGroupTitle = findViewById(R.id.textLocalGroupTitle)
         localBrowserPage = findViewById(R.id.localBrowserPage)
         localNowPlaying = findViewById(R.id.localNowPlaying)
+        localQueuePage = findViewById(R.id.localQueuePage)
+        localQueueList = findViewById(R.id.localQueueList)
+        textQueueEmpty = findViewById(R.id.textQueueEmpty)
         localNpContent = findViewById(R.id.localNpContent)
         textNpEmpty = findViewById(R.id.textNpEmpty)
         textNpQueuePosition = findViewById(R.id.textNpQueuePosition)
@@ -1962,9 +2063,34 @@ class MainActivity : AppCompatActivity() {
             //   機能）。振り分けは onLocalListItemLongClicked 側。
             onLocalListItemLongClicked(position)
         }
+        tabLocalQueue.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTab(LocalTab.QUEUE)
+        }
         tabLocalNowPlaying.setOnClickListener {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.NOW_PLAYING)
+        }
+        localQueueList.setOnItemClickListener { _, view, position, _ ->
+            view?.hapticTick(appPrefs)
+            // ★ キューの行タップは、その曲（実効再生順の位置）へ
+            //   ジャンプして再生する。他のリストと同じ作法で、
+            //   ジャンプ後は「再生」タブへ自動で切り替える。
+            if (::localPlayer.isInitialized) {
+                localPlayer.playAtEffectivePosition(position)
+                selectLocalTab(LocalTab.NOW_PLAYING)
+            }
+        }
+        localQueueList.setOnItemLongClickListener { _, view, position, _ ->
+            view?.hapticTick(appPrefs)
+            // ★ 長押しは他の曲リストと同じくプレイリストへの追加。
+            val track = if (::localPlayer.isInitialized) {
+                localPlayer.effectiveOrderTracks().getOrNull(position)
+            } else {
+                null
+            } ?: return@setOnItemLongClickListener true
+            showAddToPlaylistDialog(track)
+            true
         }
         tabLocalAll.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -2037,6 +2163,9 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             localPlayer.setShuffleEnabled(!localPlayer.shuffleEnabled)
             updateNpToggleStates()
+            // ★ シャッフル切替で順序表が作り直され、実効位置
+            //   （n / N 表示）も変わるため、再生画面を描き直す。
+            updateLocalPlayerChrome()
         }
         btnNpRepeat.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -2045,17 +2174,20 @@ class MainActivity : AppCompatActivity() {
         }
         btnNpStar.setOnClickListener {
             it.hapticTick(appPrefs)
-            // ★ タップ: 最後に作成したプレイリストへ現在曲を追加。
-            //   プレイリストが1つも無ければ新規作成へ誘導し、作成
-            //   したリストへそのまま追加する。
+            // ★ タップは状態で分岐する（★ の表示ルールと対象を一致
+            //   させる）:
+            //   - 塗りつぶし状態（追加先＝最後に作成したプレイリスト
+            //     に現在曲が入っている）→ 「どのプレイリストから
+            //     外すか」の選択ダイアログを出す。
+            //   - 輪郭状態 → 追加先へのクイック追加（従来どおり）。
             val track = localPlayer.currentTrack ?: return@setOnClickListener
             val latest = playlistStore.latestPlaylist()
-            if (latest == null) {
-                showCreatePlaylistDialog { newId ->
-                    playlistStore.getPlaylist(newId)?.let { addTrackToPlaylist(track, it) }
-                }
+            val isMember = latest != null &&
+                playlistStore.contains(latest.id, track.uri.toString())
+            if (isMember) {
+                showRemoveFromPlaylistPickerDialog(track)
             } else {
-                addTrackToPlaylist(track, latest)
+                addTrackToLatestPlaylist(track)
             }
         }
         btnNpStar.setOnLongClickListener {
@@ -2271,7 +2403,9 @@ class MainActivity : AppCompatActivity() {
         textNpAlbum.visibility = if (track.album.isBlank()) View.GONE else View.VISIBLE
         textNpFormat.text = buildLocalFormatLabel(track)
         val queueSize = localPlayer.queueSize()
-        val index = localPlayer.currentIndex()
+        // ★ 位置は実効再生順（順序表）における現在位置で示す
+        //   （シャッフル中はシャッフル順での n / N）。
+        val index = localPlayer.effectivePosition()
         textNpQueuePosition.text =
             if (queueSize > 0 && index in 0 until queueSize) "${index + 1} / $queueSize" else ""
         val artwork = currentArtworkBitmap
