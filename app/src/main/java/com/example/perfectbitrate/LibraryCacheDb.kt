@@ -32,7 +32,9 @@ class LibraryCacheDb(context: Context) :
                 "bit_depth INTEGER NOT NULL, " +
                 "codec_name TEXT NOT NULL, " +
                 "is_dsd INTEGER NOT NULL, " +
-                "source TEXT NOT NULL)"
+                "source TEXT NOT NULL, " +
+                // 実ファイル同一性キー（v2 で追加。取れない経路では NULL）
+                "file_key TEXT)"
         )
     }
 
@@ -58,6 +60,7 @@ class LibraryCacheDb(context: Context) :
             val codecCol = cursor.getColumnIndexOrThrow("codec_name")
             val dsdCol = cursor.getColumnIndexOrThrow("is_dsd")
             val sourceCol = cursor.getColumnIndexOrThrow("source")
+            val fileKeyCol = cursor.getColumnIndexOrThrow("file_key")
             while (cursor.moveToNext()) {
                 result += LibraryRepository.Track(
                     uri = Uri.parse(cursor.getString(uriCol)),
@@ -76,7 +79,8 @@ class LibraryCacheDb(context: Context) :
                         LibraryRepository.Track.Source.valueOf(cursor.getString(sourceCol) ?: "")
                     } catch (e: Exception) {
                         LibraryRepository.Track.Source.MEDIASTORE
-                    }
+                    },
+                    fileKey = cursor.getString(fileKeyCol)?.takeIf { it.isNotEmpty() }
                 )
             }
         }
@@ -122,18 +126,21 @@ class LibraryCacheDb(context: Context) :
             put("codec_name", track.codecName)
             put("is_dsd", if (track.isDsd) 1 else 0)
             put("source", track.source.name)
+            put("file_key", track.fileKey)
         }
     }
 
     companion object {
         private const val DB_NAME = "local_library.db"
-        private const val DB_VERSION = 1
+        // v2: file_key 列を追加（onUpgrade は作り直しなので移行は不要）
+        private const val DB_VERSION = 2
         private const val TABLE = "tracks"
         private const val DELETE_CHUNK = 400
         private val COLUMNS = arrayOf(
             "uri", "display_name", "title", "artist", "album",
             "duration_ms", "size_bytes", "modified_ms",
-            "sample_rate", "bit_depth", "codec_name", "is_dsd", "source"
+            "sample_rate", "bit_depth", "codec_name", "is_dsd", "source",
+            "file_key"
         )
     }
 }
