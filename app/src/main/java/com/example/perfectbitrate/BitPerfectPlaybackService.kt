@@ -131,6 +131,20 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var volumePreservePending = false
     @Volatile private var volumePreserveDeviceId = -1 // -1 = デバイスなし（内蔵スピーカー）
 
+    // ★ 最後に生成へ成功した AudioTrack の出力デバイス ID（-1 = デバイスなし
+    //   ＝内蔵スピーカー）。まだ生成していない状態は Int.MIN_VALUE で区別する。
+    //   restoreVolumeForDevice() の「接続時は音量 0 から開始」はデバイス接続
+    //   イベントに対する安全策だが、tryCreateTrack は同一デバイスでの構成変更
+    //   （サンプルレート切替・モード往復・DSP 構成変更）に伴う再生成でも呼ばれる
+    //   ため、そのままでは再生のたびにユーザーが上げた音量が 0 へ戻ってしまう。
+    //   そこで、再生成先が「前回生成したトラックと同じデバイス」なら接続では
+    //   なく構成変更とみなし、安全側の 0 化をスキップしてセッション中の音量を
+    //   維持する（ポーズ由来の保留＝ consumeVolumePreserve と併用する判定）。
+    //   デバイス変更（setOutputDevice の changed）と切断フロー
+    //   （handleBecomingNoisyOrDisconnected）ではこの記録をリセットし、
+    //   次回生成は従来どおり安全側（0 から開始）に倒す。
+    @Volatile private var lastCreatedTrackDeviceId = Int.MIN_VALUE
+
     private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
 
@@ -531,8 +545,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun handleBecomingNoisyOrDisconnected() {
-        // 切断フローでは音量 0 化こそが意図的な安全策なので、ポーズ由来の音量維持の保留は破棄する
+        // 切断フローでは音量 0 化こそが意図的な安全策なので、ポーズ由来の音量維持の保留は破棄する。
+        // あわせて「前回生成デバイス」の記録も破棄し、再接続後の初回生成を安全側（0 から開始）に戻す
         volumePreservePending = false
+        lastCreatedTrackDeviceId = Int.MIN_VALUE
         isVolumeLocked = false
         isCurrentlyPlaying = false
         updateVolumeControlMode()
@@ -601,8 +617,11 @@ class BitPerfectPlaybackService : Service() {
         activeOutputDevice = device
 
         if (changed) {
-            // 出力デバイスが切り替わる再生成は「接続時」の安全側動作が正。ポーズ由来の保留は破棄する
+            // 出力デバイスが切り替わる再生成は「接続時」の安全側動作が正。ポーズ由来の保留は破棄する。
+            // 「前回生成デバイス」の記録も破棄し、新デバイスでの初回生成を安全側に戻す
+            // （同一デバイスでの構成変更に伴う再生成だけが音量維持の対象）。
             volumePreservePending = false
+            lastCreatedTrackDeviceId = Int.MIN_VALUE
         }
 
         if (device == null) {
@@ -1515,11 +1534,28 @@ class BitPerfectPlaybackService : Service() {
 
                             if (track.state == AudioTrack.STATE_INITIALIZED) {
                                 targetDevice?.let { track.setPreferredDevice(it) }
-                                // ★ ポーズ後の同一デバイス再生成では接続時の安全策（音量 0 化）を
-                                //   適用せず、停止前の音量を維持する。それ以外は従来どおり。
-                                if (!consumeVolumePreserve(targetDevice)) {
+                                // ★ 同一デバイスへの再生成では接続時の安全策（音量 0 化）を
+                                //   適用せず、セッション中の音量を維持する。対象は2経路:
+                                //   (1) ポーズ（forceCloseDacStream）後の再生成＝保留の消費、
+                                //   (2) 構成変更（レート/モード/DSP）に伴う再生成＝前回生成
+                                //   トラックと同じデバイス宛て。デバイスが変わる再生成と
+                                //   初回生成は従来どおり restoreVolumeForDevice() の安全側
+                                //   動作（USB は 0 から開始、デバイスなしは 0 化）にする。
+                                //   Vol Lock 中はロック側（最大化）が正なので (2) の対象外
+                                //   （consumeVolumePreserve の対象外条件と揃える）。
+                                val targetDeviceId = targetDevice?.id ?: -1
+                                val preserveVolume = consumeVolumePreserve(targetDevice) ||
+                                    (!isVolumeLocked && lastCreatedTrackDeviceId == targetDeviceId)
+                                if (!preserveVolume) {
                                     restoreVolumeForDevice(targetDevice)
+                                } else {
+                                    Log.i(
+                                        "BitPerfect",
+                                        "★ Volume preserved on same-device recreation " +
+                                            "(deviceId=$targetDeviceId)"
+                                    )
                                 }
+                                lastCreatedTrackDeviceId = targetDeviceId
                                 track.setVolume(1.0f)
                                 track.play()
                                 return track
