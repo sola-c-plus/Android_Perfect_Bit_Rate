@@ -78,16 +78,20 @@ class FfmpegDecoder(private val context: Context) {
     }
 
     // ★ ファイルパスで開く。戻り値 true = 成功。
-    fun openFile(path: String, dsdPcmRateHz: Int): Boolean {
+    //   pcmOutputRateHz > 0 はデコード出力レートの上限（出力側で
+    //   AudioTrack を作れないレートだった場合に、既存の swresample
+    //   経路で変換して供給するため）。0 は変換なし（従来動作）。
+    //   DSD 経路では使われない（dsdPcmRateHz が優先される）。
+    fun openFile(path: String, dsdPcmRateHz: Int, pcmOutputRateHz: Int = 0): Boolean {
         if (nativeHandle == 0L) return false
         closeAvioStream()
-        val ret = nativeOpen(nativeHandle, false, path, dsdPcmRateHz)
+        val ret = nativeOpen(nativeHandle, false, path, dsdPcmRateHz, pcmOutputRateHz)
         opened = ret == 0
         return opened
     }
 
     // ★ content URI で開く（AVIO コールバック経由）。戻り値 true = 成功。
-    fun openUri(uri: Uri, dsdPcmRateHz: Int): Boolean {
+    fun openUri(uri: Uri, dsdPcmRateHz: Int, pcmOutputRateHz: Int = 0): Boolean {
         if (nativeHandle == 0L) return false
         avioLock.withLock {
             avioUri = uri
@@ -99,7 +103,7 @@ class FfmpegDecoder(private val context: Context) {
                 return false
             }
         }
-        val ret = nativeOpen(nativeHandle, true, null, dsdPcmRateHz)
+        val ret = nativeOpen(nativeHandle, true, null, dsdPcmRateHz, pcmOutputRateHz)
         opened = ret == 0
         if (!opened) closeAvioStream()
         return opened
@@ -324,7 +328,7 @@ class FfmpegDecoder(private val context: Context) {
 
     private external fun nativeCreate(): Long
     private external fun nativeRelease(handle: Long)
-    private external fun nativeOpen(handle: Long, useAvio: Boolean, path: String?, dsdPcmRateHz: Int): Int
+    private external fun nativeOpen(handle: Long, useAvio: Boolean, path: String?, dsdPcmRateHz: Int, pcmOutputRateHz: Int): Int
     private external fun nativeGetInfo(handle: Long): Array<String>?
     private external fun nativeGetArtwork(handle: Long): ByteArray?
     private external fun nativeDecodeLoop(handle: Long)
