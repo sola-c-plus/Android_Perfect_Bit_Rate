@@ -34,6 +34,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewPropertyAnimator
 import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.ImageButton
@@ -1149,6 +1150,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectLocalTab(tab: LocalTab) {
+        // スワイプのスライドが進行中なら先に確定させる（退場中
+        // ページの終了処理が、切替後の表示を巻き込まないため）。
+        finishLocalPageSlide()
         localTab = tab
         localGroupKey = null
         localArtistAlbumKey = null
@@ -1189,18 +1193,97 @@ class MainActivity : AppCompatActivity() {
     private val LOCAL_TAB_SWIPE_MIN_VELOCITY = 120f
     private val LOCAL_TAB_SWIPE_AXIS_RATIO = 2.0f
 
-    // ★ スワイプでのタブ移動（ユーザー指定の方向）: 左スワイプ →
-    //   左隣のタブ、右スワイプ → 右隣のタブ（例: 再生タブで左へ
-    //   スワイプするとキュー、右へスワイプすると全曲）。端のタブ
-    //   ではそれ以上移動しない。切替の作法はタブのタップと同じ
-    //   selectLocalTab に揃える（ドリルダウン中なら抜けて対象
-    //   タブのトップ表示になる）。
-    private fun switchLocalTabBySwipe(toLeft: Boolean) {
+    // ★ スワイプでのタブ移動（指の動きに内容が付いてくる向き）:
+    //   左スワイプ → 右隣のタブ、右スワイプ → 左隣のタブ（例:
+    //   再生タブで左へスワイプすると全曲、右へスワイプすると
+    //   キュー）。端のタブではそれ以上移動しない。切替の作法は
+    //   タブのタップと同じ selectLocalTab に揃える（ドリルダウン
+    //   中なら抜けて対象タブのトップ表示になる）が、スワイプ
+    //   起因の切替だけはページのスライドアニメーションを付ける。
+    private fun switchLocalTabBySwipe(toNext: Boolean) {
         val index = localTabOrder.indexOf(localTab)
         if (index < 0) return
-        val target = if (toLeft) index - 1 else index + 1
+        val target = if (toNext) index + 1 else index - 1
         if (target !in localTabOrder.indices) return
+        // 進行中のスライドがあれば先に確定させてから現在の
+        // ページを取る（アニメーション中のページが両方見えて
+        // いる状態で旧ページを取り違えないため）。
+        finishLocalPageSlide()
+        val oldPage = currentVisibleLocalPage()
         selectLocalTab(localTabOrder[target])
+        animateLocalPageSlide(oldPage, currentVisibleLocalPage(), toNext)
+    }
+
+    // Local 3ページのうち現在見えているもの（ページ出し分けの
+    // 正は updateLocalPageVisibility 側で、ここは読むだけ）。
+    private fun currentVisibleLocalPage(): View? {
+        if (!::localPageContainer.isInitialized) return null
+        return listOf(localNowPlaying, localQueuePage, localBrowserPage)
+            .firstOrNull { it.visibility == View.VISIBLE }
+    }
+
+    // スワイプ切替時のスライド時間（ms）。指への完全追従はせず、
+    // 切替の瞬間に旧ページが退場し新ページが入場する見え方にする。
+    private val LOCAL_TAB_SLIDE_DURATION_MS = 280L
+
+    // 進行中のスライドアニメーション。新しい切替や通常の再描画
+    // と競合しないよう、開始前に必ず finishLocalPageSlide で
+    // 確定させる。
+    private val localSlideAnimators = mutableListOf<ViewPropertyAnimator>()
+
+    // ★ 進行中のスライドを即座に確定させる。ViewPropertyAnimator
+    //   の cancel() は withEndAction を同期的に実行するため、
+    //   ここを抜けた時点で旧ページは GONE・全ページの
+    //   translationX は 0 に戻っている。
+    private fun finishLocalPageSlide() {
+        if (localSlideAnimators.isEmpty()) return
+        val running = localSlideAnimators.toList()
+        localSlideAnimators.clear()
+        running.forEach { it.cancel() }
+        if (::localPageContainer.isInitialized) {
+            listOf(localNowPlaying, localQueuePage, localBrowserPage)
+                .forEach { it.translationX = 0f }
+        }
+    }
+
+    // ★ スワイプ切替のスライド: 次へ（右隣）なら新ページが右から
+    //   入り旧ページが左へ出る、逆なら鏡像。旧ページと新ページが
+    //   同じ View（ブラウザ系タブ同士）の場合は入場のみで表現する
+    //   （内容は selectLocalTab で差し替わり済み）。
+    private fun animateLocalPageSlide(oldPage: View?, newPage: View?, toNext: Boolean) {
+        if (newPage == null) return
+        val width = localPageContainer.width
+        if (width <= 0) return
+        val enterFrom = if (toNext) width.toFloat() else -width.toFloat()
+        val interpolator = android.view.animation.DecelerateInterpolator()
+        if (oldPage != null && oldPage !== newPage) {
+            oldPage.visibility = View.VISIBLE
+            oldPage.translationX = 0f
+            lateinit var outAnimator: ViewPropertyAnimator
+            outAnimator = oldPage.animate()
+                .translationX(-enterFrom)
+                .setDuration(LOCAL_TAB_SLIDE_DURATION_MS)
+                .setInterpolator(interpolator)
+                .withEndAction {
+                    oldPage.visibility = View.GONE
+                    oldPage.translationX = 0f
+                    localSlideAnimators.remove(outAnimator)
+                }
+            localSlideAnimators.add(outAnimator)
+            outAnimator.start()
+        }
+        newPage.translationX = enterFrom
+        lateinit var inAnimator: ViewPropertyAnimator
+        inAnimator = newPage.animate()
+            .translationX(0f)
+            .setDuration(LOCAL_TAB_SLIDE_DURATION_MS)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                newPage.translationX = 0f
+                localSlideAnimators.remove(inAnimator)
+            }
+        localSlideAnimators.add(inAnimator)
+        inAnimator.start()
     }
 
     // ★ スワイプ検出の追跡状態（dispatchTouchEvent で傍受する）。
@@ -1259,8 +1342,8 @@ class MainActivity : AppCompatActivity() {
                 if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return
                 val velocityX = abs(dx) / dtMs * 1000f
                 if (velocityX < LOCAL_TAB_SWIPE_MIN_VELOCITY) return
-                // 左スワイプ（指が左へ, dx < 0）→ 左隣のタブ
-                switchLocalTabBySwipe(toLeft = dx < 0)
+                // 左スワイプ（指が左へ, dx < 0）→ 右隣のタブ
+                switchLocalTabBySwipe(toNext = dx < 0)
             }
             MotionEvent.ACTION_CANCEL -> {
                 localSwipeTracking = false
