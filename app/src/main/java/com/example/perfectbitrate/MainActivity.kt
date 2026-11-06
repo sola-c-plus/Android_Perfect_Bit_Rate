@@ -315,18 +315,37 @@ class MainActivity : AppCompatActivity() {
     private var currentRamUsageMb = 0
 
     private val uiSpectrumBands = FloatArray(32) { -60f }
+    private val uiPeakDb = FloatArray(2) { -60f }
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
+
+            // ★ レベルメーターは「今鳴っている位置」に整列したピークで駆動
+            //   する。従来は再生ループのチャンク処理に同期した到着駆動
+            //   （onPeakListener からの setLevels）で、Local のバースト供給
+            //   では配送間隔が空いてメーターが凍結→ジャンプになっていた。
+            //   スペクトラム（3ae6aee）と同方式で、この 30ms 周期に Service
+            //   から再生ヘッド位置のチャンクのピークを取得して渡す。
+            //   メーター側のピークホールド／減衰は従来どおり View が担う。
+            val meterAligned = isPlayingState &&
+                playbackService?.getPeakAlignedToPlayback(uiPeakDb) == true
+            if (meterAligned) {
+                walkmanLevelMeter?.setLevels(uiPeakDb[0], uiPeakDb[1])
+            }
+
             if (now - lastPcmTime > 400L || !isPlayingState) {
                 peakDbL = -60f
                 peakDbR = -60f
                 bitActivityMask = 0
                 currentQueueSize = 0
                 currentLatencyMs = 0
-                walkmanLevelMeter?.setLevels(-60f, -60f)
+                // 整列取得できている間（書いた音がまだ鳴っている間）は
+                // メーターを無音に倒さない。
+                if (!meterAligned) {
+                    walkmanLevelMeter?.setLevels(-60f, -60f)
+                }
             }
 
             checkPlaybackStall(now)
@@ -1787,7 +1806,11 @@ class MainActivity : AppCompatActivity() {
                 bitActivityMask = bitActivityMask or mask
                 currentQueueSize = queueSize
                 currentLatencyMs = latencyMs
-                walkmanLevelMeter?.setLevels(dbL, dbR)
+                // ★ レベルメーター本体へはここから直接渡さない。到着駆動だと
+                //   Local のバースト供給で配送間隔が空きメーターが凍結→
+                //   ジャンプになるため、表示は uiUpdateRunnable が
+                //   getPeakAlignedToPlayback（再生位置整列）で駆動する。
+                //   こちらの値は SysMonitor 表示とストール検知用に保持する。
             }
 
             playbackService?.onCommandListener = { cmd ->
