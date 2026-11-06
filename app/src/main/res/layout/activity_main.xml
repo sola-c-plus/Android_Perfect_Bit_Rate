@@ -536,16 +536,19 @@
                              アルバムをいずれも中央寄せで静かに並べる。
                              「NOW PLAYING」ラベルは置かず、キュー位置は
                              シークバーの上に小さく中央表示する。
-                             縦位置は、アートワークの上下に置いた
-                             スペーサ（重み 2:3）で余白を配分し、全体が
-                             上にも下にも寄りすぎず、中央〜やや上に
-                             落ち着くバランスにする。 -->
+                             縦位置は3つのスペーサ（上 : 中 : 下 =
+                             重み 1 : 2 : 2）で余白を配分する：
+                             アートワークは上寄りに置き、曲情報〜操作行
+                             のブロックはアートワークとの間隔を広く
+                             取って下寄りに置く（中央に固めない）。
+                             下側にも余白を残し、ブロックが下部タブ
+                             バーに張り付かないようにする。 -->
 
-                        <!-- ★ 上側スペーサ（下側との重み配分で縦位置を調整） -->
+                        <!-- ★ 上側スペーサ（小さめにしてアートワークを上寄りに） -->
                         <View
                             android:layout_width="match_parent"
                             android:layout_height="0dp"
-                            android:layout_weight="2" />
+                            android:layout_weight="1" />
 
                         <ImageView
                             android:id="@+id/imgNpArtwork"
@@ -556,6 +559,13 @@
                             android:layout_marginTop="4dp"
                             android:scaleType="fitCenter"
                             android:src="@drawable/ic_local_artwork_placeholder" />
+
+                        <!-- ★ 中間スペーサ（アートワークと下側ブロックの
+                             間隔を広く取り、曲情報〜操作行を下寄りに） -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="2" />
 
                         <TextView
                             android:id="@+id/textNpFormat"
@@ -732,12 +742,12 @@
                                 android:padding="9dp" />
                         </LinearLayout>
 
-                        <!-- ★ 下側スペーサ（上側との重み配分 2:3 で
-                             コンテンツ全体を中央〜やや上に置く） -->
+                        <!-- ★ 下側スペーサ（下側ブロックが下部タブバーに
+                             張り付かないよう、適度な余白を残す） -->
                         <View
                             android:layout_width="match_parent"
                             android:layout_height="0dp"
-                            android:layout_weight="3" />
+                            android:layout_weight="2" />
                     </LinearLayout>
 
                     <!-- ★ 空状態: 再生中の曲が無いときの表示 -->
