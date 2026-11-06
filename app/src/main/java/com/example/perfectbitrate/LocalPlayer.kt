@@ -97,7 +97,23 @@ class LocalPlayer(
     fun setQueue(tracks: List<LibraryRepository.Track>) {
         synchronized(stateLock) {
             queue = tracks
-            if (currentIndex >= tracks.size) currentIndex = -1
+            // ★ キューはライブラリブラウザの表示中リストで差し替わる
+            //   （フィルタ / ソート / グループの適用結果。Phase 2-1）。
+            //   再生中の曲が新しいキューに含まれていれば、その位置へ
+            //   インデックスを寄せ直し、次曲送りや自動進行が別の曲へ
+            //   飛ばないようにする。含まれていない場合は従来どおり
+            //   範囲外なら -1 へ丸める。
+            val current = currentTrack
+            val anchor = if (current != null) {
+                tracks.indexOfFirst { it.uri == current.uri }
+            } else {
+                -1
+            }
+            if (anchor >= 0) {
+                currentIndex = anchor
+            } else if (currentIndex >= tracks.size) {
+                currentIndex = -1
+            }
         }
     }
 

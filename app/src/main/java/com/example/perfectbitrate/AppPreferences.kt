@@ -39,6 +39,12 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SAF_FOLDER_URIS = "safFolderUris"
         private const val KEY_DSD_PCM_RATE_HZ = "dsdPcmRateHz"
         private const val KEY_LOCAL_RESCAN_REQUESTED = "localRescanRequested"
+        private const val KEY_LOCAL_SORT_MODE = "localSortMode"
+
+        // ★ Local ライブラリ「全曲」タブのソート種別（Phase 2-1）。
+        const val LOCAL_SORT_TITLE = 0
+        const val LOCAL_SORT_ARTIST = 1
+        const val LOCAL_SORT_ALBUM = 2
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -159,6 +165,15 @@ class AppPreferences private constructor(context: Context) {
     var localRescanRequested: Boolean
         get() = prefs.getBoolean(KEY_LOCAL_RESCAN_REQUESTED, false)
         set(value) = prefs.edit { putBoolean(KEY_LOCAL_RESCAN_REQUESTED, value) }
+
+    // ★ Local ライブラリ「全曲」タブのソート種別（Phase 2-1）。
+    //   選択肢外の値はタイトル順へ倒す（DSD 変換レートと同じ流儀）。
+    var localSortMode: Int
+        get() {
+            val stored = prefs.getInt(KEY_LOCAL_SORT_MODE, LOCAL_SORT_TITLE)
+            return if (stored in LOCAL_SORT_TITLE..LOCAL_SORT_ALBUM) stored else LOCAL_SORT_TITLE
+        }
+        set(value) = prefs.edit { putInt(KEY_LOCAL_SORT_MODE, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)

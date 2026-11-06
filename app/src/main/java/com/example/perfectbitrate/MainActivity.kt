@@ -24,12 +24,17 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
+import android.util.LruCache
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
+import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
@@ -37,10 +42,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import org.mozilla.geckoview.GeckoView
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -77,6 +84,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textLocalScanCurrent: TextView
     private lateinit var localScanUpdating: View
     private lateinit var textLocalUpdating: TextView
+    // ★ ライブラリブラウザのクローム（Phase 2-1: タブ / 検索 / ソート /
+    //   ドリルダウン用ヘッダー）
+    private lateinit var tabLocalAll: TextView
+    private lateinit var tabLocalAlbum: TextView
+    private lateinit var tabLocalArtist: TextView
+    private lateinit var tabLocalFolder: TextView
+    private lateinit var editLocalSearch: EditText
+    private lateinit var btnLocalSort: TextView
+    private lateinit var localGroupHeader: View
+    private lateinit var btnLocalBack: TextView
+    private lateinit var textLocalGroupTitle: TextView
 
     // ★ Local Music の供給係と楽曲インデックス（仕様書 §4.1 / §6）
     private lateinit var libraryRepository: LibraryRepository
@@ -88,6 +106,37 @@ class MainActivity : AppCompatActivity() {
     //   スキャンの多重実行ガード（仕様書 §6.2 の永続化キャッシュ表示用）
     private var localLibraryShown = false
     private var localScanRunning = false
+
+    // ★ ライブラリブラウザの状態（Phase 2-1）。
+    //   localTab: 表示中のタブ。localGroupKey: ドリルダウン中のグループ
+    //   キー（null = 全曲リスト or グループ一覧を表示中）。
+    //   localDisplayedTracks: いま曲リストとして表示している並び
+    //   （＝ LocalPlayer へ渡しているキューと一致させる）。
+    private enum class LocalTab { ALL, ALBUM, ARTIST, FOLDER }
+
+    private data class LocalGroup(
+        val key: String,
+        val label: String,
+        val tracks: List<LibraryRepository.Track>,
+        // グループ内のアーティストが1種類だけならその名前（アルバム一覧の
+        // 補助表示用）。混在・全て空なら null。
+        val uniformArtist: String?
+    )
+
+    private var localTab = LocalTab.ALL
+    private var localGroupKey: String? = null
+    private var localSearchQuery: String = ""
+    private var localDisplayedTracks: List<LibraryRepository.Track> = emptyList()
+    private var localGroupAdapter: LocalGroupAdapter? = null
+
+    private val unknownAlbumLabel = "不明なアルバム"
+    private val unknownArtistLabel = "不明なアーティスト"
+    private val unknownFolderLabel = "その他のフォルダ"
+
+    // サムネイルのメモリキャッシュ（URI 文字列 → 取得済み Bitmap、約 8MB）
+    private val localThumbCache = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
 
     private val appPrefs by lazy { AppPreferences.get() }
     private lateinit var btCodecTracker: BluetoothCodecTracker
@@ -656,23 +705,240 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ★ 一覧の反映（キャッシュ表示・スキャン結果で共通）。
+    //   実際の表示（タブ / 検索 / ソート / ドリルダウンの適用と、表示中
+    //   リスト＝再生キューの同期）は refreshLocalBrowser に集約する。
     private fun applyLocalTracks(tracks: List<LibraryRepository.Track>) {
         localTracks = tracks
-        localPlayer.setQueue(tracks)
+        localLibraryShown = tracks.isNotEmpty()
+        refreshLocalBrowser()
+    }
+
+    // ── ライブラリブラウザ（Phase 2-1） ──
+    //
+    // タブ（全曲 / アルバム / アーティスト / フォルダ）× 検索フィルタ ×
+    // ソートから表示内容を導出する単一の入口。表示が「曲リスト」の間は
+    // その並びが LocalPlayer のキューになる（タップ再生・次曲送り・
+    // 自動進行がすべて表示順と一致する）。表示が「グループリスト」の
+    // 間はキューに触らない。
+
+    private fun refreshLocalBrowser() {
+        if (!::localTrackList.isInitialized) return
+        val groupKey = localGroupKey
+        if (groupKey != null && localTab != LocalTab.ALL) {
+            // ドリルダウン中: 選択中グループの曲一覧（検索フィルタ適用、
+            // 並びはタイトル順で固定。グループ内の曲順はソート対象外）
+            val groupTracks = localTracks
+                .filter { localGroupKeyOf(localTab, it) == groupKey }
+                .filter { localTrackMatchesQuery(it, localSearchQuery) }
+            showLocalTrackPage(sortLocalTracks(groupTracks, AppPreferences.LOCAL_SORT_TITLE))
+            textLocalGroupTitle.text = localGroupLabel(localTab, groupKey)
+            localGroupHeader.visibility = View.VISIBLE
+        } else {
+            localGroupHeader.visibility = View.GONE
+            when (localTab) {
+                LocalTab.ALL -> {
+                    val filtered = localTracks
+                        .filter { localTrackMatchesQuery(it, localSearchQuery) }
+                    showLocalTrackPage(sortLocalTracks(filtered, appPrefs.localSortMode))
+                }
+                LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.FOLDER -> {
+                    val groups = localGroupsFor(localTab, localSearchQuery)
+                    localDisplayedTracks = emptyList()
+                    val adapter = LocalGroupAdapter(groups)
+                    localGroupAdapter = adapter
+                    localTrackList.adapter = adapter
+                    updateLocalEmptyMessage(groups.size, isTrackPage = false)
+                }
+            }
+        }
+        updateLocalTabStyles()
+    }
+
+    // 曲リストを表示し、その並びを再生キューとして LocalPlayer へ渡す。
+    private fun showLocalTrackPage(tracks: List<LibraryRepository.Track>) {
+        localDisplayedTracks = tracks
         val adapter = LocalTrackAdapter(tracks)
         localTrackAdapter = adapter
         localTrackList.adapter = adapter
-        localLibraryShown = tracks.isNotEmpty()
-        if (tracks.isEmpty()) {
+        if (::localPlayer.isInitialized) localPlayer.setQueue(tracks)
+        updateLocalEmptyMessage(tracks.size, isTrackPage = true)
+    }
+
+    private fun updateLocalEmptyMessage(displayedCount: Int, isTrackPage: Boolean) {
+        if (localTracks.isEmpty()) {
             textLocalMessage.text = if (!libraryRepository.hasAudioPermission() && appPrefs.safFolderUris.isEmpty()) {
                 "曲が見つかりませんでした。音声ファイルへのアクセスを許可するか、「フォルダ追加」からフォルダを選んでください"
             } else {
                 "再生できる曲が見つかりませんでした"
             }
             textLocalMessage.visibility = View.VISIBLE
+        } else if (displayedCount == 0) {
+            textLocalMessage.text = when {
+                localSearchQuery.isNotBlank() ->
+                    "「${localSearchQuery}」に一致する${if (isTrackPage) "曲" else "項目"}が見つかりません"
+                isTrackPage -> "表示できる曲がありません"
+                else -> "表示できる項目がありません"
+            }
+            textLocalMessage.visibility = View.VISIBLE
         } else {
             textLocalMessage.visibility = View.GONE
         }
+    }
+
+    private fun selectLocalTab(tab: LocalTab) {
+        localTab = tab
+        localGroupKey = null
+        refreshLocalBrowser()
+    }
+
+    // 一覧のタップ振り分け: グループ一覧ならドリルダウン、曲リストなら
+    // 表示中リストをキューとしてその曲から再生する。
+    private fun onLocalListItemClicked(position: Int) {
+        if (localGroupKey == null && localTab != LocalTab.ALL) {
+            val group = (localTrackList.adapter as? LocalGroupAdapter)
+                ?.getItem(position) ?: return
+            localGroupKey = group.key
+            refreshLocalBrowser()
+            return
+        }
+        val tracks = localDisplayedTracks
+        if (position !in tracks.indices) return
+        localPlayer.setQueue(tracks)
+        localPlayer.playAt(position)
+    }
+
+    private fun updateLocalTabStyles() {
+        if (!::tabLocalAll.isInitialized) return
+        val isDark = isDarkThemeActive()
+        val colorSelected = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+        val colorNormal = Color.parseColor(if (isDark) "#888888" else "#636366")
+        val tabs = listOf(
+            tabLocalAll to LocalTab.ALL,
+            tabLocalAlbum to LocalTab.ALBUM,
+            tabLocalArtist to LocalTab.ARTIST,
+            tabLocalFolder to LocalTab.FOLDER
+        )
+        for ((view, tab) in tabs) {
+            val selected = tab == localTab
+            view.setTextColor(if (selected) colorSelected else colorNormal)
+            view.paint.isFakeBoldText = selected
+        }
+        btnLocalSort.text = localSortLabel(appPrefs.localSortMode)
+    }
+
+    private fun localSortLabel(sortMode: Int): String {
+        return when (sortMode) {
+            AppPreferences.LOCAL_SORT_ARTIST -> "アーティスト順"
+            AppPreferences.LOCAL_SORT_ALBUM -> "アルバム順"
+            else -> "タイトル順"
+        }
+    }
+
+    private fun showLocalSortDialog() {
+        val labels = arrayOf<CharSequence>("タイトル順", "アーティスト順", "アルバム順")
+        AlertDialog.Builder(this)
+            .setTitle("並び替え（全曲）")
+            .setSingleChoiceItems(labels, appPrefs.localSortMode) { dialog, which ->
+                appPrefs.localSortMode = which
+                dialog.dismiss()
+                refreshLocalBrowser()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // 検索フィルタ: タイトル / アーティスト / アルバム（タグが無い曲でも
+    // 拾えるようファイル名も対象）への部分一致（大文字小文字は不問）。
+    private fun localTrackMatchesQuery(track: LibraryRepository.Track, query: String): Boolean {
+        if (query.isBlank()) return true
+        val q = query.lowercase(Locale.ROOT)
+        return track.title.lowercase(Locale.ROOT).contains(q) ||
+            track.artist.lowercase(Locale.ROOT).contains(q) ||
+            track.album.lowercase(Locale.ROOT).contains(q) ||
+            track.displayName.lowercase(Locale.ROOT).contains(q)
+    }
+
+    private fun sortLocalTracks(
+        tracks: List<LibraryRepository.Track>,
+        sortMode: Int
+    ): List<LibraryRepository.Track> {
+        return when (sortMode) {
+            AppPreferences.LOCAL_SORT_ARTIST -> tracks.sortedWith(
+                compareBy<LibraryRepository.Track> { it.artist.isBlank() }
+                    .thenBy { it.artist.lowercase(Locale.ROOT) }
+                    .thenBy { it.album.lowercase(Locale.ROOT) }
+                    .thenBy { it.title.lowercase(Locale.ROOT) }
+                    .thenBy { it.displayName.lowercase(Locale.ROOT) }
+            )
+            AppPreferences.LOCAL_SORT_ALBUM -> tracks.sortedWith(
+                compareBy<LibraryRepository.Track> { it.album.isBlank() }
+                    .thenBy { it.album.lowercase(Locale.ROOT) }
+                    .thenBy { it.title.lowercase(Locale.ROOT) }
+                    .thenBy { it.displayName.lowercase(Locale.ROOT) }
+            )
+            else -> tracks.sortedWith(
+                compareBy<LibraryRepository.Track> { it.title.lowercase(Locale.ROOT) }
+                    .thenBy { it.artist.lowercase(Locale.ROOT) }
+                    .thenBy { it.displayName.lowercase(Locale.ROOT) }
+            )
+        }
+    }
+
+    // グループ一覧の導出（タブ別）。検索中は、グループ名に一致するか、
+    // グループ内に検索に一致する曲を含むグループを残す（ドリルダウン先で
+    // その曲がフィルタ表示される）。
+    private fun localGroupsFor(tab: LocalTab, query: String): List<LocalGroup> {
+        val grouped = LinkedHashMap<String, MutableList<LibraryRepository.Track>>()
+        for (track in localTracks) {
+            grouped.getOrPut(localGroupKeyOf(tab, track)) { mutableListOf() } += track
+        }
+        val q = query.lowercase(Locale.ROOT)
+        return grouped.map { (key, tracks) ->
+            LocalGroup(
+                key = key,
+                label = localGroupLabel(tab, key),
+                tracks = tracks,
+                uniformArtist = tracks.map { it.artist }.distinct().singleOrNull()
+                    ?.takeIf { it.isNotBlank() }
+            )
+        }.filter { group ->
+            q.isBlank() ||
+                group.label.lowercase(Locale.ROOT).contains(q) ||
+                group.tracks.any { localTrackMatchesQuery(it, query) }
+        }.sortedWith(
+            compareBy<LocalGroup> { it.label.lowercase(Locale.ROOT) }
+        )
+    }
+
+    private fun localGroupKeyOf(tab: LocalTab, track: LibraryRepository.Track): String {
+        return when (tab) {
+            LocalTab.ALBUM -> track.album.ifBlank { unknownAlbumLabel }
+            LocalTab.ARTIST -> track.artist.ifBlank { unknownArtistLabel }
+            LocalTab.FOLDER -> localFolderKeyOf(track)
+            LocalTab.ALL -> ""
+        }
+    }
+
+    private fun localGroupLabel(tab: LocalTab, key: String): String {
+        return if (tab == LocalTab.FOLDER) localFolderLabel(key) else key
+    }
+
+    // フォルダの同一性キー: 実ファイルキー（"ボリューム:相対パス"）の
+    // ディレクトリ部分。fileKey が取れていない曲は「その他のフォルダ」
+    // に畳む。ボリューム直下のファイルは "ボリューム:" をキーにする。
+    private fun localFolderKeyOf(track: LibraryRepository.Track): String {
+        val fileKey = track.fileKey ?: return unknownFolderLabel
+        val volume = fileKey.substringBefore(':', "")
+        val path = fileKey.substringAfter(':', "")
+        if (volume.isBlank() || path.isBlank()) return unknownFolderLabel
+        val dir = path.substringBeforeLast('/', "")
+        return if (dir.isBlank()) "$volume:" else "$volume:$dir"
+    }
+
+    private fun localFolderLabel(key: String): String {
+        if (key == unknownFolderLabel) return unknownFolderLabel
+        val relative = key.substringAfter(':', "")
+        return relative.ifBlank { "ルート" }
     }
 
     private fun requestAudioPermission() {
@@ -1026,6 +1292,15 @@ class MainActivity : AppCompatActivity() {
         textLocalScanCurrent = findViewById(R.id.textLocalScanCurrent)
         localScanUpdating = findViewById(R.id.localScanUpdating)
         textLocalUpdating = findViewById(R.id.textLocalUpdating)
+        tabLocalAll = findViewById(R.id.tabLocalAll)
+        tabLocalAlbum = findViewById(R.id.tabLocalAlbum)
+        tabLocalArtist = findViewById(R.id.tabLocalArtist)
+        tabLocalFolder = findViewById(R.id.tabLocalFolder)
+        editLocalSearch = findViewById(R.id.editLocalSearch)
+        btnLocalSort = findViewById(R.id.btnLocalSort)
+        localGroupHeader = findViewById(R.id.localGroupHeader)
+        btnLocalBack = findViewById(R.id.btnLocalBack)
+        textLocalGroupTitle = findViewById(R.id.textLocalGroupTitle)
 
         libraryRepository = LibraryRepository(this)
         localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
@@ -1157,6 +1432,12 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // ★ Local のドリルダウン中は、まずグループ一覧へ戻る
+                if (currentPlaybackMode == PlaybackMode.LOCAL && localGroupKey != null) {
+                    localGroupKey = null
+                    refreshLocalBrowser()
+                    return
+                }
                 if (geckoController.canGoBack) {
                     geckoController.goBack()
                     return
@@ -1217,9 +1498,46 @@ class MainActivity : AppCompatActivity() {
         }
         localTrackList.setOnItemClickListener { _, view, position, _ ->
             view?.hapticTick(appPrefs)
-            // ★ 全曲リストのタップで即再生（キューは全曲リスト順）
-            localPlayer.playAt(position)
+            // ★ 曲リストなら表示中リスト順のキューで即再生、グループ
+            //   一覧ならそのグループへドリルダウン（Phase 2-1）
+            onLocalListItemClicked(position)
         }
+        tabLocalAll.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTab(LocalTab.ALL)
+        }
+        tabLocalAlbum.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTab(LocalTab.ALBUM)
+        }
+        tabLocalArtist.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTab(LocalTab.ARTIST)
+        }
+        tabLocalFolder.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTab(LocalTab.FOLDER)
+        }
+        btnLocalBack.setOnClickListener {
+            it.hapticTick(appPrefs)
+            localGroupKey = null
+            refreshLocalBrowser()
+        }
+        btnLocalSort.setOnClickListener {
+            it.hapticTick(appPrefs)
+            showLocalSortDialog()
+        }
+        editLocalSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val query = s?.toString()?.trim().orEmpty()
+                if (query != localSearchQuery) {
+                    localSearchQuery = query
+                    refreshLocalBrowser()
+                }
+            }
+        })
         btnLocalRescan.setOnClickListener {
             it.hapticTick(appPrefs)
             // ★「再スキャン」は強制フルリフレッシュ（全件再プローブ＋進捗表示）
@@ -1275,6 +1593,17 @@ class MainActivity : AppCompatActivity() {
             btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon)
             btnLocalRescan.setTextColor(Color.parseColor("#E5A93C"))
             localTrackList.divider = ColorDrawable(Color.parseColor("#1C1C1C"))
+            editLocalSearch.setBackgroundResource(R.drawable.bg_local_search)
+            editLocalSearch.setTextColor(Color.parseColor("#F0F0F0"))
+            editLocalSearch.setHintTextColor(Color.parseColor("#777777"))
+            btnLocalSort.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnLocalSort.setTextColor(Color.parseColor("#E5A93C"))
+            btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnLocalBack.setTextColor(Color.parseColor("#E5A93C"))
+            textLocalGroupTitle.setTextColor(Color.parseColor("#F0F0F0"))
+            updateLocalTabStyles()
+            localTrackAdapter?.notifyDataSetChanged()
+            localGroupAdapter?.notifyDataSetChanged()
             btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
             btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
             btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
@@ -1302,6 +1631,17 @@ class MainActivity : AppCompatActivity() {
             btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnLocalRescan.setTextColor(Color.parseColor("#D49B28"))
             localTrackList.divider = ColorDrawable(Color.parseColor("#E0E0E5"))
+            editLocalSearch.setBackgroundResource(R.drawable.bg_local_search_light)
+            editLocalSearch.setTextColor(Color.parseColor("#1C1C1E"))
+            editLocalSearch.setHintTextColor(Color.parseColor("#9A9AA0"))
+            btnLocalSort.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnLocalSort.setTextColor(Color.parseColor("#D49B28"))
+            btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnLocalBack.setTextColor(Color.parseColor("#D49B28"))
+            textLocalGroupTitle.setTextColor(Color.parseColor("#1C1C1E"))
+            updateLocalTabStyles()
+            localTrackAdapter?.notifyDataSetChanged()
+            localGroupAdapter?.notifyDataSetChanged()
             btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
             btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
             btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
@@ -1404,14 +1744,18 @@ class MainActivity : AppCompatActivity() {
             val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
             val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
             val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            // ★ 再生中ハイライトは位置ではなく曲そのもの（URI）で判定する。
+            //   表示リストとキューの並びが一致しない瞬間（再スキャン直後等）
+            //   でも別の曲を光らせないため。
             val isCurrent = currentPlaybackMode == PlaybackMode.LOCAL &&
                 ::localPlayer.isInitialized &&
-                position == localPlayer.currentIndex()
+                localPlayer.currentTrack?.uri == track.uri
 
             val root = (convertView as? LinearLayout) ?: buildRow()
-            val titleView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
-            val subView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(1) as TextView }
-            val durationView = root.getChildAt(1) as TextView
+            val thumbView = root.getChildAt(0) as ImageView
+            val titleView = root.getChildAt(1).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(1).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val durationView = root.getChildAt(2) as TextView
 
             titleView.text = track.title
             titleView.setTextColor(if (isCurrent) colorAccent else colorTitle)
@@ -1430,7 +1774,33 @@ class MainActivity : AppCompatActivity() {
             subView.setTextColor(colorValue)
             durationView.text = formatTrackDuration(track.durationMs)
             durationView.setTextColor(colorValue)
+            bindThumbnail(thumbView, track, isDark)
             return root
+        }
+
+        // ★ サムネイルの遅延読み込み（Phase 2-1）。
+        //   メモリキャッシュにあれば即表示。無ければプレースホルダを出し、
+        //   リポジトリ経由で非同期に取得する（MediaStore のアルバムアート
+        //   → FFmpeg 抽出の順）。行の使い回しで別曲の絵が混ざらないよう
+        //   ImageView の tag に URI を持たせ、一致したときだけ差し替える。
+        private fun bindThumbnail(thumbView: ImageView, track: LibraryRepository.Track, isDark: Boolean) {
+            val cacheKey = track.uri.toString()
+            thumbView.setBackgroundColor(Color.parseColor(if (isDark) "#1C1C1C" else "#E9E9EC"))
+            thumbView.tag = cacheKey
+            val cached = localThumbCache.get(cacheKey)
+            if (cached != null) {
+                thumbView.setImageBitmap(cached)
+                return
+            }
+            thumbView.setImageResource(R.drawable.ic_local_artwork_placeholder)
+            if (!::libraryRepository.isInitialized) return
+            libraryRepository.loadThumbnail(track) { bitmap ->
+                if (bitmap == null) return@loadThumbnail
+                localThumbCache.put(cacheKey, bitmap)
+                runOnUiThread {
+                    if (thumbView.tag == cacheKey) thumbView.setImageBitmap(bitmap)
+                }
+            }
         }
 
         private fun buildRow(): LinearLayout {
@@ -1439,11 +1809,17 @@ class MainActivity : AppCompatActivity() {
             val root = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(dp(4), dp(9), dp(4), dp(9))
+                setPadding(dp(4), dp(7), dp(4), dp(7))
                 layoutParams = android.widget.AbsListView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 )
+            }
+            val thumbView = ImageView(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+                    marginEnd = dp(10)
+                }
+                scaleType = ImageView.ScaleType.CENTER_CROP
             }
             val texts = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1466,8 +1842,84 @@ class MainActivity : AppCompatActivity() {
                 textSize = 11.5f
                 setPadding(dp(10), 0, 0, 0)
             }
+            root.addView(thumbView)
             root.addView(texts)
             root.addView(durationView)
+            return root
+        }
+    }
+
+    // ★ グループ行（アルバム / アーティスト / フォルダの一覧用）。
+    //   行レイアウトは曲行と同じ作りで、右端は長さの代わりに遷移マーク。
+    private inner class LocalGroupAdapter(
+        private val groups: List<LocalGroup>
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = groups.size
+        override fun getItem(position: Int): LocalGroup = groups[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val group = groups[position]
+            val isDark = isDarkThemeActive()
+            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
+            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
+
+            val root = (convertView as? LinearLayout) ?: buildRow()
+            val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val chevronView = root.getChildAt(1) as TextView
+
+            nameView.text = group.label
+            nameView.setTextColor(colorTitle)
+            val subParts = mutableListOf<String>()
+            // アルバム一覧では、アーティストが揃っている場合だけ補助表示する
+            if (localTab == LocalTab.ALBUM) {
+                group.uniformArtist?.let { subParts += it }
+            }
+            subParts += "${group.tracks.size} 曲"
+            subView.text = subParts.joinToString(" • ")
+            subView.setTextColor(colorValue)
+            chevronView.setTextColor(colorValue)
+            return root
+        }
+
+        private fun buildRow(): LinearLayout {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            val root = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(9), dp(4), dp(9))
+                layoutParams = android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val texts = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val nameView = TextView(this@MainActivity).apply {
+                textSize = 14.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(nameView)
+            texts.addView(subView)
+            val chevronView = TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 16f
+                setPadding(dp(10), 0, dp(2), 0)
+            }
+            root.addView(texts)
+            root.addView(chevronView)
             return root
         }
     }
