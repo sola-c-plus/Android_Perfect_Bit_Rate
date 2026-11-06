@@ -35,6 +35,9 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_AD_BLOCK_ENABLED = "ad_block_enabled"
         private const val KEY_UI_THEME_MODE = "ui_theme_mode"
         private const val KEY_PLAYBACK_MODE = "playbackMode"
+        private const val KEY_USE_MEDIASTORE = "useMediaStore"
+        private const val KEY_SAF_FOLDER_URIS = "safFolderUris"
+        private const val KEY_DSD_PCM_RATE_HZ = "dsdPcmRateHz"
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -56,6 +59,10 @@ class AppPreferences private constructor(context: Context) {
 
         // True Peak ガードの天井選択肢 (インデックス → dBTP)
         val TRUE_PEAK_CEILING_DB_VALUES = floatArrayOf(0.0f, -0.5f, -1.0f, -2.0f)
+
+        // DSD → PCM 変換レートの選択肢 (Hz)。デフォルトは 176.4kHz（仕様書 §5.2）
+        val DSD_PCM_RATE_CHOICES = intArrayOf(88200, 176400, 352800)
+        const val DSD_PCM_RATE_DEFAULT = 176400
 
         @Volatile
         private var instance: AppPreferences? = null
@@ -123,6 +130,26 @@ class AppPreferences private constructor(context: Context) {
     var playbackMode: PlaybackMode
         get() = PlaybackMode.fromPrefValue(prefs.getString(KEY_PLAYBACK_MODE, PlaybackMode.YT_MUSIC.prefValue))
         set(value) = prefs.edit { putString(KEY_PLAYBACK_MODE, value.prefValue) }
+
+    // ★ Local Music のライブラリ取得範囲（仕様書 §6.1）。設定 UI は次 PR で
+    //   実装し、ここでは永続化と参照の受け口だけを用意する。
+    var useMediaStore: Boolean
+        get() = prefs.getBoolean(KEY_USE_MEDIASTORE, true)
+        set(value) = prefs.edit { putBoolean(KEY_USE_MEDIASTORE, value) }
+
+    // SAF で追加したフォルダ（ツリー URI 文字列）の集合。永続化許可
+    // (takePersistableUriPermission) を取った URI のみを入れる前提。
+    var safFolderUris: Set<String>
+        get() = prefs.getStringSet(KEY_SAF_FOLDER_URIS, emptySet()) ?: emptySet()
+        set(value) = prefs.edit { putStringSet(KEY_SAF_FOLDER_URIS, value) }
+
+    // ★ DSD → PCM 変換レート (Hz、仕様書 §5.2)。選択肢外の値はデフォルトへ倒す。
+    var dsdPcmRateHz: Int
+        get() {
+            val stored = prefs.getInt(KEY_DSD_PCM_RATE_HZ, DSD_PCM_RATE_DEFAULT)
+            return if (stored in DSD_PCM_RATE_CHOICES) stored else DSD_PCM_RATE_DEFAULT
+        }
+        set(value) = prefs.edit { putInt(KEY_DSD_PCM_RATE_HZ, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)

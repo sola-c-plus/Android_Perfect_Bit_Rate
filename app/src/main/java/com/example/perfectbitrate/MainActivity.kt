@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -26,7 +27,12 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
+import android.widget.BaseAdapter
 import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.ListView
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -62,6 +68,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textLocalTitle: TextView
     private lateinit var textLocalMessage: TextView
     private lateinit var textModeSwitch: TextView
+    private lateinit var localTrackList: ListView
+    private lateinit var btnLocalAddFolder: TextView
+    private lateinit var btnLocalRescan: TextView
+    private lateinit var localScanProgress: View
+    private lateinit var progressLocalScan: ProgressBar
+    private lateinit var textLocalScanStatus: TextView
+    private lateinit var textLocalScanCurrent: TextView
+    private lateinit var localScanUpdating: View
+    private lateinit var textLocalUpdating: TextView
+
+    // ★ Local Music の供給係と楽曲インデックス（仕様書 §4.1 / §6）
+    private lateinit var libraryRepository: LibraryRepository
+    private lateinit var localPlayer: LocalPlayer
+    private var localTracks: List<LibraryRepository.Track> = emptyList()
+    private var localTrackAdapter: LocalTrackAdapter? = null
+    private var lastLocalProgressPushTime = 0L
+    // ★ ライブラリ表示まわり: 一覧（キャッシュ含む）を表示済みかと、
+    //   スキャンの多重実行ガード（仕様書 §6.2 の永続化キャッシュ表示用）
+    private var localLibraryShown = false
+    private var localScanRunning = false
 
     private val appPrefs by lazy { AppPreferences.get() }
     private lateinit var btCodecTracker: BluetoothCodecTracker
@@ -190,6 +216,22 @@ class MainActivity : AppCompatActivity() {
 
             checkPlaybackStall(now)
             checkRecreateFollowUp(now)
+
+            // ★ Local モードの進捗ポーリング（仕様書 §4.3: 250ms 周期で通知）。
+            //   デコード位置は LocalPlayer が保持し、ここで Service / ダイアログへ流す。
+            if (currentPlaybackMode == PlaybackMode.LOCAL &&
+                ::localPlayer.isInitialized && localPlayer.isPlaying &&
+                now - lastLocalProgressPushTime >= 250L
+            ) {
+                lastLocalProgressPushTime = now
+                val (pos, dur) = localPlayer.positionSnapshot()
+                if (pos != currentPosition || dur != currentDuration) {
+                    currentPosition = pos
+                    currentDuration = dur
+                    playbackService?.updateProgress(pos, dur, true)
+                    updateDialogPlayerUi()
+                }
+            }
 
             if (isPlayingState && appPrefs.isSpectrumEnabled) {
                 NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
@@ -366,17 +408,84 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ LocalPlayer からの通知の受け口。GeckoSessionController.Listener と
+    //   同じ形で MainActivity / Service へ流し、上部ステータス表示が Local の
+    //   曲データに追従するようにする（仕様書 §4.1 / §7.1）。
+    //   コールバックはデコードスレッド等から届くため、表示系は UI スレッドへ寄せる。
+    private val localPlayerListener = object : LocalPlayer.Listener {
+        override fun onPcm(pcmBytes: ByteArray, sampleRate: Int) {
+            pcmPacketCount += pcmBytes.size
+            isPlayingState = true
+            lastPcmTime = System.currentTimeMillis()
+            playbackService?.pushPcm(pcmBytes, sampleRate, "float32")
+        }
+
+        override fun onCodec(codec: String, rate: Int) {
+            currentCodec = codec
+            if (rate > 0 && rate != baseSampleRate) {
+                playbackService?.resetBuffer("codec")
+                baseSampleRate = rate
+                playbackService?.updateBaseSampleRate(rate)
+            }
+            playbackService?.updateCodec(codec)
+            runOnUiThread { updateStatus() }
+        }
+
+        override fun onFlush() {
+            playbackService?.resetBuffer("local")
+        }
+
+        override fun onMetadata(title: String, artist: String, artwork: Bitmap?) {
+            currentTitle = title
+            currentArtist = artist
+            currentArtworkBitmap = artwork
+            playbackService?.updateMetadataWithBitmap(title, artist, artwork)
+            runOnUiThread { updateDialogPlayerUi() }
+        }
+
+        override fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean) {
+            currentPosition = currentMs
+            currentDuration = durationMs
+            isPlayingState = isPlaying
+            playbackService?.updateProgress(currentMs, durationMs, isPlaying)
+            runOnUiThread { updateDialogPlayerUi() }
+        }
+
+        override fun onState(isPlaying: Boolean) {
+            isPlayingState = isPlaying
+            if (!isPlaying) {
+                peakDbL = -60f
+                peakDbR = -60f
+                bitActivityMask = 0
+                currentQueueSize = 0
+                currentLatencyMs = 0
+                walkmanLevelMeter?.reset()
+            }
+            playbackService?.updatePlaybackState(isPlaying)
+            runOnUiThread {
+                updateDialogPlayerUi()
+                localTrackAdapter?.notifyDataSetChanged()
+            }
+        }
+
+        override fun onTrackChanged(index: Int, track: LibraryRepository.Track) {
+            runOnUiThread { localTrackAdapter?.notifyDataSetChanged() }
+        }
+    }
+
     // ★ モード切替（仕様書 §3.2）: 必ず再生を停止し PCM を flush してから切り替える
     //   （両ソースの PCM が混ざる瞬間を作らない）。
     //   YT → Local ではページをポーズするだけで、Gecko セッションは破棄せず保持し、
     //   戻ったときに再ログイン・再読み込みなしで再表示できるようにする。あわせて
     //   再生意思も落とし、YT に戻った直後にウォッチドッグが勝手に再生再開しない
-    //   ようにする。Local → YT は LocalPlayer（後続 PR）がまだ無いため停止対象なし。
+    //   ようにする。Local → YT は LocalPlayer を停止しデコーダを解放する。
     private fun switchPlaybackMode(newMode: PlaybackMode) {
         if (newMode == currentPlaybackMode) return
         if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
             geckoController.sendCommand("pause")
             userWantsPlayback = false
+        } else {
+            localPlayer.stop()
         }
         playbackService?.resetBuffer("mode")
         currentPlaybackMode = newMode
@@ -384,9 +493,193 @@ class MainActivity : AppCompatActivity() {
         isPlayingState = false
         applyPlaybackModeVisibility()
         updateModeSwitchUi()
+        if (newMode == PlaybackMode.LOCAL) {
+            // ★ 上部ステータスは前のソース（YT）の表示を残さず、Local の初期
+            //   表示へ倒す（仕様書 §7.1 のステータス追従）。曲が始まれば
+            //   LocalPlayer の onCodec / onMetadata が実データで上書きする。
+            currentTitle = "Local Music"
+            currentArtist = ""
+            currentArtworkBitmap = null
+            currentCodec = "LOCAL"
+            currentPosition = 0L
+            currentDuration = 0L
+            playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
+            playbackService?.updateProgress(0L, 0L, false)
+            ensureLocalLibrary()
+        }
         updateStatus()
+        updateDialogPlayerUi()
         Toast.makeText(this, "モード: ${newMode.displayName}", Toast.LENGTH_SHORT).show()
     }
+
+    // ★ Local モードのライブラリ初期化: FFmpeg の有無 → 権限 → 読み込みの順に
+    //   案内し、問題があればプレースホルダのメッセージで状態を示す。
+    private fun ensureLocalLibrary() {
+        if (!FfmpegDecoder.isAvailable) {
+            textLocalMessage.text = "FFmpeg ライブラリが見つかりません（jniLibs への .so 配置が必要です）"
+            textLocalMessage.visibility = View.VISIBLE
+            return
+        }
+        val needsPermission = appPrefs.useMediaStore &&
+            appPrefs.safFolderUris.isEmpty() &&
+            !libraryRepository.hasAudioPermission()
+        if (needsPermission) {
+            textLocalMessage.text = "端末内の曲を表示するには、音声ファイルへのアクセス許可が必要です"
+            textLocalMessage.visibility = View.VISIBLE
+            requestAudioPermission()
+            return
+        }
+        reloadLocalLibrary()
+    }
+
+    // ★ ライブラリ読み込みの入口（仕様書 §6.2 の永続化キャッシュ対応）:
+    //   永続化済みキャッシュがあればまずそれを即表示し、その裏で差分
+    //   スキャンを走らせる。一覧を既に表示している場合は差分スキャンだけ。
+    //   キャッシュが無い初回は進捗ブロックを見せながらスキャンする。
+    private fun reloadLocalLibrary() {
+        if (!FfmpegDecoder.isAvailable) {
+            ensureLocalLibrary()
+            return
+        }
+        if (localLibraryShown) {
+            startLocalRefresh(forceFull = false)
+            return
+        }
+        libraryRepository.loadCachedTracks { cached ->
+            runOnUiThread {
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return@runOnUiThread
+                if (cached.isNotEmpty()) {
+                    applyLocalTracks(cached)
+                }
+                startLocalRefresh(forceFull = false)
+            }
+        }
+    }
+
+    // ★ スキャンの実行（差分 or 強制フル）と進捗表示の制御。
+    //   進捗表示は2段構えにする:
+    //   - 一覧がまだ無い / 強制フル: プログレスバーの進捗ブロック
+    //     （走査中は「検索中… n 件」、取得中は「読み込み中 n/N 件」＋対象名）
+    //   - 一覧表示中の裏側差分: 小さな「更新中 n/N 件」インジケータのみ
+    private fun startLocalRefresh(forceFull: Boolean) {
+        if (localScanRunning) return
+        if (!FfmpegDecoder.isAvailable) {
+            ensureLocalLibrary()
+            return
+        }
+        localScanRunning = true
+        val foreground = forceFull || !localLibraryShown
+        if (foreground) {
+            textLocalMessage.visibility = View.GONE
+            localScanUpdating.visibility = View.GONE
+            progressLocalScan.isIndeterminate = true
+            textLocalScanStatus.text = "ライブラリを検索中…"
+            textLocalScanCurrent.text = ""
+            localScanProgress.visibility = View.VISIBLE
+        } else {
+            localScanProgress.visibility = View.GONE
+            textLocalUpdating.text = "ライブラリを更新中…"
+            localScanUpdating.visibility = View.VISIBLE
+        }
+        libraryRepository.refreshLibrary(
+            forceFull = forceFull,
+            onProgress = { progress ->
+                runOnUiThread { updateLocalScanProgress(progress, foreground) }
+            }
+        ) { tracks ->
+            runOnUiThread {
+                localScanRunning = false
+                localScanProgress.visibility = View.GONE
+                localScanUpdating.visibility = View.GONE
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return@runOnUiThread
+                applyLocalTracks(tracks)
+            }
+        }
+    }
+
+    private fun updateLocalScanProgress(
+        progress: LibraryRepository.ScanProgress,
+        foreground: Boolean
+    ) {
+        if (currentPlaybackMode != PlaybackMode.LOCAL) return
+        if (foreground) {
+            when (progress.phase) {
+                LibraryRepository.ScanProgress.Phase.SCANNING -> {
+                    progressLocalScan.isIndeterminate = true
+                    textLocalScanStatus.text = "端末内の曲を検索中… ${progress.processed} 件"
+                }
+                LibraryRepository.ScanProgress.Phase.PROBING -> {
+                    progressLocalScan.isIndeterminate = false
+                    progressLocalScan.max = progress.total
+                    progressLocalScan.progress = progress.processed
+                    textLocalScanStatus.text =
+                        "読み込み中 ${progress.processed}/${progress.total} 件"
+                }
+            }
+            textLocalScanCurrent.text = progress.currentName
+        } else if (progress.phase == LibraryRepository.ScanProgress.Phase.PROBING &&
+            progress.total > 0
+        ) {
+            // 控えめ表示でも件数だけは更新し、進んでいることを示す
+            textLocalUpdating.text =
+                "ライブラリを更新中… ${progress.processed}/${progress.total} 件"
+        }
+    }
+
+    // ★ 一覧の反映（キャッシュ表示・スキャン結果で共通）。
+    private fun applyLocalTracks(tracks: List<LibraryRepository.Track>) {
+        localTracks = tracks
+        localPlayer.setQueue(tracks)
+        val adapter = LocalTrackAdapter(tracks)
+        localTrackAdapter = adapter
+        localTrackList.adapter = adapter
+        localLibraryShown = tracks.isNotEmpty()
+        if (tracks.isEmpty()) {
+            textLocalMessage.text = if (!libraryRepository.hasAudioPermission() && appPrefs.safFolderUris.isEmpty()) {
+                "曲が見つかりませんでした。音声ファイルへのアクセスを許可するか、「フォルダ追加」からフォルダを選んでください"
+            } else {
+                "再生できる曲が見つかりませんでした"
+            }
+            textLocalMessage.visibility = View.VISIBLE
+        } else {
+            textLocalMessage.visibility = View.GONE
+        }
+    }
+
+    private fun requestAudioPermission() {
+        requestAudioPermissionLauncher.launch(Manifest.permission.READ_MEDIA_AUDIO)
+    }
+
+    private val requestAudioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (currentPlaybackMode != PlaybackMode.LOCAL) return@registerForActivityResult
+            if (granted) {
+                reloadLocalLibrary()
+            } else {
+                textLocalMessage.text = "アクセスが許可されませんでした。「フォルダ追加」からフォルダを選ぶ方法でも曲を追加できます"
+                textLocalMessage.visibility = View.VISIBLE
+            }
+        }
+
+    // ★ SAF フォルダ追加: 永続化許可を取って prefs へ保存し、ライブラリを再読込する。
+    //   取得範囲の管理 UI（削除など）は設定画面の次 PR で実装する。
+    private val safFolderPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                appPrefs.safFolderUris = appPrefs.safFolderUris + uri.toString()
+                Toast.makeText(this, "フォルダを追加しました", Toast.LENGTH_SHORT).show()
+                if (currentPlaybackMode == PlaybackMode.LOCAL) {
+                    reloadLocalLibrary()
+                }
+            } catch (e: Exception) {
+                Log.w("MainActivity", "SAF folder add failed", e)
+                Toast.makeText(this, "フォルダを追加できませんでした", Toast.LENGTH_SHORT).show()
+            }
+        }
 
     private fun applyPlaybackModeVisibility() {
         val isLocal = currentPlaybackMode == PlaybackMode.LOCAL
@@ -540,7 +833,10 @@ class MainActivity : AppCompatActivity() {
         playbackService?.setOutputDevice(activeOutputDevice)
         btCodecTracker.fetchCurrentCodec()
 
-        if (activeOutputDevice != null && isPlayingState) {
+        // resume_audio は Gecko 側の復帰コマンドなので YT モード時のみ送る
+        if (activeOutputDevice != null && isPlayingState &&
+            currentPlaybackMode == PlaybackMode.YT_MUSIC
+        ) {
             geckoController.sendCommand("resume_audio")
         }
     }
@@ -616,15 +912,17 @@ class MainActivity : AppCompatActivity() {
                 //   "pause" は DAC 切断時の自動ポーズも同じ経路で流れるため記録しない
                 //   （noteUserPlaybackIntent のコメント参照）。
                 if (cmd != "pause") noteUserPlaybackIntent(cmd)
-                // ★ Local モードでは送り先（LocalPlayer）が後続 PR のため Gecko へは
-                //   送らない（隠れたページが裏で再生を始める事故を防ぐ）。
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                    geckoController.sendCommand(cmd)
+                // ★ 送り先は現在のモードの供給係（仕様書 §8）。Local モードで
+                //   Gecko へ送ると、隠れたページが裏で再生を始める事故になる。
+                when (currentPlaybackMode) {
+                    PlaybackMode.YT_MUSIC -> geckoController.sendCommand(cmd)
+                    PlaybackMode.LOCAL -> localPlayer.handleCommand(cmd)
                 }
             }
             playbackService?.onSeekListener = { pos ->
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                    geckoController.sendSeek(pos)
+                when (currentPlaybackMode) {
+                    PlaybackMode.YT_MUSIC -> geckoController.sendSeek(pos)
+                    PlaybackMode.LOCAL -> localPlayer.seekTo(pos)
                 }
             }
         }
@@ -667,6 +965,22 @@ class MainActivity : AppCompatActivity() {
         textLocalTitle = findViewById(R.id.textLocalTitle)
         textLocalMessage = findViewById(R.id.textLocalMessage)
         textModeSwitch = findViewById(R.id.textModeSwitch)
+        localTrackList = findViewById(R.id.localTrackList)
+        btnLocalAddFolder = findViewById(R.id.btnLocalAddFolder)
+        btnLocalRescan = findViewById(R.id.btnLocalRescan)
+        localScanProgress = findViewById(R.id.localScanProgress)
+        progressLocalScan = findViewById(R.id.progressLocalScan)
+        textLocalScanStatus = findViewById(R.id.textLocalScanStatus)
+        textLocalScanCurrent = findViewById(R.id.textLocalScanCurrent)
+        localScanUpdating = findViewById(R.id.localScanUpdating)
+        textLocalUpdating = findViewById(R.id.textLocalUpdating)
+
+        libraryRepository = LibraryRepository(this)
+        localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
+        // ★ LocalPlayer のフロー制御用に Service の PCM キュー残量を渡す。
+        //   未バインド時は 0（容量 0 = フロー制御なし）として扱われる。
+        localPlayer.queueSizeProvider = { playbackService?.pcmQueueSize ?: 0 }
+        localPlayer.queueCapacityProvider = { playbackService?.pcmQueueCapacity ?: 0 }
 
         isDirectSource = appPrefs.isDirectSource
         currentThemeMode = appPrefs.uiThemeMode
@@ -785,6 +1099,9 @@ class MainActivity : AppCompatActivity() {
         //   Gecko セッションはモードによらず生成・保持し、表示だけを切り替える。
         applyPlaybackModeVisibility()
         updateModeSwitchUi()
+        if (currentPlaybackMode == PlaybackMode.LOCAL) {
+            ensureLocalLibrary()
+        }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -843,6 +1160,24 @@ class MainActivity : AppCompatActivity() {
                 if (currentPlaybackMode == PlaybackMode.YT_MUSIC) PlaybackMode.LOCAL else PlaybackMode.YT_MUSIC
             )
         }
+        localTrackList.setOnItemClickListener { _, view, position, _ ->
+            view?.hapticTick(appPrefs)
+            // ★ 全曲リストのタップで即再生（キューは全曲リスト順）
+            localPlayer.playAt(position)
+        }
+        btnLocalRescan.setOnClickListener {
+            it.hapticTick(appPrefs)
+            // ★「再スキャン」は強制フルリフレッシュ（全件再プローブ＋進捗表示）
+            if (!FfmpegDecoder.isAvailable) {
+                ensureLocalLibrary()
+            } else {
+                startLocalRefresh(forceFull = true)
+            }
+        }
+        btnLocalAddFolder.setOnClickListener {
+            it.hapticTick(appPrefs)
+            safFolderPickerLauncher.launch(null)
+        }
 
         uiHandler.post(uiUpdateRunnable)
     }
@@ -880,6 +1215,11 @@ class MainActivity : AppCompatActivity() {
             localPlaceholder.setBackgroundColor(Color.parseColor("#000000"))
             textLocalTitle.setTextColor(Color.parseColor("#F0F0F0"))
             textLocalMessage.setTextColor(Color.parseColor("#888888"))
+            btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnLocalAddFolder.setTextColor(Color.parseColor("#E5A93C"))
+            btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnLocalRescan.setTextColor(Color.parseColor("#E5A93C"))
+            localTrackList.divider = ColorDrawable(Color.parseColor("#1C1C1C"))
             btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
             btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
             btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
@@ -902,6 +1242,11 @@ class MainActivity : AppCompatActivity() {
             localPlaceholder.setBackgroundColor(Color.parseColor("#FFFFFF"))
             textLocalTitle.setTextColor(Color.parseColor("#1C1C1E"))
             textLocalMessage.setTextColor(Color.parseColor("#636366"))
+            btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnLocalAddFolder.setTextColor(Color.parseColor("#D49B28"))
+            btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnLocalRescan.setTextColor(Color.parseColor("#D49B28"))
+            localTrackList.divider = ColorDrawable(Color.parseColor("#E0E0E5"))
             btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
             btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
             btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
@@ -963,13 +1308,15 @@ class MainActivity : AppCompatActivity() {
             onPlayerCommand = { cmd ->
                 val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
                 noteUserPlaybackIntent(resolved)
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                    geckoController.sendCommand(resolved)
+                when (currentPlaybackMode) {
+                    PlaybackMode.YT_MUSIC -> geckoController.sendCommand(resolved)
+                    PlaybackMode.LOCAL -> localPlayer.handleCommand(resolved)
                 }
             },
             onSeekTo = { pos ->
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                    geckoController.sendSeek(pos)
+                when (currentPlaybackMode) {
+                    PlaybackMode.YT_MUSIC -> geckoController.sendSeek(pos)
+                    PlaybackMode.LOCAL -> localPlayer.seekTo(pos)
                 }
             },
             onDismiss = {
@@ -1001,13 +1348,15 @@ class MainActivity : AppCompatActivity() {
             onPlayerCommand = { cmd ->
                 val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
                 noteUserPlaybackIntent(resolved)
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                    geckoController.sendCommand(resolved)
+                when (currentPlaybackMode) {
+                    PlaybackMode.YT_MUSIC -> geckoController.sendCommand(resolved)
+                    PlaybackMode.LOCAL -> localPlayer.handleCommand(resolved)
                 }
             },
             onSeekTo = { pos ->
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                    geckoController.sendSeek(pos)
+                when (currentPlaybackMode) {
+                    PlaybackMode.YT_MUSIC -> geckoController.sendSeek(pos)
+                    PlaybackMode.LOCAL -> localPlayer.seekTo(pos)
                 }
             },
             onDismiss = { activePlayerDialog = null }
@@ -1018,6 +1367,96 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDevPresetsDialog() {
         DevPresetsDialog(this).show()
+    }
+
+    // ★ Local 全曲リストのアダプタ。行はコードで組み立て、テーマ色は
+    //   SettingsActivity と同じパレットを使う。再生中の行はアクセント色で示す。
+    private inner class LocalTrackAdapter(
+        private val tracks: List<LibraryRepository.Track>
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = tracks.size
+        override fun getItem(position: Int): LibraryRepository.Track = tracks[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val track = tracks[position]
+            val isDark = isDarkThemeActive()
+            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
+            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
+            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            val isCurrent = currentPlaybackMode == PlaybackMode.LOCAL &&
+                ::localPlayer.isInitialized &&
+                position == localPlayer.currentIndex()
+
+            val root = (convertView as? LinearLayout) ?: buildRow()
+            val titleView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val durationView = root.getChildAt(1) as TextView
+
+            titleView.text = track.title
+            titleView.setTextColor(if (isCurrent) colorAccent else colorTitle)
+            val subParts = mutableListOf<String>()
+            if (track.artist.isNotBlank()) subParts += track.artist
+            if (track.album.isNotBlank()) subParts += track.album
+            if (subParts.isEmpty()) subParts += track.displayName
+            if (track.codecName.isNotBlank()) {
+                subParts += if (track.sampleRate > 0) {
+                    "${track.codecName.uppercase()} ${(track.sampleRate / 1000.0)}kHz"
+                } else {
+                    track.codecName.uppercase()
+                }
+            }
+            subView.text = subParts.joinToString(" • ")
+            subView.setTextColor(colorValue)
+            durationView.text = formatTrackDuration(track.durationMs)
+            durationView.setTextColor(colorValue)
+            return root
+        }
+
+        private fun buildRow(): LinearLayout {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            val root = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(9), dp(4), dp(9))
+                layoutParams = android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val texts = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val titleView = TextView(this@MainActivity).apply {
+                textSize = 14.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(titleView)
+            texts.addView(subView)
+            val durationView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                setPadding(dp(10), 0, 0, 0)
+            }
+            root.addView(texts)
+            root.addView(durationView)
+            return root
+        }
+    }
+
+    private fun formatTrackDuration(durationMs: Long): String {
+        if (durationMs <= 0L) return "--:--"
+        val totalSeconds = durationMs / 1000
+        return String.format(java.util.Locale.US, "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private fun checkAndRequestPermissions() {
@@ -1063,13 +1502,15 @@ class MainActivity : AppCompatActivity() {
                 if (event?.repeatCount == 0) {
                     if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
                         noteUserPlaybackIntent("next")
-                        if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                            geckoController.sendCommand("next")
+                        when (currentPlaybackMode) {
+                            PlaybackMode.YT_MUSIC -> geckoController.sendCommand("next")
+                            PlaybackMode.LOCAL -> localPlayer.next()
                         }
                     } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
                         noteUserPlaybackIntent("prev")
-                        if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
-                            geckoController.sendCommand("prev")
+                        when (currentPlaybackMode) {
+                            PlaybackMode.YT_MUSIC -> geckoController.sendCommand("prev")
+                            PlaybackMode.LOCAL -> localPlayer.prev()
                         }
                     }
                     // 曲送りが発火した押下でのみ1回鳴らす（長押しリピートでは鳴らさない）
@@ -1093,7 +1534,11 @@ class MainActivity : AppCompatActivity() {
         isHandlingDisconnect = true
 
         try {
-            geckoController.sendCommand("pause")
+            // ★ 切断時のポーズも現在の供給係へ（Local 中は LocalPlayer を止める）
+            when (currentPlaybackMode) {
+                PlaybackMode.YT_MUSIC -> geckoController.sendCommand("pause")
+                PlaybackMode.LOCAL -> localPlayer.pause()
+            }
             isPlayingState = false
 
             isVolLockOn = false
@@ -1274,6 +1719,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // システム設定で許可が後から与えられた場合など、Local で一覧が空の
+        // ままなら再読み込みを試みる
+        if (currentPlaybackMode == PlaybackMode.LOCAL &&
+            ::libraryRepository.isInitialized &&
+            libraryRepository.hasAudioPermission() &&
+            localTracks.isEmpty()
+        ) {
+            reloadLocalLibrary()
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         geckoController.onPause()
@@ -1297,6 +1755,8 @@ class MainActivity : AppCompatActivity() {
         networkCallback = null
         if (appWakeLock?.isHeld == true) appWakeLock?.release()
         btCodecTracker.stop()
+        if (::localPlayer.isInitialized) localPlayer.release()
+        if (::libraryRepository.isInitialized) libraryRepository.shutdown()
         geckoController.onDestroy()
         if (isServiceBound) {
             unbindService(serviceConnection)

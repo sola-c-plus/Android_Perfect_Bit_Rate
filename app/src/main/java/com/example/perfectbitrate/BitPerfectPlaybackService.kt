@@ -118,7 +118,13 @@ class BitPerfectPlaybackService : Service() {
 
     private val MAX_QUEUE_CAPACITY = 64
     val pcmQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CAPACITY)
-    
+
+    // ★ Local 再生（LocalPlayer）のフロー制御・進捗補正用の読み取り口。
+    //   キューの操作（offer/poll/clear）自体は従来どおり Service 内部と
+    //   pushPcm / resetBuffer 経由に限る。ここは残量の参照だけを公開する。
+    val pcmQueueSize: Int get() = pcmQueue.size
+    val pcmQueueCapacity: Int get() = MAX_QUEUE_CAPACITY
+
     // ★ プリロール閾値（再生開始・再開時に何チャンク溜まってから出し始めるか）。
     //   1チャンク = 4096フレーム。48kHz 換算で 1チャンク ≒ 85ms なので、
     //   6チャンク ≒ 0.5秒分の先読みになる（実時間はソースのサンプルレートで変動）。
@@ -782,6 +788,32 @@ class BitPerfectPlaybackService : Service() {
                 } catch (e: Exception) {}
             }
         }
+    }
+
+    // ★ Local Music 用のメタデータ受け口（仕様書 §4.3）: アートワークが URL でなく
+    //   Bitmap で届くソース向けに、既存 updateMetadata（URL 経路）とは別に用意する。
+    //   既存経路の挙動は変えない。artwork=null は「アートワークなし」として
+    //   前ソースの画像を残さずクリアする。
+    fun updateMetadataWithBitmap(title: String, artist: String, artwork: Bitmap?) {
+        currentTitle = title
+        currentArtist = artist
+        currentArtworkBitmap = artwork
+
+        val metaBuilder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "perfect_bitrate_${System.currentTimeMillis()}")
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, currentDuration)
+
+        if (artwork != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork)
+        }
+
+        mediaSession.setMetadata(metaBuilder.build())
+        updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, title, artist, artwork, isCurrentlyPlaying, currentPosition, currentDuration)
+        notifyPlaybackStateChanged()
     }
 
     private fun createActionPendingIntent(action: String, requestCode: Int): PendingIntent {

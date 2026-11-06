@@ -55,6 +55,8 @@ android {
 dependencies {
     implementation("org.mozilla.geckoview:geckoview-omni:121.0.20231230165955")
     implementation("androidx.media:media:1.7.0")
+    // SAF ツリー走査（Local Music のライブラリ取得）用
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
