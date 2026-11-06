@@ -212,6 +212,25 @@ class BitPerfectPlaybackService : Service() {
     private var peakSnapshotWriteIndex = 0
     private var peakSnapshotCount = 0
 
+    // ★ 再生ヘッド位置の「表示時刻軸」における基点。
+    //   AudioTrack.playbackHeadPosition は AudioTrack インスタンス生成が
+    //   起点の累積値で、flush() では 0 に戻らず「その時点までに書いた
+    //   総フレーム数」へ跳ぶ。一方 totalWrittenFrames やスナップショット
+    //   位置は resetBuffer 等で 0 から数え直すため、両者を直接比較すると
+    //   フラッシュを挟んだ途端に軸がずれる（ピーク取得が常時不一致に
+    //   なり、スペクトラムの整列も処理位置へ退化する）。そこで
+    //   totalWrittenFrames = 0 の箇所（resetSpectrumTimeline）で、その
+    //   時点のヘッド値を基点として記録し、表示系の再生位置は必ず
+    //   「ヘッド − 基点」で求める（playedFramesInTimeline）。
+    @Volatile private var playbackHeadBaseFrames = 0L
+
+    // 表示時刻軸（totalWrittenFrames と同じエポック）での再生済み
+    // フレーム数。基点より前には戻らないため 0 未満にはならない。
+    private fun playedFramesInTimeline(): Long {
+        val head = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        return (head - playbackHeadBaseFrames).coerceAtLeast(0L)
+    }
+
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
@@ -717,7 +736,9 @@ class BitPerfectPlaybackService : Service() {
     //   今鳴っている位置（出力フレーム単位）は、処理済み累積から未再生分
     //   （Service キュー滞留分＋ AudioTrack へ書いたが再生ヘッドがまだ
     //   到達していない分）を差し引いたもの。後者は analyzeAndDispatchPeak
-    //   の遅延推定と同じ根拠（totalWrittenFrames − playbackHeadPosition）。
+    //   の遅延推定と同じ根拠（totalWrittenFrames − 再生位置）。再生位置は
+    //   生のヘッド値ではなく表示時刻軸へ換算した値を使うこと
+    //   （playedFramesInTimeline。フラッシュ後のエポックずれ対策）。
     //   選択は「その位置を最初に越えるスナップショット」＝今鳴っている
     //   チャンクのもの。キュー満杯で最古チャンクが破棄された場合は滞留分
     //   が実キューから算出されるため、位置が破棄分を飛び越えて自動的に
@@ -728,7 +749,11 @@ class BitPerfectPlaybackService : Service() {
         var queuedBytes = 0L
         for (chunk in pcmQueue) queuedBytes += chunk.size
         val queuedFrames = queuedBytes / bytesPerFrame
-        val playedFrames = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        // ★ 再生ヘッドは表示時刻軸へ換算してから使う（基点の説明は
+        //   playbackHeadBaseFrames 参照）。生のヘッド値を直接引くと、
+        //   フラッシュ後のエポックずれで hardwareBufferedFrames が
+        //   0 に潰れ、nowPos がバースト状の処理位置へ退化してしまう。
+        val playedFrames = playedFramesInTimeline()
         val hardwareBufferedFrames = (totalWrittenFrames - playedFrames).coerceAtLeast(0L)
         synchronized(spectrumSnapshotLock) {
             if (spectrumSnapshotCount == 0) return false
@@ -773,14 +798,15 @@ class BitPerfectPlaybackService : Service() {
 
     // ★ 表示用: 「今鳴っているチャンク」のピークを outDb[0]=L / outDb[1]=R
     //   へコピーし、該当スナップショットがあれば true を返す。
-    //   今鳴っている位置は AudioTrack の再生ヘッド位置（書込み済み累積と
-    //   同じ時刻軸）そのもので、選択は「終端が再生位置を最初に越える
-    //   スナップショット」＝現在再生中のチャンクのもの。再生位置が全
-    //   スナップショットの終端以降（書いた音が鳴り終わっている）場合は
-    //   false を返し、呼び出し側のフォールバック（無音扱い）に委ねる。
+    //   今鳴っている位置は、書込み済み累積と同じ表示時刻軸へ換算した
+    //   再生ヘッド位置（playedFramesInTimeline）で、選択は「終端が
+    //   再生位置を最初に越えるスナップショット」＝現在再生中の
+    //   チャンクのもの。再生位置が全スナップショットの終端以降
+    //   （書いた音が鳴り終わっている）場合は false を返し、呼び出し側
+    //   のフォールバック（無音扱い）に委ねる。
     fun getPeakAlignedToPlayback(outDb: FloatArray): Boolean {
         if (outDb.size < 2) return false
-        val playedFrames = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        val playedFrames = playedFramesInTimeline()
         synchronized(peakSnapshotLock) {
             if (peakSnapshotCount == 0) return false
             for (n in 0 until peakSnapshotCount) {
@@ -801,6 +827,14 @@ class BitPerfectPlaybackService : Service() {
     //   切断フロー）から呼び、処理済み累積・書込み済み累積と再生ヘッドの
     //   基準を揃える。
     private fun resetSpectrumTimeline() {
+        // ★ 再生ヘッドの基点を「今の」ヘッド値へ合わせ直す。呼び出し
+        //   箇所では totalWrittenFrames が 0 に戻された直後であり、
+        //   resetBuffer では flush() 済み（ヘッドは旧エポックの書込み
+        //   総数へ跳んだ後）、AudioTrack 再生成では新規トラックの
+        //   ヘッド（≒0）が読める。いずれも新しい表示時刻軸の原点と
+        //   して正しい。
+        playbackHeadBaseFrames =
+            (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
         synchronized(spectrumSnapshotLock) {
             spectrumProcessedFrames = 0L
             spectrumSnapshotWriteIndex = 0
@@ -1528,7 +1562,10 @@ class BitPerfectPlaybackService : Service() {
         }
 
         val queueSize = pcmQueue.size
-        val playedFrames = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        // ★ 遅延推定も表示時刻軸に換算した再生位置で（生のヘッド値は
+        //   フラッシュ後のエポックずれで書込み累積を上回り、推定が
+        //   0 に潰れてしまう）。
+        val playedFrames = playedFramesInTimeline()
         val hardwareBufferedFrames = (totalWrittenFrames - playedFrames).coerceAtLeast(0L)
         val queueBufferedFrames = queueSize * 4096L
         val totalBufferedFrames = hardwareBufferedFrames + queueBufferedFrames

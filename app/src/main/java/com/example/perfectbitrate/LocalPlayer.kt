@@ -514,6 +514,16 @@ class LocalPlayer(
     }
 
     private fun runDecodeLoop(gen: Int, dec: FfmpegDecoder) {
+        // ★ 世代ガード: このタスクが executor に積まれてから実行される
+        //   までの間に世代が進んでいたら（停止→再開の連打、曲タップ
+        //   直後の一時停止など）、native ループへ入らない。native 側は
+        //   入場時に stopRequested をクリアするため、ここを素通りすると
+        //   「積まれた後に発行された停止要求」が破棄され、古い世代の
+        //   タスクがファイル全体を無音でデコードし尽くすまで単一
+        //   スレッドの decodeExecutor を占有してしまう（後続の本物の
+        //   再開タスクが回らず、音が出ない・シークバーが進まない
+        //   状態が続く。DSD 等の遅いデコードで顕著）。
+        if (gen != generation) return
         // ポーズ再開時に保留していたシークを先に適用する
         val pending = synchronized(stateLock) {
             val p = pendingSeekMs
