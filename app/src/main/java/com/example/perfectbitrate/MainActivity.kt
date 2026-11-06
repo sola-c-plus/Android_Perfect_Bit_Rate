@@ -222,6 +222,12 @@ class MainActivity : AppCompatActivity() {
     private var currentDuration = 0L
     private var currentPosition = 0L
     private var currentArtworkBitmap: Bitmap? = null
+    // ★ Local 再生画面専用のアートワーク保持。currentArtworkBitmap は
+    //   両モードで共有され、Local 中も保持され続ける Gecko ページ側の
+    //   メタデータ（画像取得の非同期完了含む）が書き込むと、Local の
+    //   再生画面の再描画で YT のサムネイルが漏れてしまう。再生画面の
+    //   描画は LocalPlayer の通知だけで更新されるこちらを正とする。
+    private var localArtworkBitmap: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
 
     private var isDirectSource = false
@@ -309,18 +315,37 @@ class MainActivity : AppCompatActivity() {
     private var currentRamUsageMb = 0
 
     private val uiSpectrumBands = FloatArray(32) { -60f }
+    private val uiPeakDb = FloatArray(2) { -60f }
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
+
+            // ★ レベルメーターは「今鳴っている位置」に整列したピークで駆動
+            //   する。従来は再生ループのチャンク処理に同期した到着駆動
+            //   （onPeakListener からの setLevels）で、Local のバースト供給
+            //   では配送間隔が空いてメーターが凍結→ジャンプになっていた。
+            //   スペクトラム（3ae6aee）と同方式で、この 30ms 周期に Service
+            //   から再生ヘッド位置のチャンクのピークを取得して渡す。
+            //   メーター側のピークホールド／減衰は従来どおり View が担う。
+            val meterAligned = isPlayingState &&
+                playbackService?.getPeakAlignedToPlayback(uiPeakDb) == true
+            if (meterAligned) {
+                walkmanLevelMeter?.setLevels(uiPeakDb[0], uiPeakDb[1])
+            }
+
             if (now - lastPcmTime > 400L || !isPlayingState) {
                 peakDbL = -60f
                 peakDbR = -60f
                 bitActivityMask = 0
                 currentQueueSize = 0
                 currentLatencyMs = 0
-                walkmanLevelMeter?.setLevels(-60f, -60f)
+                // 整列取得できている間（書いた音がまだ鳴っている間）は
+                // メーターを無音に倒さない。
+                if (!meterAligned) {
+                    walkmanLevelMeter?.setLevels(-60f, -60f)
+                }
             }
 
             checkPlaybackStall(now)
@@ -344,7 +369,15 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (isPlayingState && appPrefs.isSpectrumEnabled) {
-                NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
+                // ★ スペクトラムは Service 側で「今鳴っている位置」に整列した
+                //   スナップショットから取得する（Local のバースト処理でも
+                //   表示が再生ペースで連続的に流れるように）。スナップ
+                //   ショットがまだ無い場合（再生開始直後など）は、従来どおり
+                //   native の最新値を直接読む。
+                val service = playbackService
+                if (service == null || !service.getSpectrumAlignedToPlayback(uiSpectrumBands)) {
+                    NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
+                }
                 activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
             }
 
@@ -546,9 +579,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onMetadata(title: String, artist: String, artwork: Bitmap?) {
+            // ★ アートワーク状態の所有権はモードで分ける: Local 側の
+            //   通知は Local モードのときだけ表示状態へ反映する
+            //   （YT モードへ切り替えた直後に遅れて届いた通知が、
+            //   YT 側の表示を Local の絵で上書きしないように）。
+            if (currentPlaybackMode != PlaybackMode.LOCAL) return
             currentTitle = title
             currentArtist = artist
             currentArtworkBitmap = artwork
+            localArtworkBitmap = artwork
             playbackService?.updateMetadataWithBitmap(title, artist, artwork)
             runOnUiThread {
                 updateDialogPlayerUi()
@@ -627,12 +666,31 @@ class MainActivity : AppCompatActivity() {
             currentTitle = "Local Music"
             currentArtist = ""
             currentArtworkBitmap = null
+            localArtworkBitmap = null
             currentCodec = "LOCAL"
             currentPosition = 0L
             currentDuration = 0L
             playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
             playbackService?.updateProgress(0L, 0L, false)
             ensureLocalLibrary()
+            // ★ Local で保持中の曲（YT へ行く前に再生していた曲）が
+            //   ある場合は、その曲の表示を復元する。タイトル /
+            //   アーティストは LocalPlayer の現在曲から戻し、
+            //   アートワークは再取得して適用する。切替のたびに
+            //   currentArtworkBitmap を null へ倒しているため、
+            //   再取得しないと再生画面のアートワークが音符
+            //   プレースホルダのままになる（LocalPlayer は曲開始
+            //   時にしかアートワークを送らない）。
+            if (::localPlayer.isInitialized) {
+                localPlayer.currentTrack?.let { held ->
+                    currentTitle = held.title
+                    currentArtist = held.artist
+                    playbackService?.updateMetadataWithBitmap(
+                        currentTitle, currentArtist, null
+                    )
+                    localPlayer.refreshCurrentArtwork()
+                }
+            }
         } else {
             // ★ YT へ戻す際は、Local 側が書き換えたソース依存のストリーム
             //   状態を YT の既定へ戻す。特に baseSampleRate: Local の
@@ -648,6 +706,7 @@ class MainActivity : AppCompatActivity() {
             currentTitle = "YouTube Music"
             currentArtist = ""
             currentArtworkBitmap = null
+            localArtworkBitmap = null
             currentCodec = "OPUS 160kbps (48k)"
             currentPosition = 0L
             currentDuration = 0L
@@ -1747,7 +1806,11 @@ class MainActivity : AppCompatActivity() {
                 bitActivityMask = bitActivityMask or mask
                 currentQueueSize = queueSize
                 currentLatencyMs = latencyMs
-                walkmanLevelMeter?.setLevels(dbL, dbR)
+                // ★ レベルメーター本体へはここから直接渡さない。到着駆動だと
+                //   Local のバースト供給で配送間隔が空きメーターが凍結→
+                //   ジャンプになるため、表示は uiUpdateRunnable が
+                //   getPeakAlignedToPlayback（再生位置整列）で駆動する。
+                //   こちらの値は SysMonitor 表示とストール検知用に保持する。
             }
 
             playbackService?.onCommandListener = { cmd ->
@@ -1917,6 +1980,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onMetadata(title: String, artist: String, artworkUrl: String) {
                     lastPageSignalTime = System.currentTimeMillis()
+                    // ★ アートワーク状態の所有権はモードで分ける:
+                    //   Gecko セッションは Local モードでも保持されるため、
+                    //   ページ側メタデータの再送や画像取得の遅延完了が
+                    //   Local 中に届くことがある。表示・保持状態への
+                    //   反映は YT モードのときだけに限る（Local 中に
+                    //   currentArtworkBitmap 等へ YT のサムネイルが
+                    //   入ると、Local 再生画面の再描画で漏れてしまう）。
+                    //   ページ生存判定（lastPageSignalTime）はモードに
+                    //   依らないため、ガードより先に更新する。
+                    if (currentPlaybackMode != PlaybackMode.YT_MUSIC) return
                     currentTitle = title
                     currentArtist = artist
                     playbackService?.updateMetadata(title, artist, artworkUrl)
@@ -1926,8 +1999,12 @@ class MainActivity : AppCompatActivity() {
                                 val stream = URL(artworkUrl).openStream()
                                 val bmp = BitmapFactory.decodeStream(stream)
                                 runOnUiThread {
-                                    currentArtworkBitmap = bmp
-                                    updateDialogPlayerUi()
+                                    // 取得中に Local へ切り替わっていたら
+                                    // 保持状態へは入れない（上のガードと対）。
+                                    if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                                        currentArtworkBitmap = bmp
+                                        updateDialogPlayerUi()
+                                    }
                                 }
                             } catch (e: Exception) { Log.e("MainActivity", "Image decode error", e) }
                         }
@@ -2409,7 +2486,12 @@ class MainActivity : AppCompatActivity() {
         val index = localPlayer.effectivePosition()
         textNpQueuePosition.text =
             if (queueSize > 0 && index in 0 until queueSize) "${index + 1} / $queueSize" else ""
-        val artwork = currentArtworkBitmap
+        // ★ 再生画面のアートワークは Local 専用の保持
+        //   （localArtworkBitmap）を正とする。共有の
+        //   currentArtworkBitmap は YT 側メタデータの到着で
+        //   書き換わりうるため、ここで使うと画面遷移後の
+        //   再描画で YT のサムネイルが表示されてしまう。
+        val artwork = localArtworkBitmap
         if (artwork != null) {
             imgNpArtwork.setImageBitmap(artwork)
         } else {

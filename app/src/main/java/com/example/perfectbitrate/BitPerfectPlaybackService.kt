@@ -134,6 +134,19 @@ class BitPerfectPlaybackService : Service() {
     private val PREROLL_THRESHOLD = 6
     private val isBuffering = AtomicBoolean(true)
 
+    // ★ Local の曲切り替え/シーク直後だけ使う小さいプリロール。
+    //   Local の供給は端末内デコードで速く安定しているため、YT 側の
+    //   供給瞬断対策である 6 チャンクまで待つ必要がなく、切り替え後の
+    //   再開を早められる。アームは resetBuffer("local") でのみ行い、
+    //   再開が成立した時点で消費される（再生中のアンダーラン回復では
+    //   使われず、従来どおり 6 チャンクで復帰する）。YT 由来の
+    //   フラッシュ（"page" / "mode"）では必ず解除し、YT 経路の
+    //   再開条件には影響させない。
+    private val LOCAL_PREROLL_THRESHOLD = 3
+    @Volatile private var localFastPrerollArmed = false
+    private fun activePrerollThreshold(): Int =
+        if (localFastPrerollArmed) LOCAL_PREROLL_THRESHOLD else PREROLL_THRESHOLD
+
     // ★ バッファ破棄の計測カウンタ（診断用、サービス起動以来の累計。再生挙動には影響しない）
     val bufferDropCount = AtomicLong(0)     // キューフルで最古パケットを落とした回数
     val bufferDropMs = AtomicLong(0)        // 落とした音の合計時間 (ms)
@@ -151,6 +164,72 @@ class BitPerfectPlaybackService : Service() {
     @Volatile var truePeakActivationCount: Long = 0L
     @Volatile var truePeakCapHitCount: Long = 0L
     private val truePeakStatsBuffer = FloatArray(4)
+
+    // ★ スペクトラム表示の「再生時刻整列」用スナップショット保持。
+    //   native のスペクトラムは DSP 処理時点の音（リングバッファ末尾）から
+    //   算出されるため、Local のように処理が再生より数秒先行する供給では、
+    //   表示側が最新値をそのまま読むと「バースト時に一括算出 → 次のバースト
+    //   まで完全静止」の凍結→ジャンプになる。そこで pushPcm がチャンクを
+    //   処理するたびに、その時点のバンドレベルを「処理済み累積フレーム位置
+    //   （出力フレーム単位）」と組にして保持し、表示側は
+    //   getSpectrumAlignedToPlayback() で「今鳴っている位置」に最も近い
+    //   スナップショットを受け取る。保持は先行分（キュー最大 64 チャンク＋
+    //   ハードウェアバッファ）を賄う 128 件で十分なため、コストは
+    //   チャンク毎の小さなコピーと取得時の線形走査だけに抑える。
+    private val SPECTRUM_BAND_COUNT = 32
+    private val SPECTRUM_RING_CAPACITY = 128
+    private val spectrumSnapshotLock = Any()
+    private val spectrumSnapshotPositions = LongArray(SPECTRUM_RING_CAPACITY)
+    private val spectrumSnapshotLevels =
+        Array(SPECTRUM_RING_CAPACITY) { FloatArray(SPECTRUM_BAND_COUNT) { -60f } }
+    private var spectrumSnapshotWriteIndex = 0
+    private var spectrumSnapshotCount = 0
+    // 処理済み累積フレーム数（出力フレーム単位）。totalWrittenFrames と同じ
+    // 時刻軸で数え、リセットも totalWrittenFrames = 0 の箇所と同期させる。
+    @Volatile private var spectrumProcessedFrames = 0L
+    private val spectrumCaptureBuffer = FloatArray(SPECTRUM_BAND_COUNT)
+
+    // ★ レベルメーター表示の「再生時刻整列」用スナップショット保持。
+    //   ピーク値そのものは再生ループがチャンクを取り出すたびに算出される
+    //   （analyzeAndDispatchPeak）が、その配送はチャンク処理の到着駆動で、
+    //   Local のバースト供給（フロー制御のヒステリシスで約1.5秒分を一括
+    //   処理し、キューは 32〜48 チャンク先行）では配送間隔が空いたり
+    //   固まったりして、メーターが凍結→ジャンプになる（YT では供給が
+    //   実時間ペースで再生ループも等間隔に回るため目立たない）。
+    //   そこで、AudioTrack への書込みが成功したチャンクについて、その
+    //   ピークを「書込み済み累積フレーム位置（チャンク終端）」と組で
+    //   保持し、表示側は getPeakAlignedToPlayback() で再生ヘッド位置に
+    //   あるチャンクのピークを受け取る（スペクトラムの 3ae6aee と同方式、
+    //   ただしこちらは処理時刻ではなく書込み時刻の時刻軸）。
+    //   保持は先行分（AudioTrack バッファ約0.5秒＋余裕）を賄う 128 件で
+    //   十分。リセットは totalWrittenFrames = 0 の箇所（スペクトラムと
+    //   同じ resetSpectrumTimeline）に同期させる。
+    private val PEAK_RING_CAPACITY = 128
+    private val peakSnapshotLock = Any()
+    private val peakSnapshotPositions = LongArray(PEAK_RING_CAPACITY)
+    private val peakSnapshotDbL = FloatArray(PEAK_RING_CAPACITY) { -60f }
+    private val peakSnapshotDbR = FloatArray(PEAK_RING_CAPACITY) { -60f }
+    private var peakSnapshotWriteIndex = 0
+    private var peakSnapshotCount = 0
+
+    // ★ 再生ヘッド位置の「表示時刻軸」における基点。
+    //   AudioTrack.playbackHeadPosition は AudioTrack インスタンス生成が
+    //   起点の累積値で、flush() では 0 に戻らず「その時点までに書いた
+    //   総フレーム数」へ跳ぶ。一方 totalWrittenFrames やスナップショット
+    //   位置は resetBuffer 等で 0 から数え直すため、両者を直接比較すると
+    //   フラッシュを挟んだ途端に軸がずれる（ピーク取得が常時不一致に
+    //   なり、スペクトラムの整列も処理位置へ退化する）。そこで
+    //   totalWrittenFrames = 0 の箇所（resetSpectrumTimeline）で、その
+    //   時点のヘッド値を基点として記録し、表示系の再生位置は必ず
+    //   「ヘッド − 基点」で求める（playedFramesInTimeline）。
+    @Volatile private var playbackHeadBaseFrames = 0L
+
+    // 表示時刻軸（totalWrittenFrames と同じエポック）での再生済み
+    // フレーム数。基点より前には戻らないため 0 未満にはならない。
+    private fun playedFramesInTimeline(): Long {
+        val head = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        return (head - playbackHeadBaseFrames).coerceAtLeast(0L)
+    }
 
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
@@ -418,6 +497,7 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
         totalWrittenFrames = 0L
+        resetSpectrumTimeline()
         onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
 
         forceResetSpeakerVolume()
@@ -572,6 +652,10 @@ class BitPerfectPlaybackService : Service() {
             pcmBytes, pcmBytes.size, inBitMode, actualBitMode, negotiatedFactor
         ) ?: pcmBytes
 
+        // ★ このチャンクのスペクトラムを処理済み累積位置と組で保持する
+        //   （表示の再生時刻整列用。音声・DSP 処理自体は無変更）。
+        captureSpectrumSnapshot(processedBytes)
+
         if (!pcmQueue.offer(processedBytes)) {
             val dropped = pcmQueue.poll()
             pcmQueue.offer(processedBytes)
@@ -585,8 +669,9 @@ class BitPerfectPlaybackService : Service() {
             }
         }
 
-        if (isBuffering.get() && pcmQueue.size >= PREROLL_THRESHOLD) {
+        if (isBuffering.get() && pcmQueue.size >= activePrerollThreshold()) {
             isBuffering.set(false)
+            localFastPrerollArmed = false
             if (underrunOpen.compareAndSet(true, false)) {
                 bufferResumeCount.incrementAndGet()
             }
@@ -598,6 +683,10 @@ class BitPerfectPlaybackService : Service() {
         if (reason == "page") bufferFlushPageCount.incrementAndGet()
         Log.i("BitPerfect", "★ Buffer flush (reason=$reason) total=${bufferFlushCount.get()}")
         isBuffering.set(true)
+        // ★ 高速プリロールのアームは Local 由来のフラッシュだけ。
+        //   YT 由来（ページ/モード切替）では解除して持ち越さない。
+        if (reason == "local") localFastPrerollArmed = true
+        if (reason == "page" || reason == "mode") localFastPrerollArmed = false
         pcmQueue.clear()
         audioLock.lock()
         try {
@@ -608,7 +697,153 @@ class BitPerfectPlaybackService : Service() {
         }
         NativeAudioEngine.nativeResetUpsampler()
         totalWrittenFrames = 0L
+        resetSpectrumTimeline()
         onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
+    }
+
+    // ★ pushPcm の処理直後に呼ばれる。このチャンクのバンドレベル
+    //   （native リングバッファ末尾＝ちょうど処理した音の末尾）を、
+    //   処理済み累積フレーム位置（このチャンクの終端）と組で保持する。
+    //   位置の加算はスペクトラム無効時も常時行い（時刻軸の一貫性のため）、
+    //   FFT の取得だけを従来の表示ポーリング側ゲートと同条件
+    //   （isSpectrumEnabled）で間引く。無効の間はスナップショット自体を
+    //   作らないため、保持コストも発生しない。
+    private fun captureSpectrumSnapshot(processedBytes: ByteArray) {
+        val bytesPerFrame = when (actualBitMode) { "32bit" -> 8; "24bit" -> 6; else -> 4 }
+        val frames = (processedBytes.size / bytesPerFrame).toLong()
+        if (frames <= 0L) return
+        synchronized(spectrumSnapshotLock) {
+            spectrumProcessedFrames += frames
+        }
+        val spectrumEnabled = try {
+            AppPreferences.get().isSpectrumEnabled
+        } catch (e: Exception) {
+            false
+        }
+        if (!spectrumEnabled) return
+        NativeAudioEngine.nativeGetSpectrum(spectrumCaptureBuffer)
+        synchronized(spectrumSnapshotLock) {
+            val idx = spectrumSnapshotWriteIndex
+            spectrumSnapshotPositions[idx] = spectrumProcessedFrames
+            spectrumCaptureBuffer.copyInto(spectrumSnapshotLevels[idx])
+            spectrumSnapshotWriteIndex = (idx + 1) % SPECTRUM_RING_CAPACITY
+            if (spectrumSnapshotCount < SPECTRUM_RING_CAPACITY) spectrumSnapshotCount++
+        }
+    }
+
+    // ★ 表示用: 「今鳴っている位置」に整列したスペクトラムを outBands へ
+    //   コピーし、スナップショットがあれば true を返す。
+    //   今鳴っている位置（出力フレーム単位）は、処理済み累積から未再生分
+    //   （Service キュー滞留分＋ AudioTrack へ書いたが再生ヘッドがまだ
+    //   到達していない分）を差し引いたもの。後者は analyzeAndDispatchPeak
+    //   の遅延推定と同じ根拠（totalWrittenFrames − 再生位置）。再生位置は
+    //   生のヘッド値ではなく表示時刻軸へ換算した値を使うこと
+    //   （playedFramesInTimeline。フラッシュ後のエポックずれ対策）。
+    //   選択は「その位置を最初に越えるスナップショット」＝今鳴っている
+    //   チャンクのもの。キュー満杯で最古チャンクが破棄された場合は滞留分
+    //   が実キューから算出されるため、位置が破棄分を飛び越えて自動的に
+    //   追随する（破棄された音は聞こえないので、それで正しい）。
+    fun getSpectrumAlignedToPlayback(outBands: FloatArray): Boolean {
+        if (outBands.size < SPECTRUM_BAND_COUNT) return false
+        val bytesPerFrame = when (actualBitMode) { "32bit" -> 8; "24bit" -> 6; else -> 4 }
+        var queuedBytes = 0L
+        for (chunk in pcmQueue) queuedBytes += chunk.size
+        val queuedFrames = queuedBytes / bytesPerFrame
+        // ★ 再生ヘッドは表示時刻軸へ換算してから使う（基点の説明は
+        //   playbackHeadBaseFrames 参照）。生のヘッド値を直接引くと、
+        //   フラッシュ後のエポックずれで hardwareBufferedFrames が
+        //   0 に潰れ、nowPos がバースト状の処理位置へ退化してしまう。
+        val playedFrames = playedFramesInTimeline()
+        val hardwareBufferedFrames = (totalWrittenFrames - playedFrames).coerceAtLeast(0L)
+        synchronized(spectrumSnapshotLock) {
+            if (spectrumSnapshotCount == 0) return false
+            val nowPos = (spectrumProcessedFrames - queuedFrames - hardwareBufferedFrames)
+                .coerceIn(0L, spectrumProcessedFrames)
+            var bestIdx = -1
+            var bestPos = Long.MAX_VALUE
+            var latestIdx = -1
+            var latestPos = Long.MIN_VALUE
+            for (n in 0 until spectrumSnapshotCount) {
+                val idx = (spectrumSnapshotWriteIndex - spectrumSnapshotCount + n +
+                    SPECTRUM_RING_CAPACITY) % SPECTRUM_RING_CAPACITY
+                val pos = spectrumSnapshotPositions[idx]
+                if (pos > latestPos) {
+                    latestPos = pos
+                    latestIdx = idx
+                }
+                if (pos > nowPos && pos < bestPos) {
+                    bestPos = pos
+                    bestIdx = idx
+                }
+            }
+            val chosen = if (bestIdx >= 0) bestIdx else latestIdx
+            if (chosen < 0) return false
+            spectrumSnapshotLevels[chosen].copyInto(outBands)
+            return true
+        }
+    }
+
+    // ★ 再生ループで AudioTrack への書込みが成功したチャンクのピークを、
+    //   書込み済み累積フレーム位置（このチャンクの終端）と組で保持する。
+    private fun capturePeakSnapshot(endPositionFrames: Long, dbL: Float, dbR: Float) {
+        synchronized(peakSnapshotLock) {
+            val idx = peakSnapshotWriteIndex
+            peakSnapshotPositions[idx] = endPositionFrames
+            peakSnapshotDbL[idx] = dbL
+            peakSnapshotDbR[idx] = dbR
+            peakSnapshotWriteIndex = (idx + 1) % PEAK_RING_CAPACITY
+            if (peakSnapshotCount < PEAK_RING_CAPACITY) peakSnapshotCount++
+        }
+    }
+
+    // ★ 表示用: 「今鳴っているチャンク」のピークを outDb[0]=L / outDb[1]=R
+    //   へコピーし、該当スナップショットがあれば true を返す。
+    //   今鳴っている位置は、書込み済み累積と同じ表示時刻軸へ換算した
+    //   再生ヘッド位置（playedFramesInTimeline）で、選択は「終端が
+    //   再生位置を最初に越えるスナップショット」＝現在再生中の
+    //   チャンクのもの。再生位置が全スナップショットの終端以降
+    //   （書いた音が鳴り終わっている）場合は false を返し、呼び出し側
+    //   のフォールバック（無音扱い）に委ねる。
+    fun getPeakAlignedToPlayback(outDb: FloatArray): Boolean {
+        if (outDb.size < 2) return false
+        val playedFrames = playedFramesInTimeline()
+        synchronized(peakSnapshotLock) {
+            if (peakSnapshotCount == 0) return false
+            for (n in 0 until peakSnapshotCount) {
+                val idx = (peakSnapshotWriteIndex - peakSnapshotCount + n +
+                    PEAK_RING_CAPACITY) % PEAK_RING_CAPACITY
+                if (peakSnapshotPositions[idx] > playedFrames) {
+                    outDb[0] = peakSnapshotDbL[idx]
+                    outDb[1] = peakSnapshotDbR[idx]
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    // ★ スペクトラム／ピークの表示時刻軸をリセットする。totalWrittenFrames
+    //   = 0L と同じ箇所（resetBuffer / AudioTrack 再生成 / ポーズでの破棄 /
+    //   切断フロー）から呼び、処理済み累積・書込み済み累積と再生ヘッドの
+    //   基準を揃える。
+    private fun resetSpectrumTimeline() {
+        // ★ 再生ヘッドの基点を「今の」ヘッド値へ合わせ直す。呼び出し
+        //   箇所では totalWrittenFrames が 0 に戻された直後であり、
+        //   resetBuffer では flush() 済み（ヘッドは旧エポックの書込み
+        //   総数へ跳んだ後）、AudioTrack 再生成では新規トラックの
+        //   ヘッド（≒0）が読める。いずれも新しい表示時刻軸の原点と
+        //   して正しい。
+        playbackHeadBaseFrames =
+            (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        synchronized(spectrumSnapshotLock) {
+            spectrumProcessedFrames = 0L
+            spectrumSnapshotWriteIndex = 0
+            spectrumSnapshotCount = 0
+        }
+        synchronized(peakSnapshotLock) {
+            peakSnapshotWriteIndex = 0
+            peakSnapshotCount = 0
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -700,6 +935,7 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
         totalWrittenFrames = 0L
+        resetSpectrumTimeline()
         onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
 
         try {
@@ -1143,6 +1379,7 @@ class BitPerfectPlaybackService : Service() {
 
                 audioTrack = createdTrack
                 totalWrittenFrames = 0L
+                resetSpectrumTimeline()
 
                 val actualModeStr = when (finalEncoding) {
                     AudioFormat.ENCODING_PCM_32BIT -> "32bit"
@@ -1183,11 +1420,12 @@ class BitPerfectPlaybackService : Service() {
                     }
 
                     if (isBuffering.get()) {
-                        if (pcmQueue.size < PREROLL_THRESHOLD) {
+                        if (pcmQueue.size < activePrerollThreshold()) {
                             Thread.sleep(10)
                             continue
                         } else {
                             isBuffering.set(false)
+                            localFastPrerollArmed = false
                             if (underrunOpen.compareAndSet(true, false)) {
                                 bufferResumeCount.incrementAndGet()
                             }
@@ -1206,7 +1444,7 @@ class BitPerfectPlaybackService : Service() {
                         continue
                     }
 
-                    analyzeAndDispatchPeak(pcm, actualBitMode)
+                    val chunkPeak = analyzeAndDispatchPeak(pcm, actualBitMode)
 
                     var track: AudioTrack? = null
                     audioLock.lock()
@@ -1229,6 +1467,11 @@ class BitPerfectPlaybackService : Service() {
                             }
                             val framesWritten = written / (bytesPerSample * 2)
                             totalWrittenFrames += framesWritten
+                            // ★ レベルメーターの再生時刻整列用: このチャンクの
+                            //   ピークを、書込み済み累積位置（チャンク終端）と
+                            //   組で保持する。表示側は getPeakAlignedToPlayback
+                            //   で再生ヘッド位置のチャンクのものを取得する。
+                            capturePeakSnapshot(totalWrittenFrames, chunkPeak[0], chunkPeak[1])
                         } else if (written < 0) {
                             handleBecomingNoisyOrDisconnected()
                         }
@@ -1247,7 +1490,7 @@ class BitPerfectPlaybackService : Service() {
 
     private fun safeAbs(value: Int): Long = abs(value.toLong())
 
-    private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String) {
+    private fun analyzeAndDispatchPeak(pcmBytes: ByteArray, bitMode: String): FloatArray {
         val buffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
         var instantPeakL = -60f
         var instantPeakR = -60f
@@ -1319,7 +1562,10 @@ class BitPerfectPlaybackService : Service() {
         }
 
         val queueSize = pcmQueue.size
-        val playedFrames = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        // ★ 遅延推定も表示時刻軸に換算した再生位置で（生のヘッド値は
+        //   フラッシュ後のエポックずれで書込み累積を上回り、推定が
+        //   0 に潰れてしまう）。
+        val playedFrames = playedFramesInTimeline()
         val hardwareBufferedFrames = (totalWrittenFrames - playedFrames).coerceAtLeast(0L)
         val queueBufferedFrames = queueSize * 4096L
         val totalBufferedFrames = hardwareBufferedFrames + queueBufferedFrames
@@ -1338,6 +1584,10 @@ class BitPerfectPlaybackService : Service() {
         truePeakCapHitCount = truePeakStatsBuffer[3].toLong()
 
         onPeakListener?.invoke(instantPeakL, instantPeakR, bitMask, queueSize, latencyMs)
+
+        // ★ レベルメーターの再生時刻整列用に、このチャンクのピークを返す
+        //   （保持は書込み成功時に capturePeakSnapshot で行う）。
+        return floatArrayOf(instantPeakL, instantPeakR)
     }
 
     private fun createNotificationChannel() {

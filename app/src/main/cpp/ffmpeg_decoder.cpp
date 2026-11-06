@@ -232,6 +232,13 @@ bool emitChunks(JNIEnv *env, DecoderContext *ctx, bool flushRemainder) {
     const size_t chunkSamples = static_cast<size_t>(CHUNK_FRAMES) * ctx->channels;
     while (ctx->accum.size() >= chunkSamples ||
            (flushRemainder && !ctx->accum.empty())) {
+        // ★ シーク要求が来ていたら、古い位置のチャンクを送り続けない。
+        //   ここで送出を打ち切り、呼び出し側のループ先頭にある
+        //   applySeekIfRequested で速やかにシークを適用する
+        //   （シーク時は Service 側キューがフラッシュ済みのため、
+        //   打ち切らないと古い位置のチャンクが大量に再充填されて
+        //   シークの応答が大きく遅れる）。
+        if (!flushRemainder && ctx->seekRequestMs.load() >= 0) return true;
         const size_t samples = flushRemainder && ctx->accum.size() < chunkSamples
                                    ? ctx->accum.size()
                                    : chunkSamples;
@@ -253,6 +260,16 @@ bool emitChunks(JNIEnv *env, DecoderContext *ctx, bool flushRemainder) {
         if (ctx->stopRequested.load()) return false;
     }
     return true;
+}
+
+// ★ interrupt コールバック: 停止要求が出ていたら 1 を返して I/O を
+//   中断させる。av_read_frame が遅い入力（SAF 越しのストリーム等）で
+//   ブロックしていても、読み取りの合間にこの判定が入り AVERROR_EXIT
+//   で抜けられる。nativeOpen の実行中は stopRequested が false に
+//   戻された直後なので、通常のオープンが誤って中断されることはない。
+int interruptCallback(void *opaque) {
+    auto *ctx = static_cast<DecoderContext *>(opaque);
+    return ctx->stopRequested.load() ? 1 : 0;
 }
 
 void closeDecoder(DecoderContext *ctx) {
@@ -338,6 +355,8 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeOpen(JNIEnv *env, jobject /*
 
     AVFormatContext *fmt = avformat_alloc_context();
     if (fmt == nullptr) return AVERROR(ENOMEM);
+    fmt->interrupt_callback.callback = &interruptCallback;
+    fmt->interrupt_callback.opaque = ctx;
 
     if (useAvio == JNI_TRUE) {
         uint8_t *buffer = static_cast<uint8_t *>(av_malloc(AVIO_BUFFER_SIZE));
@@ -378,6 +397,16 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeOpen(JNIEnv *env, jobject /*
         return ret;
     }
     ctx->fmtCtx = fmt;
+
+    // ★ ストリーム解析の上限を絞る。既定（probesize 5MB /
+    //   max_analyze_duration 5秒）のままだと、find_stream_info が
+    //   遅い入力（カスタム AVIO 越しの JNI 読み取り＋シーク）で
+    //   大量に読み込み、曲の開始・切り替えが遅くなる。対応
+    //   コーデックはどれもコンテナのヘッダに情報を持つため、
+    //   1MB / 2秒で確定できる。フォーマット判定そのものは
+    //   avformat_open_input の段階で既定のまま完了している。
+    fmt->probesize = 1024 * 1024;
+    fmt->max_analyze_duration = 2 * AV_TIME_BASE;
 
     ret = avformat_find_stream_info(fmt, nullptr);
     if (ret < 0) {
@@ -577,8 +606,10 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeDecodeLoop(JNIEnv *env, jobj
     };
 
     // デコーダからフレームを取り尽くす。戻り値: 0=継続可, 1=EOF 到達, -1=致命的
+    // シーク要求が来たら取り尽くしを中断して 0 を返す（呼び出し側の
+    // ループ先頭でシークが適用される）。
     auto drainFrames = [&]() -> int {
-        while (!ctx->stopRequested.load()) {
+        while (!ctx->stopRequested.load() && ctx->seekRequestMs.load() < 0) {
             int recvRet = avcodec_receive_frame(ctx->codecCtx, frame);
             if (recvRet == AVERROR(EAGAIN)) return 0;
             if (recvRet == AVERROR_EOF) return 1;

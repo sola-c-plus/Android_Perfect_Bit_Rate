@@ -412,12 +412,33 @@ class LocalPlayer(
         artworkExecutor.shutdown()
     }
 
+    // ★ 現在曲のアートワークを取り直してリスナへ再送する。
+    //   モード往復（Local → YT → Local）では MainActivity 側の
+    //   アートワーク保持が切替時にクリアされる一方、LocalPlayer は
+    //   曲開始時にしかアートワークを送らないため、保持中の曲の絵が
+    //   音符プレースホルダのまま戻らなくなる。曲を再生し直さずに
+    //   表示だけを復元するための入口（アートワークが無い曲では
+    //   何も送られず、プレースホルダ表示が正となる）。
+    fun refreshCurrentArtwork() {
+        val track = currentTrack ?: return
+        loadArtworkAsync(generation, track)
+    }
+
     // ── 内部 ──
 
     // stateLock 保持必須。指定曲のデコーダを開いてデコードを開始する。
     private fun startTrackLocked(index: Int, startAtMs: Long) {
         val track = queue[index]
         val gen = ++generation
+
+        // ★ フラッシュはデコーダのオープンより先に送る。Service の
+        //   キューには前曲の未再生 PCM が数秒分残っているため、
+        //   オープン（プローブ等で時間がかかる）の完了を待ってから
+        //   フラッシュすると、その間も前曲が流れ続けて「次へを
+        //   押しても切り替わらない」体感になる。世代は既に進めて
+        //   あるため、旧デコード側のチャンクがフラッシュ後に
+        //   紛れ込むことはない（コールバック冒頭の世代判定）。
+        listener.onFlush()
 
         // 前のデコードを止めてデコーダを解放する
         stopAndReleaseDecoderLocked()
@@ -476,7 +497,7 @@ class LocalPlayer(
         if (rate > 0) {
             listener.onCodec(codecLabel, rate)
         }
-        listener.onFlush()
+        // ★ フラッシュは開始直後に送ってある（上の onFlush 参照）。
         listener.onMetadata(track.title, track.artist, null)
         listener.onTrackChanged(index, track)
         loadArtworkAsync(gen, track)
@@ -493,6 +514,16 @@ class LocalPlayer(
     }
 
     private fun runDecodeLoop(gen: Int, dec: FfmpegDecoder) {
+        // ★ 世代ガード: このタスクが executor に積まれてから実行される
+        //   までの間に世代が進んでいたら（停止→再開の連打、曲タップ
+        //   直後の一時停止など）、native ループへ入らない。native 側は
+        //   入場時に stopRequested をクリアするため、ここを素通りすると
+        //   「積まれた後に発行された停止要求」が破棄され、古い世代の
+        //   タスクがファイル全体を無音でデコードし尽くすまで単一
+        //   スレッドの decodeExecutor を占有してしまう（後続の本物の
+        //   再開タスクが回らず、音が出ない・シークバーが進まない
+        //   状態が続く。DSD 等の遅いデコードで顕著）。
+        if (gen != generation) return
         // ポーズ再開時に保留していたシークを先に適用する
         val pending = synchronized(stateLock) {
             val p = pendingSeekMs
