@@ -3,6 +3,7 @@ package com.example.perfectbitrate
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
+import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.View
 import androidx.core.content.res.ResourcesCompat
@@ -74,7 +75,71 @@ class WalkmanEqView @JvmOverloads constructor(
 
     private val targetSpectrum = FloatArray(NUM_SPEC_BANDS) { -55f }
     private val currentSpectrum = FloatArray(NUM_SPEC_BANDS) { -55f }
-    private var lastSpectrumDrawTime = 0L
+
+    // ★ スペクトラムの時間方向の平滑化は、データの到着間隔ではなく
+    //   ディスプレイのフレーム周期（Choreographer）で駆動する。
+    //   Local 再生では PCM がフロー制御でバースト状に供給され、
+    //   ネイティブ側のスペクトラム算出（処理時点）もバースト状に
+    //   進むため、到着した目標値へそのまま追従させると「止まっては
+    //   跳ぶ」かくかくした動きになる。目標値は保持だけにし、表示値
+    //   （currentSpectrum）はフレーム毎に時定数つきで目標へ近づける
+    //   ことで、到着間隔によらず一定周期の滑らかな動きにする。
+    //   攻撃側は指数平滑（時定数 SPECTRUM_ATTACK_TAU_SEC）、
+    //   減衰側は従来どおり 75 dB/s の落下。
+    private val SPECTRUM_ATTACK_TAU_SEC = 0.06f
+    private val SPECTRUM_RELEASE_DB_PER_SEC = 75f
+    private var spectrumAnimRunning = false
+    private var lastSpectrumFrameNanos = 0L
+    private val spectrumFrameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!spectrumAnimRunning) return
+            val dt = if (lastSpectrumFrameNanos > 0L) {
+                ((frameTimeNanos - lastSpectrumFrameNanos) / 1_000_000_000f)
+                    .coerceIn(0f, 0.05f)
+            } else {
+                0.016f
+            }
+            lastSpectrumFrameNanos = frameTimeNanos
+            if (isSpectrumEnabled && advanceSpectrum(dt)) {
+                invalidate()
+            }
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    // 表示値を目標値へ dt 分だけ近づける。まだ動いている
+    // （＝再描画が必要）なら true を返す。
+    private fun advanceSpectrum(dt: Float): Boolean {
+        val attackFactor = 1f - kotlin.math.exp(-dt / SPECTRUM_ATTACK_TAU_SEC)
+        var moving = false
+        for (i in 0 until NUM_SPEC_BANDS) {
+            val target = targetSpectrum[i]
+            val current = currentSpectrum[i]
+            val next = if (target > current) {
+                current + (target - current) * attackFactor
+            } else {
+                max(target, current - SPECTRUM_RELEASE_DB_PER_SEC * dt)
+            }
+            currentSpectrum[i] = next
+            if (abs(next - target) > 0.05f) moving = true
+        }
+        return moving
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (!spectrumAnimRunning) {
+            spectrumAnimRunning = true
+            lastSpectrumFrameNanos = 0L
+            Choreographer.getInstance().postFrameCallback(spectrumFrameCallback)
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        spectrumAnimRunning = false
+        Choreographer.getInstance().removeFrameCallback(spectrumFrameCallback)
+        super.onDetachedFromWindow()
+    }
 
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val hiResZonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -188,7 +253,9 @@ class WalkmanEqView @JvmOverloads constructor(
             val safeDb = if (levels[i].isNaN() || levels[i].isInfinite()) -55f else levels[i].coerceIn(-55f, 0f)
             targetSpectrum[i] = safeDb
         }
-        postInvalidateOnAnimation()
+        // ★ 目標値を差し替えるだけ。再描画と時間方向の平滑化は
+        //   フレーム周期のコールバック（spectrumFrameCallback）が担う。
+        invalidate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -273,19 +340,8 @@ class WalkmanEqView @JvmOverloads constructor(
         super.onDraw(canvas)
         if (gridWidth <= 0 || gridHeight <= 0) return
 
-        val now = System.currentTimeMillis()
-        val dt = if (lastSpectrumDrawTime > 0L) min(0.05f, (now - lastSpectrumDrawTime) / 1000f) else 0.016f
-        lastSpectrumDrawTime = now
-
-        for (i in 0 until NUM_SPEC_BANDS) {
-            val target = targetSpectrum[i]
-            val current = currentSpectrum[i]
-            if (target > current) {
-                currentSpectrum[i] = current + (target - current) * 0.40f
-            } else {
-                currentSpectrum[i] = max(target, current - 75f * dt)
-            }
-        }
+        // ★ スペクトラム表示値の更新はフレームコールバック側
+        //   （advanceSpectrum）で行う。ここでは描くだけ。
 
         val x16k = labelX[9]
         canvas.drawRect(x16k, gridTop, gridRight, gridBottom, hiResZonePaint)
@@ -366,17 +422,6 @@ class WalkmanEqView @JvmOverloads constructor(
 
             canvas.drawPath(spectrumFillPath, spectrumFillPaint)
             canvas.drawPath(spectrumPath, spectrumLinePaint)
-
-            var isStillMoving = false
-            for (i in 0 until NUM_SPEC_BANDS) {
-                if (abs(currentSpectrum[i] - targetSpectrum[i]) > 0.05f) {
-                    isStillMoving = true
-                    break
-                }
-            }
-            if (isStillMoving) {
-                postInvalidateOnAnimation()
-            }
         }
 
         if (isEditMode && !isDirectBypass && selectedBandIndex in 0..9) {

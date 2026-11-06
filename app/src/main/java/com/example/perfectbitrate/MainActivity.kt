@@ -222,6 +222,12 @@ class MainActivity : AppCompatActivity() {
     private var currentDuration = 0L
     private var currentPosition = 0L
     private var currentArtworkBitmap: Bitmap? = null
+    // ★ Local 再生画面専用のアートワーク保持。currentArtworkBitmap は
+    //   両モードで共有され、Local 中も保持され続ける Gecko ページ側の
+    //   メタデータ（画像取得の非同期完了含む）が書き込むと、Local の
+    //   再生画面の再描画で YT のサムネイルが漏れてしまう。再生画面の
+    //   描画は LocalPlayer の通知だけで更新されるこちらを正とする。
+    private var localArtworkBitmap: Bitmap? = null
     private val imageExecutor = Executors.newSingleThreadExecutor()
 
     private var isDirectSource = false
@@ -546,9 +552,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onMetadata(title: String, artist: String, artwork: Bitmap?) {
+            // ★ アートワーク状態の所有権はモードで分ける: Local 側の
+            //   通知は Local モードのときだけ表示状態へ反映する
+            //   （YT モードへ切り替えた直後に遅れて届いた通知が、
+            //   YT 側の表示を Local の絵で上書きしないように）。
+            if (currentPlaybackMode != PlaybackMode.LOCAL) return
             currentTitle = title
             currentArtist = artist
             currentArtworkBitmap = artwork
+            localArtworkBitmap = artwork
             playbackService?.updateMetadataWithBitmap(title, artist, artwork)
             runOnUiThread {
                 updateDialogPlayerUi()
@@ -627,6 +639,7 @@ class MainActivity : AppCompatActivity() {
             currentTitle = "Local Music"
             currentArtist = ""
             currentArtworkBitmap = null
+            localArtworkBitmap = null
             currentCodec = "LOCAL"
             currentPosition = 0L
             currentDuration = 0L
@@ -666,6 +679,7 @@ class MainActivity : AppCompatActivity() {
             currentTitle = "YouTube Music"
             currentArtist = ""
             currentArtworkBitmap = null
+            localArtworkBitmap = null
             currentCodec = "OPUS 160kbps (48k)"
             currentPosition = 0L
             currentDuration = 0L
@@ -1935,6 +1949,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onMetadata(title: String, artist: String, artworkUrl: String) {
                     lastPageSignalTime = System.currentTimeMillis()
+                    // ★ アートワーク状態の所有権はモードで分ける:
+                    //   Gecko セッションは Local モードでも保持されるため、
+                    //   ページ側メタデータの再送や画像取得の遅延完了が
+                    //   Local 中に届くことがある。表示・保持状態への
+                    //   反映は YT モードのときだけに限る（Local 中に
+                    //   currentArtworkBitmap 等へ YT のサムネイルが
+                    //   入ると、Local 再生画面の再描画で漏れてしまう）。
+                    //   ページ生存判定（lastPageSignalTime）はモードに
+                    //   依らないため、ガードより先に更新する。
+                    if (currentPlaybackMode != PlaybackMode.YT_MUSIC) return
                     currentTitle = title
                     currentArtist = artist
                     playbackService?.updateMetadata(title, artist, artworkUrl)
@@ -1944,8 +1968,12 @@ class MainActivity : AppCompatActivity() {
                                 val stream = URL(artworkUrl).openStream()
                                 val bmp = BitmapFactory.decodeStream(stream)
                                 runOnUiThread {
-                                    currentArtworkBitmap = bmp
-                                    updateDialogPlayerUi()
+                                    // 取得中に Local へ切り替わっていたら
+                                    // 保持状態へは入れない（上のガードと対）。
+                                    if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                                        currentArtworkBitmap = bmp
+                                        updateDialogPlayerUi()
+                                    }
                                 }
                             } catch (e: Exception) { Log.e("MainActivity", "Image decode error", e) }
                         }
@@ -2427,7 +2455,12 @@ class MainActivity : AppCompatActivity() {
         val index = localPlayer.effectivePosition()
         textNpQueuePosition.text =
             if (queueSize > 0 && index in 0 until queueSize) "${index + 1} / $queueSize" else ""
-        val artwork = currentArtworkBitmap
+        // ★ 再生画面のアートワークは Local 専用の保持
+        //   （localArtworkBitmap）を正とする。共有の
+        //   currentArtworkBitmap は YT 側メタデータの到着で
+        //   書き換わりうるため、ここで使うと画面遷移後の
+        //   再描画で YT のサムネイルが表示されてしまう。
+        val artwork = localArtworkBitmap
         if (artwork != null) {
             imgNpArtwork.setImageBitmap(artwork)
         } else {
