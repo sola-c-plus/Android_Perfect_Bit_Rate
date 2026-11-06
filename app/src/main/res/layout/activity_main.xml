@@ -69,6 +69,25 @@
                 android:layout_marginEnd="6dp"
                 android:visibility="gone" />
 
+            <!-- ★ モード切替チップ（仕様書 §7.2）: 専用バーは作らず既存ボタン列に
+                 埋め込む。高さは増やさず、タップで即切替・現在のモードを表示する。 -->
+            <TextView
+                android:id="@+id/textModeSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="YT MUSIC"
+                android:textColor="#E5A93C"
+                android:textSize="9.5sp"
+                android:textStyle="bold"
+                android:background="@drawable/bg_btn_icon"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingTop="3dp"
+                android:paddingBottom="3dp"
+                android:fontFamily="@font/font_dap_condensed"
+                android:letterSpacing="0.04"
+                android:layout_marginEnd="5dp" />
+
             <ImageButton
                 android:id="@+id/btnReload"
                 android:layout_width="26dp"
@@ -205,10 +224,49 @@
 
     </LinearLayout>
 
-    <org.mozilla.geckoview.GeckoView
-        android:id="@+id/geckoview"
+    <!-- ★ メイン領域: モードに応じて GeckoView と Local プレースホルダを切り替える。
+         Local 側のライブラリブラウザは後続 PR でプレースホルダの位置に載る。 -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
+
+        <org.mozilla.geckoview.GeckoView
+            android:id="@+id/geckoview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:id="@+id/localPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="#000000"
+            android:padding="24dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/textLocalTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="LOCAL MUSIC"
+                android:textColor="#F0F0F0"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:fontFamily="@font/font_dap_heading"
+                android:letterSpacing="0.06" />
+
+            <TextView
+                android:id="@+id/textLocalMessage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="ライブラリは準備中です"
+                android:textColor="#888888"
+                android:textSize="12sp"
+                android:gravity="center" />
+        </LinearLayout>
+    </FrameLayout>
 
 </LinearLayout>

@@ -34,6 +34,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SPECTRUM_ENABLED = "spectrum_enabled"
         private const val KEY_AD_BLOCK_ENABLED = "ad_block_enabled"
         private const val KEY_UI_THEME_MODE = "ui_theme_mode"
+        private const val KEY_PLAYBACK_MODE = "playbackMode"
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -116,6 +117,12 @@ class AppPreferences private constructor(context: Context) {
     var uiThemeMode: String
         get() = prefs.getString(KEY_UI_THEME_MODE, "dark") ?: "dark"
         set(value) = prefs.edit { putString(KEY_UI_THEME_MODE, value) }
+
+    // ★ 再生モード（仕様書 §3.1）: 起動時は前回値を復元する。Vol Lock のような
+    //   安全側リセットはしない（モードは音量に直結しないため）。
+    var playbackMode: PlaybackMode
+        get() = PlaybackMode.fromPrefValue(prefs.getString(KEY_PLAYBACK_MODE, PlaybackMode.YT_MUSIC.prefValue))
+        set(value) = prefs.edit { putString(KEY_PLAYBACK_MODE, value.prefValue) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)

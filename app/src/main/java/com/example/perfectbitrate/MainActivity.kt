@@ -33,6 +33,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import org.mozilla.geckoview.GeckoView
 import java.net.URL
 import java.util.concurrent.Executors
 
@@ -55,6 +56,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnReload: ImageButton
     private lateinit var btnDspSettings: ImageButton
     private lateinit var btnUiSettings: ImageButton
+
+    private lateinit var geckoView: GeckoView
+    private lateinit var localPlaceholder: View
+    private lateinit var textLocalTitle: TextView
+    private lateinit var textLocalMessage: TextView
+    private lateinit var textModeSwitch: TextView
 
     private val appPrefs by lazy { AppPreferences.get() }
     private lateinit var btCodecTracker: BluetoothCodecTracker
@@ -87,6 +94,9 @@ class MainActivity : AppCompatActivity() {
     // ★ Phase 4: このフィールドは要求値専用（Prefs.selectedBitMode と同期）。
     //   実績値は Service の actualBitMode（スナップショット経由）を読むこと。
     private var currentBitMode = "16bit"
+    // ★ 再生モード（仕様書 §3）: 正は AppPreferences.playbackMode で、このフィールドは
+    //   現在動作中のモードのキャッシュ。変更は switchPlaybackMode 経由でのみ行う。
+    private var currentPlaybackMode: PlaybackMode = PlaybackMode.YT_MUSIC
     private var isVolLockOn = false
     private var isPlayingState = false
     private var isHandlingDisconnect = false
@@ -213,6 +223,12 @@ class MainActivity : AppCompatActivity() {
     //   PCM が復帰するか再生意思がなくなればエピソードはリセットされ、reload は
     //   60 秒に 1 回まで、セッション再生成は 5 分に 1 回までしか行わない。
     private fun checkPlaybackStall(now: Long) {
+        if (currentPlaybackMode != PlaybackMode.YT_MUSIC) {
+            // ★ Local モードでは Gecko 向け復旧段は動かさない（仕様書 §3.3）。
+            //   Local 側のストール検知は LocalPlayer 実装時に追加する。
+            resetStallEpisode()
+            return
+        }
         if (!userWantsPlayback || lastPcmTime == 0L) {
             resetStallEpisode()
             return
@@ -307,6 +323,11 @@ class MainActivity : AppCompatActivity() {
     //   play の送出まではこちらで担保するため。
     private fun checkRecreateFollowUp(now: Long) {
         if (sessionRecreatePendingTime == 0L) return
+        if (currentPlaybackMode != PlaybackMode.YT_MUSIC) {
+            // ★ Local モード中は再生成フォローアップの play を送らない
+            sessionRecreatePendingTime = 0L
+            return
+        }
         if (lastPcmTime > sessionRecreatePendingTime) {
             Log.i("MainActivity", "★ PCM recovered after session recreate")
             sessionRecreatePendingTime = 0L
@@ -343,6 +364,45 @@ class MainActivity : AppCompatActivity() {
             "pause" -> userWantsPlayback = false
             "play", "next", "prev" -> userWantsPlayback = true
         }
+    }
+
+    // ★ モード切替（仕様書 §3.2）: 必ず再生を停止し PCM を flush してから切り替える
+    //   （両ソースの PCM が混ざる瞬間を作らない）。
+    //   YT → Local ではページをポーズするだけで、Gecko セッションは破棄せず保持し、
+    //   戻ったときに再ログイン・再読み込みなしで再表示できるようにする。あわせて
+    //   再生意思も落とし、YT に戻った直後にウォッチドッグが勝手に再生再開しない
+    //   ようにする。Local → YT は LocalPlayer（後続 PR）がまだ無いため停止対象なし。
+    private fun switchPlaybackMode(newMode: PlaybackMode) {
+        if (newMode == currentPlaybackMode) return
+        if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+            geckoController.sendCommand("pause")
+            userWantsPlayback = false
+        }
+        playbackService?.resetBuffer("mode")
+        currentPlaybackMode = newMode
+        appPrefs.playbackMode = newMode
+        isPlayingState = false
+        applyPlaybackModeVisibility()
+        updateModeSwitchUi()
+        updateStatus()
+        Toast.makeText(this, "モード: ${newMode.displayName}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun applyPlaybackModeVisibility() {
+        val isLocal = currentPlaybackMode == PlaybackMode.LOCAL
+        geckoView.visibility = if (isLocal) View.GONE else View.VISIBLE
+        localPlaceholder.visibility = if (isLocal) View.VISIBLE else View.GONE
+    }
+
+    private fun updateModeSwitchUi() {
+        textModeSwitch.text = when (currentPlaybackMode) {
+            PlaybackMode.YT_MUSIC -> "YT MUSIC"
+            PlaybackMode.LOCAL -> "LOCAL"
+        }
+    }
+
+    private fun openSettings() {
+        settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
     }
 
     // ★ コンテンツプロセスのクラッシュ/キル検知（ContentDelegate）への対応。
@@ -435,6 +495,7 @@ class MainActivity : AppCompatActivity() {
     private fun nudgePlaybackAfterNetworkChange() {
         val now = System.currentTimeMillis()
         if (now - lastNetworkNudgeTime < NETWORK_NUDGE_MIN_INTERVAL_MS) return
+        if (currentPlaybackMode != PlaybackMode.YT_MUSIC) return
         if (!userWantsPlayback || !isPlayingState) return
         lastNetworkNudgeTime = now
         val und = playbackService?.bufferUnderrunCount?.get() ?: -1L
@@ -492,6 +553,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    // ★ 設定画面（SettingsActivity）からの戻り: 永続化されたモードを正として
+    //   同期し（設定画面は永続化までを担当、実際の切替はここで一元化する）、
+    //   依頼があれば既存の DSP / UI 設定ダイアログを開く。
+    private val settingsLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val savedMode = appPrefs.playbackMode
+            if (savedMode != currentPlaybackMode) {
+                switchPlaybackMode(savedMode)
+            }
+            when (result.data?.getStringExtra(SettingsActivity.EXTRA_ACTION)) {
+                SettingsActivity.ACTION_OPEN_DSP -> showDspSettingsDialog()
+                SettingsActivity.ACTION_OPEN_UI -> showUiSettingsDialog()
+            }
+        }
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as BitPerfectPlaybackService.LocalBinder
@@ -540,9 +616,17 @@ class MainActivity : AppCompatActivity() {
                 //   "pause" は DAC 切断時の自動ポーズも同じ経路で流れるため記録しない
                 //   （noteUserPlaybackIntent のコメント参照）。
                 if (cmd != "pause") noteUserPlaybackIntent(cmd)
-                geckoController.sendCommand(cmd)
+                // ★ Local モードでは送り先（LocalPlayer）が後続 PR のため Gecko へは
+                //   送らない（隠れたページが裏で再生を始める事故を防ぐ）。
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                    geckoController.sendCommand(cmd)
+                }
             }
-            playbackService?.onSeekListener = { pos -> geckoController.sendSeek(pos) }
+            playbackService?.onSeekListener = { pos ->
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                    geckoController.sendSeek(pos)
+                }
+            }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             playbackService = null
@@ -578,6 +662,12 @@ class MainActivity : AppCompatActivity() {
         btnDspSettings = findViewById(R.id.btnDspSettings)
         btnUiSettings = findViewById(R.id.btnUiSettings)
 
+        geckoView = findViewById(R.id.geckoview)
+        localPlaceholder = findViewById(R.id.localPlaceholder)
+        textLocalTitle = findViewById(R.id.textLocalTitle)
+        textLocalMessage = findViewById(R.id.textLocalMessage)
+        textModeSwitch = findViewById(R.id.textModeSwitch)
+
         isDirectSource = appPrefs.isDirectSource
         currentThemeMode = appPrefs.uiThemeMode
         // ★ Vol Lock は起動時は常に OFF で開始する（安全対策として PR #38 の復元仕様を変更）。
@@ -588,6 +678,7 @@ class MainActivity : AppCompatActivity() {
         isVolLockOn = false
         appPrefs.isVolLockEnabled = false
         currentBitMode = appPrefs.selectedBitMode
+        currentPlaybackMode = appPrefs.playbackMode
         upsampleFactor = appPrefs.selectedUpsampleFactor
 
         // ★ 項目9: プリセット本体を復元してから選択 index を反映する
@@ -612,7 +703,7 @@ class MainActivity : AppCompatActivity() {
 
         geckoController = GeckoSessionController(
             activity = this,
-            geckoView = findViewById(R.id.geckoview),
+            geckoView = geckoView,
             listener = object : GeckoSessionController.Listener {
                 override fun onFlush() {
                     playbackService?.resetBuffer("page")
@@ -690,6 +781,11 @@ class MainActivity : AppCompatActivity() {
         )
         geckoController.init()
 
+        // ★ 起動時のモード反映（仕様書 §3.1: 前回のモードで立ち上げる）。
+        //   Gecko セッションはモードによらず生成・保持し、表示だけを切り替える。
+        applyPlaybackModeVisibility()
+        updateModeSwitchUi()
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (geckoController.canGoBack) {
@@ -733,6 +829,20 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             showUiSettingsDialog()
         }
+        btnUiSettings.setOnLongClickListener {
+            it.hapticTick(appPrefs)
+            // ★ 新しい設定画面（リスト形式）への導線。短押しは従来の UI 設定
+            //   ダイアログのまま変えない。
+            openSettings()
+            true
+        }
+        textModeSwitch.setOnClickListener {
+            it.hapticTick(appPrefs)
+            // ★ 1 タップ即切替（仕様書 §7.2）。確認ダイアログは出さない。
+            switchPlaybackMode(
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) PlaybackMode.LOCAL else PlaybackMode.YT_MUSIC
+            )
+        }
 
         uiHandler.post(uiUpdateRunnable)
     }
@@ -765,6 +875,11 @@ class MainActivity : AppCompatActivity() {
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
+            textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon)
+            textModeSwitch.setTextColor(Color.parseColor("#E5A93C"))
+            localPlaceholder.setBackgroundColor(Color.parseColor("#000000"))
+            textLocalTitle.setTextColor(Color.parseColor("#F0F0F0"))
+            textLocalMessage.setTextColor(Color.parseColor("#888888"))
             btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
             btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
             btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
@@ -782,6 +897,11 @@ class MainActivity : AppCompatActivity() {
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            textModeSwitch.setTextColor(Color.parseColor("#D49B28"))
+            localPlaceholder.setBackgroundColor(Color.parseColor("#FFFFFF"))
+            textLocalTitle.setTextColor(Color.parseColor("#1C1C1E"))
+            textLocalMessage.setTextColor(Color.parseColor("#636366"))
             btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
             btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
             btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
@@ -843,9 +963,15 @@ class MainActivity : AppCompatActivity() {
             onPlayerCommand = { cmd ->
                 val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
                 noteUserPlaybackIntent(resolved)
-                geckoController.sendCommand(resolved)
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                    geckoController.sendCommand(resolved)
+                }
             },
-            onSeekTo = { pos -> geckoController.sendSeek(pos) },
+            onSeekTo = { pos ->
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                    geckoController.sendSeek(pos)
+                }
+            },
             onDismiss = {
                 activePlayerDialog = null
                 activeDspDialog = null
@@ -875,9 +1001,15 @@ class MainActivity : AppCompatActivity() {
             onPlayerCommand = { cmd ->
                 val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
                 noteUserPlaybackIntent(resolved)
-                geckoController.sendCommand(resolved)
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                    geckoController.sendCommand(resolved)
+                }
             },
-            onSeekTo = { pos -> geckoController.sendSeek(pos) },
+            onSeekTo = { pos ->
+                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                    geckoController.sendSeek(pos)
+                }
+            },
             onDismiss = { activePlayerDialog = null }
         )
         activePlayerDialog = uiDialog
@@ -917,7 +1049,9 @@ class MainActivity : AppCompatActivity() {
             playbackService?.setUpsampling(upsampleFactor)
             // ★ Phase 1: 引数で渡していた構成は全て Service の自フィールドが正（initAudioTrack は引数なし）
             playbackService?.initAudioTrack()
-            geckoController.reload()
+            if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                geckoController.reload()
+            }
             updateStatus()
         }
     }
@@ -929,10 +1063,14 @@ class MainActivity : AppCompatActivity() {
                 if (event?.repeatCount == 0) {
                     if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
                         noteUserPlaybackIntent("next")
-                        geckoController.sendCommand("next")
+                        if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                            geckoController.sendCommand("next")
+                        }
                     } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
                         noteUserPlaybackIntent("prev")
-                        geckoController.sendCommand("prev")
+                        if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+                            geckoController.sendCommand("prev")
+                        }
                     }
                     // 曲送りが発火した押下でのみ1回鳴らす（長押しリピートでは鳴らさない）
                     mainRootLayout.hapticTick(appPrefs)
