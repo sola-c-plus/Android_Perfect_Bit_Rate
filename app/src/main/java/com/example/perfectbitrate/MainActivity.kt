@@ -396,8 +396,18 @@ class MainActivity : AppCompatActivity() {
     private fun isPcmFlowing(): Boolean =
         lastPcmTime != 0L && System.currentTimeMillis() - lastPcmTime <= STALL_THRESHOLD_MS
 
-    private fun resolvePlayPauseCommand(): String =
-        if (isPlayingState && isPcmFlowing()) "pause" else "play"
+    private fun resolvePlayPauseCommand(): String {
+        // ★ Local モードでは供給係（LocalPlayer）自身の状態を正とする。
+        //   共有の isPlayingState は YT ページ側の通知と共用で、Local 中は
+        //   保持ページの定期 progress（ポーズ済みのため playing=false、
+        //   1 秒周期）に倒されうる。その状態で判定すると、再生中でも
+        //   "play" に化けて LocalPlayer.play() が no-op になり（再生中は
+        //   即 return）、ポーズが効かなくなる。
+        if (currentPlaybackMode == PlaybackMode.LOCAL && ::localPlayer.isInitialized) {
+            return if (localPlayer.isPlaying) "pause" else "play"
+        }
+        return if (isPlayingState && isPcmFlowing()) "pause" else "play"
+    }
 
     // ★ PCM ストール・ウォッチドッグ: ユーザーが再生を望んでいるのに PCM が途絶
     //   していたら、resume_audio → play → ページ reload → GeckoSession 再生成の
@@ -2013,6 +2023,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean) {
                     lastPageSignalTime = System.currentTimeMillis()
+                    // ★ 再生状態・位置の共有状態への反映は YT モードの
+                    //   ときだけ（onMetadata の所有権分離と同じ作法）。
+                    //   ページ生存判定（lastPageSignalTime）はモードに
+                    //   依らないため、ガードより先に更新する。
+                    //   Local モードでは保持中のページはポーズ済みで、
+                    //   content.js の syncPlaybackProgress が 1 秒周期で
+                    //   playing=false の progress を送り続ける。ガード
+                    //   無しでは Local 再生中にも共有の isPlayingState /
+                    //   Service の再生状態 / 現在位置が「停止・ページ
+                    //   位置」へ毎秒上書きされ、再生/一時停止ボタンの
+                    //   コマンド解決が "play" に化けてポーズが効かなく
+                    //   なる（Local 中の正は LocalPlayer 側の通知）。
+                    if (currentPlaybackMode != PlaybackMode.YT_MUSIC) return
                     currentPosition = currentMs
                     currentDuration = durationMs
                     isPlayingState = isPlaying
@@ -2021,6 +2044,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onState(isPlaying: Boolean) {
                     lastPageSignalTime = System.currentTimeMillis()
+                    // ★ onProgress と同じ所有権分離: 共有の再生状態への
+                    //   反映は YT モードのときだけ。Local 中にページ側の
+                    //   state（ポーズ済みページの false）が届いても、
+                    //   Local の再生状態・メーター・Service 状態を
+                    //   倒さない。
+                    if (currentPlaybackMode != PlaybackMode.YT_MUSIC) return
                     isPlayingState = isPlaying
                     if (!isPlaying) {
                         peakDbL = -60f

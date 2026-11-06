@@ -194,6 +194,17 @@ class LocalPlayer(
     fun playAtEffectivePosition(position: Int) {
         synchronized(stateLock) {
             val queueIndex = playOrder.getOrNull(position) ?: return
+            if (orderStale) {
+                // ★ 開始経路はリスト経由の playAt と揃える: 仮決めの
+                //   順序表が残っていたら、「実際に再生を始める曲」を
+                //   アンカーに作り直してから確定する。作り直しは
+                //   キュー自体を変えず順序表だけを組み替えるため、
+                //   先に確定した queueIndex（タップされた曲）は
+                //   そのまま開始曲として使える（開始後の現在位置は
+                //   startTrackLocked が新しい順序表から引き直す）。
+                rebuildOrderLocked(queueIndex)
+                orderStale = false
+            }
             startTrackLocked(queueIndex, 0L)
         }
     }
