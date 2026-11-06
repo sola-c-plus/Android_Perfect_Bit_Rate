@@ -4,7 +4,7 @@
         <layer-list>
             <item android:gravity="center" android:width="15dp" android:height="15dp">
                 <shape android:shape="oval">
-                    <solid android:color="#D49B28" />
+                    <solid android:color="@color/accent_light" />
                     <size android:width="15dp" android:height="15dp" />
                 </shape>
             </item>
@@ -14,7 +14,7 @@
         <layer-list>
             <item android:gravity="center" android:width="15dp" android:height="15dp">
                 <shape android:shape="oval">
-                    <solid android:color="#8E8E93" />
+                    <solid android:color="@color/label_gray_light" />
                     <size android:width="15dp" android:height="15dp" />
                 </shape>
             </item>
