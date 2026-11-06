@@ -4,16 +4,16 @@
         <shape android:shape="rectangle">
             <size android:height="16dp" android:width="34dp" />
             <corners android:radius="8dp" />
-            <solid android:color="#F2F2F7" />
-            <stroke android:width="1.5dp" android:color="#D49B28" />
+            <solid android:color="@color/surface_track_light" />
+            <stroke android:width="1.5dp" android:color="@color/accent_light" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <size android:height="16dp" android:width="34dp" />
             <corners android:radius="8dp" />
-            <solid android:color="#E5E5EA" />
-            <stroke android:width="1.5dp" android:color="#C7C7CC" />
+            <solid android:color="@color/component_inactive_light" />
+            <stroke android:width="1.5dp" android:color="@color/component_line_light" />
         </shape>
     </item>
 </selector>

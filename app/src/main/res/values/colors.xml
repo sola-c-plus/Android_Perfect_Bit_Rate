@@ -6,5 +6,61 @@
     <color name="teal_200">#FF03DAC5</color>
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
+    <color name="main_background">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- ★ UI 統一 PR-A: 色トークン（意味名）。値は従来の直書きと完全一致させてあり、見た目は変わらない。
+         _light はライトテーマ用。テーマ機構そのものの作り替えは PR-B の範囲。 -->
+    <!-- 地 -->
+    <color name="main_background_light">#FFFFFFFF</color>
+    <!-- 面 -->
+    <color name="surface_panel">#FF0D0D0D</color>
+    <color name="surface_panel_light">#FFF5F5F7</color>
+    <color name="surface_raised">#FF161616</color>
+    <color name="surface_input">#FF1A1A1A</color>
+    <color name="surface_button">#FF1E1E1E</color>
+    <color name="surface_button_light">#FFF0F0F2</color>
+    <color name="surface_track">#FF141414</color>
+    <color name="surface_track_light">#FFF2F2F7</color>
+    <color name="surface_thumbnail">#FF1C1C1C</color>
+    <color name="surface_thumbnail_light">#FFE9E9EC</color>
+    <color name="surface_pressed">#FF333333</color>
+    <!-- 区切り・枠 -->
+    <color name="divider">#FF1C1C1C</color>
+    <color name="divider_light">#FFE0E0E5</color>
+    <color name="border_sheet">#FF2A2A2A</color>
+    <color name="border_light">#FFD8D8DE</color>
+    <!-- 文字 -->
+    <color name="text_primary">#FFF0F0F0</color>
+    <color name="text_primary_light">#FF1C1C1E</color>
+    <color name="text_secondary">#FF888888</color>
+    <color name="text_secondary_light">#FF636366</color>
+    <color name="text_tertiary">#FF777777</color>
+    <color name="text_tertiary_light">#FF9A9AA0</color>
+    <color name="text_body">#FFC8C8C8</color>
+    <color name="text_body_light">#FF3A3A3C</color>
+    <color name="text_secondary_strong_light">#FF48484A</color>
+    <color name="label_gray">#FFCCCCCC</color>
+    <color name="label_gray_light">#FF8E8E93</color>
+    <color name="text_muted">#FFAAAAAA</color>
+    <color name="text_np_artist">#FFBBBBBB</color>
+    <color name="text_status_codec">#FFA0A0A0</color>
+    <color name="text_status_transfer">#FF666666</color>
+    <color name="text_status_peak">#FFB0B0B0</color>
+    <!-- アクセント・危険色 -->
+    <color name="accent">#FFE5A93C</color>
+    <color name="accent_light">#FFD49B28</color>
+    <color name="accent_variant">#FFB8860B</color>
+    <color name="accent_blue">#FF29B6F6</color>
+    <color name="danger">#FFFF6B6B</color>
+    <color name="danger_light">#FFFF3B30</color>
+    <color name="danger_meter">#FFFF4444</color>
+    <!-- 部品・描画系グレー -->
+    <color name="component_inactive_light">#FFE5E5EA</color>
+    <color name="component_line_light">#FFC7C7CC</color>
+    <color name="component_border_light">#FFD1D1D6</color>
+    <color name="grid_line">#FF3C3C3C</color>
+    <color name="grid_border">#FF2E2E2E</color>
+    <!-- 半透明オーバーレイ -->
+    <color name="overlay_white_20">#33FFFFFF</color>
+    <color name="overlay_black_20">#20000000</color>
 </resources>

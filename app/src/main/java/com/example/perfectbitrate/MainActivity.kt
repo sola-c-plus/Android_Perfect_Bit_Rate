@@ -31,8 +31,10 @@ import android.text.TextWatcher
 import android.util.Log
 import android.util.LruCache
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewPropertyAnimator
 import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.ImageButton
@@ -52,6 +54,7 @@ import org.mozilla.geckoview.GeckoView
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -114,6 +117,9 @@ class MainActivity : AppCompatActivity() {
     //   状態と干渉しないようにする。
     private lateinit var localQueuePage: View
     private lateinit var localQueueList: ListView
+    // Local 3ページの親コンテナ。スワイプ検出は dispatchTouchEvent で
+    // この範囲内のタッチだけを対象にする（傍受のみ、消費はしない）。
+    private lateinit var localPageContainer: View
     private lateinit var textQueueEmpty: TextView
     private lateinit var localNpContent: View
     private lateinit var textNpEmpty: TextView
@@ -175,6 +181,10 @@ class MainActivity : AppCompatActivity() {
 
     private var localTab = LocalTab.ALL
     private var localGroupKey: String? = null
+    // ★ アーティスト配下のアルバムドリルダウンキー（null = アルバム
+    //   一覧を表示中）。アーティスト → アルバム一覧 → アルバム内の
+    //   曲、の2段ドリルダウンにするための追加状態。
+    private var localArtistAlbumKey: String? = null
     private var localSearchQuery: String = ""
     private var localDisplayedTracks: List<LibraryRepository.Track> = emptyList()
     private var localGroupAdapter: LocalGroupAdapter? = null
@@ -664,6 +674,10 @@ class MainActivity : AppCompatActivity() {
             localPlayer.stop()
         }
         playbackService?.resetBuffer("mode")
+        // ★ Service 側にも現在の供給元を伝える（ストリーム構成切替中の
+        //   pushPcm の扱いが供給元で異なるため。BitPerfectPlaybackService
+        //   の isLocalSourceActive 参照）。
+        playbackService?.isLocalSourceActive = (newMode == PlaybackMode.LOCAL)
         currentPlaybackMode = newMode
         appPrefs.playbackMode = newMode
         isPlayingState = false
@@ -940,14 +954,36 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val groupKey = localGroupKey
-        if (groupKey != null && localTab != LocalTab.ALL) {
+        if (groupKey != null && localTab == LocalTab.ARTIST && localArtistAlbumKey == null) {
+            // ★ アーティストのドリルダウン1段目: そのアーティストの
+            //   アルバム一覧を出す（先頭行は「全てのアルバムを再生」）。
+            //   曲をアルバム混在のまま並べず、アルバム単位に分ける。
+            val albums = localAlbumsForArtist(groupKey, localSearchQuery)
+            val totalTracks = localTracks.count { artistGroupKeyOf(it) == groupKey }
+            localDisplayedTracks = emptyList()
+            localTrackList.adapter = LocalArtistAlbumsAdapter(albums, totalTracks)
+            updateLocalEmptyMessage(albums.size, isTrackPage = false)
+            textLocalGroupTitle.text = groupKey
+            localGroupHeader.visibility = View.VISIBLE
+        } else if (groupKey != null && localTab != LocalTab.ALL) {
             // ドリルダウン中: 選択中グループの曲一覧（検索フィルタ適用、
-            // 並びはタイトル順で固定。グループ内の曲順はソート対象外）
+            // 並びはタイトル順で固定。グループ内の曲順はソート対象外）。
+            // アーティストの2段目ではアルバムでも絞り込む。
+            val albumKey = localArtistAlbumKey
             val groupTracks = localTracks
                 .filter { localGroupKeyOf(localTab, it) == groupKey }
+                .filter {
+                    albumKey == null || localTab != LocalTab.ARTIST ||
+                        albumKeyOf(it) == albumKey
+                }
                 .filter { localTrackMatchesQuery(it, localSearchQuery) }
             showLocalTrackPage(sortLocalTracks(groupTracks, AppPreferences.LOCAL_SORT_TITLE))
-            textLocalGroupTitle.text = groupKey
+            textLocalGroupTitle.text =
+                if (localTab == LocalTab.ARTIST && albumKey != null) {
+                    "$groupKey › $albumKey"
+                } else {
+                    groupKey
+                }
             localGroupHeader.visibility = View.VISIBLE
         } else {
             localGroupHeader.visibility = View.GONE
@@ -1114,10 +1150,653 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectLocalTab(tab: LocalTab) {
+        // スワイプのスライドが進行中なら先に確定させる（退場中
+        // ページの終了処理が、切替後の表示を巻き込まないため）。
+        finishLocalPageSlide()
         localTab = tab
         localGroupKey = null
+        localArtistAlbumKey = null
         localPlaylistDrillId = null
         refreshLocalBrowser()
+    }
+
+    // ★ ドリルダウンを1段戻る。戻れたら true。アーティストの
+    //   2段目（アルバム内）からはアルバム一覧へ、グループ／
+    //   プレイリストのドリルダウンからは一覧へ戻る。戻るボタン
+    //   （ヘッダー）と Android の戻る操作で共用する。
+    private fun localDrillBack(): Boolean {
+        if (localArtistAlbumKey != null) {
+            localArtistAlbumKey = null
+            refreshLocalBrowser()
+            return true
+        }
+        if (localGroupKey != null || localPlaylistDrillId != null) {
+            localGroupKey = null
+            localPlaylistDrillId = null
+            refreshLocalBrowser()
+            return true
+        }
+        return false
+    }
+
+    // ★ 下部タブの並び順（左→右）。スワイプでの隣接移動に使う。
+    //   レイアウト（activity_main.xml の localTabBar）と LocalTab の
+    //   宣言順に一致させること。
+    private val localTabOrder = listOf(
+        LocalTab.QUEUE, LocalTab.NOW_PLAYING, LocalTab.ALL,
+        LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST
+    )
+
+    // スワイプ判定の閾値: 水平フリックとして明確な場合だけタブ切替に
+    // 使うための距離（dp）と、水平優位の条件（|dx| が |dy| の何倍か）。
+    private val LOCAL_TAB_SWIPE_MIN_DISTANCE_DP = 48f
+    private val LOCAL_TAB_SWIPE_MIN_VELOCITY = 120f
+    private val LOCAL_TAB_SWIPE_AXIS_RATIO = 2.0f
+    // ドラッグ追従を開始する距離、確定に必要な移動割合と速度。
+    // 開始までは通常のタップ／縦スクロールとして扱い、開始した
+    // 時点からだけページを指の移動量へ追従させる。
+    private val LOCAL_TAB_DRAG_START_DISTANCE_DP = 24f
+    private val LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO = 0.27f
+    private val LOCAL_TAB_DRAG_COMMIT_VELOCITY = 500f
+
+    // ★ スワイプでのタブ移動（指の動きに内容が付いてくる向き）:
+    //   左スワイプ → 右隣のタブ、右スワイプ → 左隣のタブ（例:
+    //   再生タブで左へスワイプすると全曲、右へスワイプすると
+    //   キュー）。端のタブではそれ以上移動しない。切替の作法は
+    //   タブのタップと同じ selectLocalTab に揃える（ドリルダウン
+    //   中なら抜けて対象タブのトップ表示になる）が、スワイプ
+    //   起因の切替だけはページのスライドアニメーションを付ける。
+    private fun switchLocalTabBySwipe(toNext: Boolean) {
+        val index = localTabOrder.indexOf(localTab)
+        if (index < 0) return
+        val target = if (toNext) index + 1 else index - 1
+        if (target !in localTabOrder.indices) return
+        // 進行中のスライドがあれば先に確定させてから現在の
+        // ページを取る（アニメーション中のページが両方見えて
+        // いる状態で旧ページを取り違えないため）。
+        finishLocalPageSlide()
+        val oldPage = currentVisibleLocalPage()
+        selectLocalTab(localTabOrder[target])
+        animateLocalPageSlide(oldPage, currentVisibleLocalPage(), toNext)
+    }
+
+    // Local 3ページのうち現在見えているもの（ページ出し分けの
+    // 正は updateLocalPageVisibility 側で、ここは読むだけ）。
+    private fun currentVisibleLocalPage(): View? {
+        if (!::localPageContainer.isInitialized) return null
+        return listOf(localNowPlaying, localQueuePage, localBrowserPage)
+            .firstOrNull { it.visibility == View.VISIBLE }
+    }
+
+    private fun localPageForTab(tab: LocalTab): View = when (tab) {
+        LocalTab.QUEUE -> localQueuePage
+        LocalTab.NOW_PLAYING -> localNowPlaying
+        LocalTab.ALL, LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST ->
+            localBrowserPage
+    }
+
+    private fun isLocalBrowserTab(tab: LocalTab): Boolean =
+        localPageForTab(tab) === localBrowserPage
+
+    // スワイプ切替時のスライド時間（ms）。ドラッグ確定／復帰の
+    // 残り区間のアニメーションにも使い、距離に応じて短縮する。
+    private val LOCAL_TAB_SLIDE_DURATION_MS = 280L
+
+    // 進行中のスライドアニメーション。新しい切替や通常の再描画
+    // と競合しないよう、開始前に必ず finishLocalPageSlide で
+    // 確定させる。
+    private val localSlideAnimators = mutableListOf<ViewPropertyAnimator>()
+
+    // ★ 進行中のスライド／ドラッグプレビューを即座に確定させる。
+    //   ViewPropertyAnimator の cancel() は withEndAction を同期的に
+    //   実行する作法に合わせ、抜けた時点では表示ページは現在の
+    //   localTab どおりに戻り、全ページの translationX は 0 になる。
+    private fun finishLocalPageSlide() {
+        if (localSwipeDragActive) {
+            cancelLocalTabDragPreview()
+        }
+        if (localSlideAnimators.isNotEmpty()) {
+            val running = localSlideAnimators.toList()
+            localSlideAnimators.clear()
+            running.forEach { it.cancel() }
+        }
+        if (pendingLocalDragRestoreState != null) {
+            applyPendingLocalDragRestore()
+        }
+        if (::localPageContainer.isInitialized) {
+            listOf(localNowPlaying, localQueuePage, localBrowserPage)
+                .forEach { it.translationX = 0f }
+            updateLocalPageVisibility()
+        }
+    }
+
+    // ★ スワイプ切替のスライド: 次へ（右隣）なら新ページが右から
+    //   入り旧ページが左へ出る、逆なら鏡像。旧ページと新ページが
+    //   同じ View（ブラウザ系タブ同士）の場合は入場のみで表現する
+    //   （内容は selectLocalTab で差し替わり済み）。startOffset は
+    //   ドラッグで指に追従していた現在位置で、確定アニメーションを
+    //   その位置から滑らかにつなぐために使う。
+    private fun animateLocalPageSlide(
+        oldPage: View?,
+        newPage: View?,
+        toNext: Boolean,
+        startOffset: Float = 0f,
+        durationMs: Long = LOCAL_TAB_SLIDE_DURATION_MS
+    ) {
+        if (newPage == null) return
+        val width = localPageContainer.width
+        if (width <= 0) return
+        val enterFrom = if (toNext) width.toFloat() else -width.toFloat()
+        val interpolator = android.view.animation.DecelerateInterpolator()
+        if (oldPage != null && oldPage !== newPage) {
+            oldPage.visibility = View.VISIBLE
+            oldPage.translationX = startOffset
+            lateinit var outAnimator: ViewPropertyAnimator
+            outAnimator = oldPage.animate()
+                .translationX(-enterFrom)
+                .setDuration(durationMs)
+                .setInterpolator(interpolator)
+                .withEndAction {
+                    oldPage.visibility = View.GONE
+                    oldPage.translationX = 0f
+                    localSlideAnimators.remove(outAnimator)
+                }
+            localSlideAnimators.add(outAnimator)
+            outAnimator.start()
+        }
+        newPage.translationX = enterFrom + startOffset
+        lateinit var inAnimator: ViewPropertyAnimator
+        inAnimator = newPage.animate()
+            .translationX(0f)
+            .setDuration(durationMs)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                newPage.translationX = 0f
+                localSlideAnimators.remove(inAnimator)
+            }
+        localSlideAnimators.add(inAnimator)
+        inAnimator.start()
+    }
+
+    private data class LocalBrowserUiState(
+        val tab: LocalTab,
+        val groupKey: String?,
+        val artistAlbumKey: String?,
+        val playlistDrillId: Long?
+    )
+
+    private fun captureLocalBrowserUiState(): LocalBrowserUiState = LocalBrowserUiState(
+        tab = localTab,
+        groupKey = localGroupKey,
+        artistAlbumKey = localArtistAlbumKey,
+        playlistDrillId = localPlaylistDrillId
+    )
+
+    private fun restoreLocalBrowserUiState(state: LocalBrowserUiState) {
+        localTab = state.tab
+        localGroupKey = state.groupKey
+        localArtistAlbumKey = state.artistAlbumKey
+        localPlaylistDrillId = state.playlistDrillId
+    }
+
+    private fun applyPendingLocalDragRestore() {
+        val state = pendingLocalDragRestoreState ?: return
+        pendingLocalDragRestoreState = null
+        restoreLocalBrowserUiState(state)
+        refreshLocalBrowser()
+        if (::localPageContainer.isInitialized) {
+            listOf(localNowPlaying, localQueuePage, localBrowserPage)
+                .forEach { it.translationX = 0f }
+        }
+    }
+
+    private fun prepareLocalTabDragTarget(targetTab: LocalTab, toNext: Boolean): Boolean {
+        val sourceTab = localSwipeDragSourceTab ?: return false
+        val sourcePage = localSwipeDragSourcePage ?: return false
+        val targetPage = localPageForTab(targetTab)
+
+        if (isLocalBrowserTab(targetTab) && !isLocalBrowserTab(sourceTab)) {
+            // 別ページからブラウザ系タブを覗く場合だけ、対象タブの
+            // 内容を一時的に描く。戻す場合は保存した元のブラウザ
+            // 状態を復元し、確定する場合は selectLocalTab 側の正規
+            // 状態としてそのまま引き継ぐ。
+            if (localSwipeDragSavedState == null) {
+                localSwipeDragSavedState = captureLocalBrowserUiState()
+            }
+            localTab = targetTab
+            localGroupKey = null
+            localArtistAlbumKey = null
+            localPlaylistDrillId = null
+            refreshLocalBrowser()
+        } else if (targetTab == LocalTab.QUEUE) {
+            refreshQueueTab()
+        } else if (targetTab == LocalTab.NOW_PLAYING && ::localPlayer.isInitialized) {
+            updateLocalNowPlaying(localPlayer.currentTrack)
+            updateLocalNowPlayingProgress()
+        }
+
+        localSwipeDragTargetTab = targetTab
+        localSwipeDragTargetPage = targetPage
+        localSwipeDragToNext = toNext
+        sourcePage.visibility = View.VISIBLE
+        targetPage.visibility = View.VISIBLE
+        return true
+    }
+
+    private fun clearLocalTabDragTarget() {
+        val savedState = localSwipeDragSavedState
+        val targetPage = localSwipeDragTargetPage
+        val sourcePage = localSwipeDragSourcePage
+        localSwipeDragTargetTab = null
+        localSwipeDragTargetPage = null
+        localSwipeDragSavedState = null
+        if (savedState != null) {
+            restoreLocalBrowserUiState(savedState)
+            refreshLocalBrowser()
+        } else if (::localPageContainer.isInitialized) {
+            updateLocalPageVisibility()
+        }
+        if (targetPage != null && targetPage !== sourcePage) {
+            targetPage.translationX = 0f
+        }
+    }
+
+    private fun ensureLocalTabDragTarget(dx: Float): Boolean {
+        val sourceTab = localSwipeDragSourceTab ?: return false
+        if (dx == 0f) return localSwipeDragTargetTab != null
+        val toNext = dx < 0f
+        val sourceIndex = localTabOrder.indexOf(sourceTab)
+        if (sourceIndex < 0) return false
+        val targetIndex = if (toNext) sourceIndex + 1 else sourceIndex - 1
+        if (targetIndex !in localTabOrder.indices) {
+            if (localSwipeDragTargetTab != null) {
+                clearLocalTabDragTarget()
+            }
+            localSwipeDragSourcePage?.translationX = 0f
+            localSwipeDragLastDx = dx
+            return false
+        }
+        val targetTab = localTabOrder[targetIndex]
+        if (localSwipeDragTargetTab == targetTab) {
+            localSwipeDragToNext = toNext
+            return true
+        }
+        if (localSwipeDragTargetTab != null) {
+            clearLocalTabDragTarget()
+        }
+        return prepareLocalTabDragTarget(targetTab, toNext)
+    }
+
+    private fun applyLocalTabDragOffset(dx: Float) {
+        localSwipeDragLastDx = dx
+        val sourcePage = localSwipeDragSourcePage ?: return
+        val targetPage = localSwipeDragTargetPage
+        if (targetPage == null) {
+            sourcePage.translationX = 0f
+            return
+        }
+        if (targetPage === sourcePage) {
+            sourcePage.translationX = dx
+            return
+        }
+        val width = localPageContainer.width
+        if (width <= 0) return
+        val sideOffset = if (localSwipeDragToNext) width.toFloat() else -width.toFloat()
+        sourcePage.translationX = dx
+        targetPage.translationX = dx + sideOffset
+    }
+
+    private fun updateLocalTabDrag(ev: MotionEvent): Boolean {
+        val dx = ev.rawX - localSwipeStartX
+        val dy = ev.rawY - localSwipeStartY
+        val startDistance = LOCAL_TAB_DRAG_START_DISTANCE_DP *
+            resources.displayMetrics.density
+        if (!localSwipeDragActive) {
+            // 縦方向が先に明確になったジェスチャはスクロールとして
+            // 確定させ、このタッチでは横ドラッグへ移行しない。
+            if (abs(dy) > startDistance &&
+                abs(dy) > abs(dx) * LOCAL_TAB_SWIPE_AXIS_RATIO
+            ) {
+                localSwipeTracking = false
+                return false
+            }
+            if (abs(dx) < startDistance ||
+                abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO
+            ) {
+                return false
+            }
+            if (localPageContainer.width <= 0) return false
+            localSwipeDragSourceTab = localTab
+            localSwipeDragSourcePage = currentVisibleLocalPage() ?: return false
+            if (!ensureLocalTabDragTarget(dx)) {
+                localSwipeDragSourceTab = null
+                localSwipeDragSourcePage = null
+                return false
+            }
+            localSwipeDragActive = true
+        } else {
+            ensureLocalTabDragTarget(dx)
+            if (localSwipeDragTargetTab == null) {
+                localSwipeDragLastDx = dx
+                return true
+            }
+        }
+        applyLocalTabDragOffset(dx)
+        return true
+    }
+
+    private fun cancelLocalTabDragPreview() {
+        if (!localSwipeDragActive) return
+        if (localSwipeDragTargetTab != null) {
+            clearLocalTabDragTarget()
+        }
+        localSwipeDragActive = false
+        localSwipeDragSourcePage?.translationX = 0f
+        localSwipeDragSourceTab = null
+        localSwipeDragSourcePage = null
+        localSwipeDragLastDx = 0f
+    }
+
+    private fun rollbackLocalTabDrag() {
+        val sourcePage = localSwipeDragSourcePage
+        val targetPage = localSwipeDragTargetPage
+        val targetTab = localSwipeDragTargetTab
+        val toNext = localSwipeDragToNext
+        val dx = localSwipeDragLastDx
+        val savedState = localSwipeDragSavedState
+        localSwipeDragActive = false
+        localSwipeDragTargetTab = null
+        localSwipeDragTargetPage = null
+        localSwipeDragSavedState = null
+        localSwipeDragSourceTab = null
+        localSwipeDragSourcePage = null
+
+        if (sourcePage == null || targetPage == null || targetTab == null) {
+            sourcePage?.translationX = 0f
+            if (savedState != null) {
+                pendingLocalDragRestoreState = savedState
+                applyPendingLocalDragRestore()
+            }
+            return
+        }
+        val width = localPageContainer.width
+        if (width <= 0) {
+            sourcePage.translationX = 0f
+            targetPage.translationX = 0f
+            if (savedState != null) {
+                pendingLocalDragRestoreState = savedState
+                applyPendingLocalDragRestore()
+            } else {
+                updateLocalPageVisibility()
+            }
+            return
+        }
+
+        pendingLocalDragRestoreState = savedState
+        val duration = (abs(dx) / width * LOCAL_TAB_SLIDE_DURATION_MS)
+            .toLong()
+            .coerceIn(100L, LOCAL_TAB_SLIDE_DURATION_MS)
+        val interpolator = android.view.animation.DecelerateInterpolator()
+        if (targetPage === sourcePage) {
+            lateinit var animator: ViewPropertyAnimator
+            animator = sourcePage.animate()
+                .translationX(0f)
+                .setDuration(duration)
+                .setInterpolator(interpolator)
+                .withEndAction {
+                    sourcePage.translationX = 0f
+                    localSlideAnimators.remove(animator)
+                }
+            localSlideAnimators.add(animator)
+            animator.start()
+            return
+        }
+
+        val sideOffset = if (toNext) width.toFloat() else -width.toFloat()
+        lateinit var sourceAnimator: ViewPropertyAnimator
+        sourceAnimator = sourcePage.animate()
+            .translationX(0f)
+            .setDuration(duration)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                sourcePage.translationX = 0f
+                localSlideAnimators.remove(sourceAnimator)
+            }
+        localSlideAnimators.add(sourceAnimator)
+        sourceAnimator.start()
+
+        lateinit var targetAnimator: ViewPropertyAnimator
+        targetAnimator = targetPage.animate()
+            .translationX(sideOffset)
+            .setDuration(duration)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                targetPage.visibility = View.GONE
+                targetPage.translationX = 0f
+                localSlideAnimators.remove(targetAnimator)
+                applyPendingLocalDragRestore()
+            }
+        localSlideAnimators.add(targetAnimator)
+        targetAnimator.start()
+    }
+
+    private fun commitLocalTabDrag() {
+        val sourcePage = localSwipeDragSourcePage
+        val targetPage = localSwipeDragTargetPage
+        val targetTab = localSwipeDragTargetTab
+        val toNext = localSwipeDragToNext
+        val dx = localSwipeDragLastDx
+        localSwipeDragActive = false
+        localSwipeDragTargetTab = null
+        localSwipeDragTargetPage = null
+        // 別ページからブラウザを覗いていた場合も、確定時は対象
+        // タブを正規の選択状態として引き継ぐため復元しない。
+        localSwipeDragSavedState = null
+        localSwipeDragSourceTab = null
+        localSwipeDragSourcePage = null
+        if (sourcePage == null || targetPage == null || targetTab == null) return
+
+        selectLocalTab(targetTab)
+        val newPage = currentVisibleLocalPage() ?: return
+        val width = localPageContainer.width
+        if (width <= 0) {
+            sourcePage.translationX = 0f
+            newPage.translationX = 0f
+            return
+        }
+        val remaining = (width - abs(dx).toInt()).coerceIn(0, width)
+        val duration = (remaining.toFloat() / width * LOCAL_TAB_SLIDE_DURATION_MS)
+            .toLong()
+            .coerceIn(100L, LOCAL_TAB_SLIDE_DURATION_MS)
+        animateLocalPageSlide(
+            oldPage = sourcePage,
+            newPage = newPage,
+            toNext = toNext,
+            startOffset = dx,
+            durationMs = duration
+        )
+    }
+
+    private fun settleLocalTabDrag(velocityX: Float) {
+        val targetTab = localSwipeDragTargetTab
+        if (targetTab == null) {
+            localSwipeDragActive = false
+            localSwipeDragSourcePage?.translationX = 0f
+            localSwipeDragSourceTab = null
+            localSwipeDragSourcePage = null
+            return
+        }
+        val width = localPageContainer.width
+        val dx = localSwipeDragLastDx
+        val commitByDistance = width > 0 && if (localSwipeDragToNext) {
+            dx <= -width * LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO
+        } else {
+            dx >= width * LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO
+        }
+        val commitByVelocity = if (localSwipeDragToNext) {
+            velocityX <= -LOCAL_TAB_DRAG_COMMIT_VELOCITY
+        } else {
+            velocityX >= LOCAL_TAB_DRAG_COMMIT_VELOCITY
+        }
+        if (commitByDistance || commitByVelocity) {
+            commitLocalTabDrag()
+        } else {
+            rollbackLocalTabDrag()
+        }
+    }
+
+    private fun recycleLocalSwipeVelocityTracker() {
+        localSwipeVelocityTracker?.recycle()
+        localSwipeVelocityTracker = null
+    }
+
+    private fun dispatchCancelToLocalChildren(ev: MotionEvent) {
+        val cancelEvent = MotionEvent.obtain(ev)
+        cancelEvent.action = MotionEvent.ACTION_CANCEL
+        super.dispatchTouchEvent(cancelEvent)
+        cancelEvent.recycle()
+    }
+
+    // ★ スワイプ検出の追跡状態（dispatchTouchEvent で傍受する）。
+    //   前実装（GestureDetector＋各ページへの非消費 OnTouchListener）は
+    //   実機で全く反応しなかった: SimpleOnGestureListener は onDown が
+    //   既定で false を返すため GestureDetector がジェスチャを破棄し、
+    //   onFling が一度も呼ばれなかったのが主因（加えてリスト行などの
+    //   子 View がタッチを掴むとページ側リスナへの配送も不安定）。
+    //   そのため検出はアクティビティのタッチ配送の入り口で自前
+    //   追跡する。水平ドラッグが成立するまではイベントを一切
+    //   消費せず、通常のタッチ処理（縦スクロール・クリック・
+    //   長押し・シーク）は無影響。成立後はページを指へ追従させ、
+    //   以後の MOVE／UP を消費して行クリック等と競合させない。
+    private var localSwipeTracking = false
+    private var localSwipeStartX = 0f
+    private var localSwipeStartY = 0f
+    private var localSwipeStartTimeMs = 0L
+    // ★ ドラッグ追従の状態。成立前は localSwipeTracking のみで
+    //   観察し、成立した瞬間からページを指へ追従させる。source は
+    //   ドラッグ開始時点のタブ／ページで、途中で localTab が
+    //   プレビュー用に切り替わっても開始位置の基準を失わない。
+    private var localSwipeDragActive = false
+    private var localSwipeDragSourceTab: LocalTab? = null
+    private var localSwipeDragSourcePage: View? = null
+    private var localSwipeDragTargetTab: LocalTab? = null
+    private var localSwipeDragTargetPage: View? = null
+    private var localSwipeDragToNext = true
+    private var localSwipeDragLastDx = 0f
+    private var localSwipeDragSavedState: LocalBrowserUiState? = null
+    private var pendingLocalDragRestoreState: LocalBrowserUiState? = null
+    private var localSwipeVelocityTracker: android.view.VelocityTracker? = null
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        return if (trackLocalTabSwipe(ev)) {
+            true
+        } else {
+            super.dispatchTouchEvent(ev)
+        }
+    }
+
+    private fun trackLocalTabSwipe(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                recycleLocalSwipeVelocityTracker()
+                localSwipeTracking = false
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return false
+                if (isNpSeeking) return false
+                if (!::localPageContainer.isInitialized) return false
+                if (localPageContainer.visibility != View.VISIBLE) return false
+                // 前のスライド／戻りアニメーションが残っていれば、
+                // 新しいタッチの前に確定させてから次へ進む。
+                finishLocalPageSlide()
+                val rect = android.graphics.Rect()
+                if (!localPageContainer.getGlobalVisibleRect(rect)) return false
+                val x = ev.rawX.toInt()
+                val y = ev.rawY.toInt()
+                if (!rect.contains(x, y)) return false
+                // シークバーと検索欄の上から始まるタッチは対象外
+                // （ドラッグや文字入力と誤認しないため）。
+                if (::seekNpProgress.isInitialized && isTouchInside(seekNpProgress, x, y)) return false
+                if (::editLocalSearch.isInitialized && isTouchInside(editLocalSearch, x, y)) return false
+                localSwipeTracking = true
+                localSwipeStartX = ev.rawX
+                localSwipeStartY = ev.rawY
+                localSwipeStartTimeMs = android.os.SystemClock.uptimeMillis()
+                localSwipeVelocityTracker = android.view.VelocityTracker.obtain()
+                localSwipeVelocityTracker?.addMovement(ev)
+                return false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!localSwipeTracking) return localSwipeDragActive
+                localSwipeVelocityTracker?.addMovement(ev)
+                if (currentPlaybackMode != PlaybackMode.LOCAL || isNpSeeking) {
+                    val wasActive = localSwipeDragActive
+                    localSwipeTracking = false
+                    recycleLocalSwipeVelocityTracker()
+                    if (wasActive) rollbackLocalTabDrag()
+                    return wasActive
+                }
+                val wasActive = localSwipeDragActive
+                val activeNow = updateLocalTabDrag(ev)
+                if (!localSwipeTracking && !wasActive) {
+                    recycleLocalSwipeVelocityTracker()
+                    return false
+                }
+                return activeNow
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!localSwipeTracking && !localSwipeDragActive) return false
+                val wasTracking = localSwipeTracking
+                localSwipeTracking = false
+                localSwipeVelocityTracker?.addMovement(ev)
+                localSwipeVelocityTracker?.computeCurrentVelocity(1000)
+                val velocityX = localSwipeVelocityTracker?.xVelocity ?: 0f
+                recycleLocalSwipeVelocityTracker()
+                if (!wasTracking && !localSwipeDragActive) return false
+                if (currentPlaybackMode != PlaybackMode.LOCAL || isNpSeeking) {
+                    val wasActive = localSwipeDragActive
+                    if (wasActive) rollbackLocalTabDrag()
+                    return wasActive
+                }
+
+                // MOVE がほとんど配送されなかった短いフリックでも、
+                // 最終位置でドラッグ成立を判定できるようにする。
+                updateLocalTabDrag(ev)
+                if (localSwipeDragActive) {
+                    dispatchCancelToLocalChildren(ev)
+                    settleLocalTabDrag(velocityX)
+                    return true
+                }
+
+                val dx = ev.rawX - localSwipeStartX
+                val dy = ev.rawY - localSwipeStartY
+                val dtMs = android.os.SystemClock.uptimeMillis() - localSwipeStartTimeMs
+                if (dtMs <= 0L) return false
+                val minDistance = LOCAL_TAB_SWIPE_MIN_DISTANCE_DP *
+                    resources.displayMetrics.density
+                if (abs(dx) < minDistance) return false
+                if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return false
+                val averageVelocityX = abs(dx) / dtMs * 1000f
+                if (averageVelocityX < LOCAL_TAB_SWIPE_MIN_VELOCITY) return false
+                dispatchCancelToLocalChildren(ev)
+                // 左スワイプ（指が左へ, dx < 0）→ 右隣のタブ
+                switchLocalTabBySwipe(toNext = dx < 0)
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                val wasActive = localSwipeDragActive
+                localSwipeTracking = false
+                recycleLocalSwipeVelocityTracker()
+                if (wasActive) rollbackLocalTabDrag()
+                return false
+            }
+        }
+        return false
+    }
+
+    private fun isTouchInside(view: View, rawX: Int, rawY: Int): Boolean {
+        if (view.visibility != View.VISIBLE) return false
+        val rect = android.graphics.Rect()
+        if (!view.getGlobalVisibleRect(rect)) return false
+        return rect.contains(rawX, rawY)
     }
 
     // 一覧のタップ振り分け: グループ一覧ならドリルダウン、曲リストなら
@@ -1134,6 +1813,20 @@ class MainActivity : AppCompatActivity() {
             val playlist = (localTrackList.adapter as? LocalPlaylistAdapter)
                 ?.getItem(position) ?: return
             localPlaylistDrillId = playlist.id
+            refreshLocalBrowser()
+            return
+        }
+        if (localTab == LocalTab.ARTIST && localGroupKey != null && localArtistAlbumKey == null) {
+            // ★ アーティストのアルバム一覧: 先頭行はそのアーティストの
+            //   全曲再生、それ以外はアルバムへのドリルダウン。
+            val artistKey = localGroupKey ?: return
+            if (position == 0) {
+                playAllArtistTracks(artistKey)
+                return
+            }
+            val album = (localTrackList.adapter as? LocalArtistAlbumsAdapter)
+                ?.albumGroupAt(position) ?: return
+            localArtistAlbumKey = album.key
             refreshLocalBrowser()
             return
         }
@@ -1181,6 +1874,10 @@ class MainActivity : AppCompatActivity() {
             showPlaylistManageDialog(playlist)
             return true
         }
+        if (localTab == LocalTab.ARTIST && localGroupKey != null && localArtistAlbumKey == null) {
+            // アーティストのアルバム一覧では長押しは無効（消費だけする）
+            return true
+        }
         if (localGroupKey == null && (localTab == LocalTab.ALBUM || localTab == LocalTab.ARTIST)) {
             return true
         }
@@ -1192,6 +1889,18 @@ class MainActivity : AppCompatActivity() {
             showAddToPlaylistDialog(track)
         }
         return true
+    }
+
+    // ★ アーティストの全曲再生（アルバム一覧の先頭行）。全アルバムを
+    //   横断して、そのアーティストの全曲をアルバム順のキューにして
+    //   先頭から再生し、「再生」タブへ切り替える（曲タップと同じ作法）。
+    private fun playAllArtistTracks(artistKey: String) {
+        val tracks = localTracks.filter { artistGroupKeyOf(it) == artistKey }
+        if (tracks.isEmpty()) return
+        val queue = sortLocalTracks(tracks, AppPreferences.LOCAL_SORT_ALBUM)
+        localPlayer.setQueue(queue)
+        localPlayer.playAt(0)
+        selectLocalTab(LocalTab.NOW_PLAYING)
     }
 
     // ── プレイリスト操作（ダイアログ群） ──
@@ -1390,8 +2099,8 @@ class MainActivity : AppCompatActivity() {
         if (!::btnNpStar.isInitialized || !::localPlayer.isInitialized) return
         val track = localPlayer.currentTrack ?: return
         val isDark = isDarkThemeActive()
-        val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
-        val colorOff = Color.parseColor(if (isDark) "#777777" else "#9A9AA0")
+        val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+        val colorOff = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light)
         val latest = playlistStore.latestPlaylist()
         val isMember = latest != null &&
             playlistStore.contains(latest.id, track.uri.toString())
@@ -1404,8 +2113,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateLocalTabStyles() {
         if (!::tabLocalAll.isInitialized) return
         val isDark = isDarkThemeActive()
-        val colorSelected = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
-        val colorNormal = Color.parseColor(if (isDark) "#888888" else "#636366")
+        val colorSelected = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+        val colorNormal = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
         val tabs = listOf(
             tabLocalQueue to LocalTab.QUEUE,
             tabLocalNowPlaying to LocalTab.NOW_PLAYING,
@@ -1529,10 +2238,51 @@ class MainActivity : AppCompatActivity() {
 
     private fun localGroupKeyOf(tab: LocalTab, track: LibraryRepository.Track): String {
         return when (tab) {
-            LocalTab.ALBUM -> track.album.ifBlank { unknownAlbumLabel }
-            LocalTab.ARTIST -> track.artist.ifBlank { unknownArtistLabel }
+            LocalTab.ALBUM -> albumKeyOf(track)
+            LocalTab.ARTIST -> artistGroupKeyOf(track)
             LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE -> ""
         }
+    }
+
+    // アルバムのグループキー（アルバム名そのもの。空は不明ラベル）
+    private fun albumKeyOf(track: LibraryRepository.Track): String {
+        return track.album.ifBlank { unknownAlbumLabel }
+    }
+
+    // ★ アーティストのグループキー。設定「アーティストの分類」で
+    //   切り替わる: アルバムアーティスト指定時はタグの albumArtist
+    //   （無い曲は曲のアーティストで代替）、アーティスト指定時は
+    //   曲のアーティストそのもの。空は不明ラベル。
+    private fun artistGroupKeyOf(track: LibraryRepository.Track): String {
+        val raw = if (appPrefs.localArtistGrouping ==
+            AppPreferences.LOCAL_ARTIST_GROUPING_ARTIST
+        ) {
+            track.artist
+        } else {
+            track.albumArtist.ifBlank { track.artist }
+        }
+        return raw.ifBlank { unknownArtistLabel }
+    }
+
+    // ★ アーティスト配下のアルバム一覧の導出。検索中は、アルバム名に
+    //   一致するか、そのアルバム内に検索に一致する曲を含むアルバムを
+    //   残す（グループ一覧と同じ流儀）。
+    private fun localAlbumsForArtist(artistKey: String, query: String): List<LocalGroup> {
+        val grouped = LinkedHashMap<String, MutableList<LibraryRepository.Track>>()
+        for (track in localTracks) {
+            if (artistGroupKeyOf(track) != artistKey) continue
+            grouped.getOrPut(albumKeyOf(track)) { mutableListOf() } += track
+        }
+        val q = query.lowercase(Locale.ROOT)
+        return grouped.map { (key, tracks) ->
+            LocalGroup(key = key, label = key, tracks = tracks, uniformArtist = null)
+        }.filter { group ->
+            q.isBlank() ||
+                group.label.lowercase(Locale.ROOT).contains(q) ||
+                group.tracks.any { localTrackMatchesQuery(it, query) }
+        }.sortedWith(
+            compareBy<LocalGroup> { it.label.lowercase(Locale.ROOT) }
+        )
     }
 
     private fun requestAudioPermission() {
@@ -1587,8 +2337,14 @@ class MainActivity : AppCompatActivity() {
     //   Gecko へ反映するために保持する（settingsLauncher 参照）。
     private var adBlockEnabledBeforeSettings: Boolean? = null
 
+    // ★ 設定画面を開く直前のアーティスト分類。変わって戻ってきたら、
+    //   ドリルダウン中のキーが新しい分類では無効になるため、ドリル
+    //   状態をリセットしてからアーティスト表示を組み替える。
+    private var artistGroupingBeforeSettings: Int? = null
+
     private fun openSettings() {
         adBlockEnabledBeforeSettings = appPrefs.isAdBlockEnabled
+        artistGroupingBeforeSettings = appPrefs.localArtistGrouping
         settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
     }
 
@@ -1766,6 +2522,17 @@ class MainActivity : AppCompatActivity() {
                 geckoController.sendAdBlock(appPrefs.isAdBlockEnabled)
             }
             adBlockEnabledBeforeSettings = null
+            // ★ アーティスト分類が変わっていたら、ドリルダウン状態
+            //   （旧分類のキー）をリセットする。分類自体は導出時に
+            //   prefs を都度読むため、下の再読込で新しい分類の
+            //   アーティスト表示に組み替わる。
+            val beforeGrouping = artistGroupingBeforeSettings
+            if (beforeGrouping != null && appPrefs.localArtistGrouping != beforeGrouping) {
+                localGroupKey = null
+                localArtistAlbumKey = null
+                localPlaylistDrillId = null
+            }
+            artistGroupingBeforeSettings = null
             val savedMode = appPrefs.playbackMode
             val modeChanged = savedMode != currentPlaybackMode
             if (modeChanged) {
@@ -1781,6 +2548,10 @@ class MainActivity : AppCompatActivity() {
             val binder = service as BitPerfectPlaybackService.LocalBinder
             playbackService = binder.getService()
             isServiceBound = true
+            // ★ 供給元フラグの初期同期（起動時の保存モードに合わせる。
+            //   以後の切替は switchPlaybackMode が同期する）。
+            playbackService?.isLocalSourceActive =
+                (currentPlaybackMode == PlaybackMode.LOCAL)
             detectAudioOutputDevice()
 
             playbackService?.isVolumeLocked = isVolLockOn
@@ -1905,6 +2676,7 @@ class MainActivity : AppCompatActivity() {
         localBrowserPage = findViewById(R.id.localBrowserPage)
         localNowPlaying = findViewById(R.id.localNowPlaying)
         localQueuePage = findViewById(R.id.localQueuePage)
+        localPageContainer = findViewById(R.id.localPageContainer)
         localQueueList = findViewById(R.id.localQueueList)
         textQueueEmpty = findViewById(R.id.textQueueEmpty)
         localNpContent = findViewById(R.id.localNpContent)
@@ -2090,14 +2862,9 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 // ★ 戻る操作の優先順位: Local のドリルダウンを戻る →
                 //   Gecko の履歴を戻る → 終了確認。
-                // ★ Local のドリルダウン中は、まずグループ一覧へ戻る
+                // ★ Local のドリルダウン中は、まず1段戻る
                 //   （プレイリストのドリルダウンも同様）
-                if (currentPlaybackMode == PlaybackMode.LOCAL &&
-                    (localGroupKey != null || localPlaylistDrillId != null)
-                ) {
-                    localGroupKey = null
-                    localPlaylistDrillId = null
-                    refreshLocalBrowser()
+                if (currentPlaybackMode == PlaybackMode.LOCAL && localDrillBack()) {
                     return
                 }
                 if (geckoController.canGoBack) {
@@ -2215,11 +2982,11 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.PLAYLIST)
         }
+        // （タブ切替スワイプは dispatchTouchEvent 側で傍受するため、
+        //   ここでの配線は不要）
         btnLocalBack.setOnClickListener {
             it.hapticTick(appPrefs)
-            localGroupKey = null
-            localPlaylistDrillId = null
-            refreshLocalBrowser()
+            localDrillBack()
         }
         btnLocalSort.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -2345,48 +3112,48 @@ class MainActivity : AppCompatActivity() {
         geckoController.sendWebTheme(isDark)
 
         if (isDark) {
-            mainRootLayout.setBackgroundColor(Color.parseColor("#000000"))
-            topInfoPanel?.setBackgroundColor(Color.parseColor("#0D0D0D"))
-            panelDividerLine?.setBackgroundColor(Color.parseColor("#1C1C1C"))
-            textDacName.setTextColor(Color.parseColor("#F0F0F0"))
+            mainRootLayout.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
+            topInfoPanel?.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
+            panelDividerLine?.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.divider))
+            textDacName.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
             textRateBits.setTextColor(Color.WHITE)
-            textCodec.setTextColor(Color.parseColor("#A0A0A0"))
-            textTransfer.setTextColor(Color.parseColor("#666666"))
-            textPeak.setTextColor(Color.parseColor("#B0B0B0"))
-            textBufferLatency.setTextColor(Color.parseColor("#888888"))
-            textCpuRamMonitor.setTextColor(Color.parseColor("#888888"))
+            textCodec.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_status_codec))
+            textTransfer.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_status_transfer))
+            textPeak.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_status_peak))
+            textBufferLatency.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textCpuRamMonitor.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon)
-            textModeSwitch.setTextColor(Color.parseColor("#E5A93C"))
-            localPlaceholder.setBackgroundColor(Color.parseColor("#000000"))
-            textLocalTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            textLocalMessage.setTextColor(Color.parseColor("#888888"))
+            textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            localPlaceholder.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
+            textLocalTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalAddFolder.setTextColor(Color.parseColor("#E5A93C"))
+            btnLocalAddFolder.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalRescan.setTextColor(Color.parseColor("#E5A93C"))
-            localTrackList.divider = ColorDrawable(Color.parseColor("#1C1C1C"))
+            btnLocalRescan.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider))
             editLocalSearch.setBackgroundResource(R.drawable.bg_local_search)
-            editLocalSearch.setTextColor(Color.parseColor("#F0F0F0"))
-            editLocalSearch.setHintTextColor(Color.parseColor("#777777"))
+            editLocalSearch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            editLocalSearch.setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_tertiary))
             btnLocalSort.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalSort.setTextColor(Color.parseColor("#E5A93C"))
+            btnLocalSort.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalBack.setTextColor(Color.parseColor("#E5A93C"))
-            textLocalGroupTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            localNowPlaying.setBackgroundColor(Color.parseColor("#000000"))
-            textNpEmpty.setTextColor(Color.parseColor("#888888"))
-            textNpQueuePosition.setTextColor(Color.parseColor("#888888"))
-            textNpTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            textNpArtist.setTextColor(Color.parseColor("#BBBBBB"))
-            textNpAlbum.setTextColor(Color.parseColor("#888888"))
-            textNpFormat.setTextColor(Color.parseColor("#888888"))
-            textNpCurrentTime.setTextColor(Color.parseColor("#888888"))
-            textNpTotalTime.setTextColor(Color.parseColor("#888888"))
+            btnLocalBack.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            textLocalGroupTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            localNowPlaying.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
+            textNpEmpty.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpQueuePosition.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            textNpArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_np_artist))
+            textNpAlbum.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpFormat.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpCurrentTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpTotalTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             seekNpProgress.progressTintList =
-                ColorStateList.valueOf(Color.parseColor("#E5A93C"))
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.accent))
             seekNpProgress.thumbTintList = ColorStateList.valueOf(Color.WHITE)
             btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
             btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
@@ -2400,68 +3167,68 @@ class MainActivity : AppCompatActivity() {
             updateLocalTabStyles()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
-            btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
-            btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
-            btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
+            btnReload.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.label_gray))
+            btnDspSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            btnUiSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent))
         } else {
-            mainRootLayout.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            topInfoPanel?.setBackgroundColor(Color.parseColor("#F5F5F7"))
-            panelDividerLine?.setBackgroundColor(Color.parseColor("#E0E0E5"))
-            textDacName.setTextColor(Color.parseColor("#1C1C1E"))
-            textRateBits.setTextColor(Color.parseColor("#1C1C1E"))
-            textCodec.setTextColor(Color.parseColor("#636366"))
-            textTransfer.setTextColor(Color.parseColor("#636366"))
-            textPeak.setTextColor(Color.parseColor("#48484A"))
-            textBufferLatency.setTextColor(Color.parseColor("#636366"))
-            textCpuRamMonitor.setTextColor(Color.parseColor("#636366"))
+            mainRootLayout.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            topInfoPanel?.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.surface_panel_light))
+            panelDividerLine?.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
+            textDacName.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textRateBits.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textCodec.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textTransfer.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textPeak.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_strong_light))
+            textBufferLatency.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textCpuRamMonitor.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            textModeSwitch.setTextColor(Color.parseColor("#D49B28"))
-            localPlaceholder.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            textLocalTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            textLocalMessage.setTextColor(Color.parseColor("#636366"))
+            textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            localPlaceholder.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            textLocalTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalAddFolder.setTextColor(Color.parseColor("#D49B28"))
+            btnLocalAddFolder.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalRescan.setTextColor(Color.parseColor("#D49B28"))
-            localTrackList.divider = ColorDrawable(Color.parseColor("#E0E0E5"))
+            btnLocalRescan.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
             editLocalSearch.setBackgroundResource(R.drawable.bg_local_search_light)
-            editLocalSearch.setTextColor(Color.parseColor("#1C1C1E"))
-            editLocalSearch.setHintTextColor(Color.parseColor("#9A9AA0"))
+            editLocalSearch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            editLocalSearch.setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_tertiary_light))
             btnLocalSort.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalSort.setTextColor(Color.parseColor("#D49B28"))
+            btnLocalSort.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalBack.setTextColor(Color.parseColor("#D49B28"))
-            textLocalGroupTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            localNowPlaying.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            textNpEmpty.setTextColor(Color.parseColor("#636366"))
-            textNpQueuePosition.setTextColor(Color.parseColor("#636366"))
-            textNpTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            textNpArtist.setTextColor(Color.parseColor("#48484A"))
-            textNpAlbum.setTextColor(Color.parseColor("#636366"))
-            textNpFormat.setTextColor(Color.parseColor("#636366"))
-            textNpCurrentTime.setTextColor(Color.parseColor("#636366"))
-            textNpTotalTime.setTextColor(Color.parseColor("#636366"))
+            btnLocalBack.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            textLocalGroupTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            localNowPlaying.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            textNpEmpty.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpQueuePosition.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textNpArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_strong_light))
+            textNpAlbum.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpFormat.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpCurrentTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpTotalTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             seekNpProgress.progressTintList =
-                ColorStateList.valueOf(Color.parseColor("#D49B28"))
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             seekNpProgress.thumbTintList =
-                ColorStateList.valueOf(Color.parseColor("#1C1C1E"))
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             // ★ シャッフル / リピートは円で囲わない（ダーク側と同じ）
             btnNpPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
-            btnNpPrev.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnNpNext.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnNpPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnNpPrev.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnNpNext.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnNpPlayPause.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             updateNpToggleStates()
             updateLocalTabStyles()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
-            btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
-            btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
+            btnReload.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnDspSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            btnUiSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
         }
     }
 
@@ -2558,8 +3325,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateNpToggleStates() {
         if (!::btnNpShuffle.isInitialized || !::localPlayer.isInitialized) return
         val isDark = isDarkThemeActive()
-        val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
-        val colorOff = Color.parseColor(if (isDark) "#777777" else "#9A9AA0")
+        val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+        val colorOff = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light)
         btnNpShuffle.setColorFilter(
             if (localPlayer.shuffleEnabled) colorAccent else colorOff
         )
@@ -2671,9 +3438,9 @@ class MainActivity : AppCompatActivity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val track = tracks[position]
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
-            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
             // ★ 再生中ハイライトは位置ではなく曲そのもの（URI）で判定する。
             //   表示リストとキューの並びが一致しない瞬間（再スキャン直後等）
             //   でも別の曲を光らせないため。
@@ -2727,7 +3494,7 @@ class MainActivity : AppCompatActivity() {
         //   ImageView の tag に URI を持たせ、一致したときだけ差し替える。
         private fun bindThumbnail(thumbView: ImageView, track: LibraryRepository.Track, isDark: Boolean) {
             val cacheKey = track.uri.toString()
-            thumbView.setBackgroundColor(Color.parseColor(if (isDark) "#1C1C1C" else "#E9E9EC"))
+            thumbView.setBackgroundColor(ContextCompat.getColor(this@MainActivity, if (isDark) R.color.surface_thumbnail else R.color.surface_thumbnail_light))
             thumbView.tag = cacheKey
             val cached = localThumbCache.get(cacheKey)
             if (cached != null) {
@@ -2804,8 +3571,8 @@ class MainActivity : AppCompatActivity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val group = groups[position]
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
 
             val root = (convertView as? LinearLayout) ?: buildRow()
             val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
@@ -2866,6 +3633,94 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ アーティスト配下のアルバム一覧のアダプタ。先頭行は
+    //   「全てのアルバムを再生」のアクション行で、それ以降が
+    //   アルバム本体（名前＋曲数）。行レイアウトはグループ行と
+    //   同じ作りで使い回す（プレイリスト一覧と同じ +1 行方式）。
+    private inner class LocalArtistAlbumsAdapter(
+        private val groups: List<LocalGroup>,
+        private val totalTrackCount: Int
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = groups.size + 1
+
+        // position 0 は全曲再生行のため null を返す
+        fun albumGroupAt(position: Int): LocalGroup? =
+            if (position == 0) null else groups.getOrNull(position - 1)
+
+        override fun getItem(position: Int): LocalGroup? = albumGroupAt(position)
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val isDark = isDarkThemeActive()
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+
+            val root = (convertView as? LinearLayout) ?: buildRow()
+            val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val chevronView = root.getChildAt(1) as TextView
+
+            if (position == 0) {
+                nameView.text = "全てのアルバムを再生"
+                nameView.setTextColor(colorAccent)
+                subView.text = "全 $totalTrackCount 曲"
+                subView.setTextColor(colorValue)
+                chevronView.text = "▶"
+                chevronView.setTextColor(colorAccent)
+            } else {
+                val group = groups[position - 1]
+                nameView.text = group.label
+                nameView.setTextColor(colorTitle)
+                subView.text = "${group.tracks.size} 曲"
+                subView.setTextColor(colorValue)
+                chevronView.text = "›"
+                chevronView.setTextColor(colorValue)
+            }
+            return root
+        }
+
+        private fun buildRow(): LinearLayout {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            val root = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(9), dp(4), dp(9))
+                layoutParams = android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val texts = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val nameView = TextView(this@MainActivity).apply {
+                textSize = 14.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(nameView)
+            texts.addView(subView)
+            val chevronView = TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 16f
+                setPadding(dp(10), 0, dp(2), 0)
+            }
+            root.addView(texts)
+            root.addView(chevronView)
+            return root
+        }
+    }
+
     // ★ プレイリスト一覧のアダプタ。先頭行は「＋ 新規作成」の
     //   アクション行で、それ以降がプレイリスト本体（名前＋曲数）。
     //   行レイアウトはグループ行と同じ作りで使い回す。
@@ -2883,9 +3738,9 @@ class MainActivity : AppCompatActivity() {
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
-            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
 
             val root = (convertView as? LinearLayout) ?: buildRow()
             val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
@@ -3194,7 +4049,7 @@ class MainActivity : AppCompatActivity() {
             val tpCurrent = svc?.truePeakCurrentReductionDb ?: 0f
             val tpStr = if (svc != null && !svc.isDirectSource && appPrefs.isTruePeakGuardEnabled) String.format(java.util.Locale.US, "-%.1f", tpCurrent) else "-"
             textBufferLatency.text = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMs}ms) TP:${tpStr}dB"
-            textBufferLatency.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
+            textBufferLatency.setTextColor(if (isDarkThemeActive()) ContextCompat.getColor(this@MainActivity, R.color.text_secondary) else ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
         } else {
             textCpuRamMonitor.visibility = View.GONE
             textBufferLatency.visibility = View.GONE
@@ -3207,7 +4062,7 @@ class MainActivity : AppCompatActivity() {
         val maxBits = if (displayBitMode == "32bit") 32 else (if (displayBitMode == "24bit") 24 else 16)
         val activeBits = if (!isPlayingState || (peakDbL <= -50f && peakDbR <= -50f)) 0 else Integer.bitCount(bitActivityMask).coerceIn(0, maxBits)
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
-        textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
+        textBitDepth.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
 
         val now = System.currentTimeMillis()
         if (now - lastBitResetTime > 250L) {

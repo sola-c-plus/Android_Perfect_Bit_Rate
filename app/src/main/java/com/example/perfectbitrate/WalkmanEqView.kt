@@ -6,6 +6,7 @@ import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.View
+import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import kotlin.math.abs
 import kotlin.math.max
@@ -152,7 +153,7 @@ class WalkmanEqView @JvmOverloads constructor(
         style = Paint.Style.STROKE
     }
     private val cursorLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E5A93C")
+        color = ContextCompat.getColor(context, R.color.accent)
         strokeWidth = 1.2f * density
     }
     private val curvePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -167,7 +168,7 @@ class WalkmanEqView @JvmOverloads constructor(
         pathEffect = DashPathEffect(floatArrayOf(5f * density, 4f * density), 0f)
     }
     private val spectrumLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E5A93C")
+        color = ContextCompat.getColor(context, R.color.accent)
         strokeWidth = 1.6f * density
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -184,7 +185,7 @@ class WalkmanEqView @JvmOverloads constructor(
         textAlign = Paint.Align.CENTER
     }
     private val hiResLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E5A93C")
+        color = ContextCompat.getColor(context, R.color.accent)
         textSize = 8.5f * density
         textAlign = Paint.Align.CENTER
     }
@@ -222,27 +223,27 @@ class WalkmanEqView @JvmOverloads constructor(
 
     private fun updatePaintsForTheme() {
         if (isLightMode) {
-            gridPaint.color = Color.parseColor("#E5E5EA")
+            gridPaint.color = ContextCompat.getColor(context, R.color.component_inactive_light)
             gridPaint.strokeWidth = 0.75f * density
-            centerLinePaint.color = Color.parseColor("#C7C7CC")
+            centerLinePaint.color = ContextCompat.getColor(context, R.color.component_line_light)
             centerLinePaint.strokeWidth = 1.0f * density
-            gridBorderPaint.color = Color.parseColor("#D1D1D6")
-            curvePaint.color = Color.parseColor("#1C1C1E")
-            bypassCurvePaint.color = Color.parseColor("#8E8E93")
-            labelPaint.color = Color.parseColor("#8E8E93")
-            selectedLabelPaint.color = Color.parseColor("#1C1C1E")
-            pointPaint.color = Color.parseColor("#1C1C1E")
+            gridBorderPaint.color = ContextCompat.getColor(context, R.color.component_border_light)
+            curvePaint.color = ContextCompat.getColor(context, R.color.text_primary_light)
+            bypassCurvePaint.color = ContextCompat.getColor(context, R.color.label_gray_light)
+            labelPaint.color = ContextCompat.getColor(context, R.color.label_gray_light)
+            selectedLabelPaint.color = ContextCompat.getColor(context, R.color.text_primary_light)
+            pointPaint.color = ContextCompat.getColor(context, R.color.text_primary_light)
         } else {
-            gridPaint.color = Color.parseColor("#1C1C1C")
+            gridPaint.color = ContextCompat.getColor(context, R.color.divider)
             gridPaint.strokeWidth = 0.75f * density
-            centerLinePaint.color = Color.parseColor("#3C3C3C")
+            centerLinePaint.color = ContextCompat.getColor(context, R.color.grid_line)
             centerLinePaint.strokeWidth = 1.0f * density
-            gridBorderPaint.color = Color.parseColor("#2E2E2E")
-            curvePaint.color = Color.parseColor("#FFFFFF")
+            gridBorderPaint.color = ContextCompat.getColor(context, R.color.grid_border)
+            curvePaint.color = ContextCompat.getColor(context, R.color.white)
             bypassCurvePaint.color = Color.parseColor("#444444")
-            labelPaint.color = Color.parseColor("#888888")
-            selectedLabelPaint.color = Color.parseColor("#FFFFFF")
-            pointPaint.color = Color.parseColor("#FFFFFF")
+            labelPaint.color = ContextCompat.getColor(context, R.color.text_secondary)
+            selectedLabelPaint.color = ContextCompat.getColor(context, R.color.white)
+            pointPaint.color = ContextCompat.getColor(context, R.color.white)
         }
     }
 
@@ -480,13 +481,13 @@ class WalkmanEqView @JvmOverloads constructor(
                 val x = xArr[i]
                 val y = yArr[i]
                 if (i == selectedBandIndex) {
-                    pointPaint.color = Color.parseColor("#E5A93C")
+                    pointPaint.color = ContextCompat.getColor(context, R.color.accent)
                     canvas.drawCircle(x, y, 5.0f * density, pointPaint)
                     pointPaint.color = if (isLightMode) Color.WHITE else Color.parseColor("#121212")
                     canvas.drawCircle(x, y, 2.0f * density, pointPaint)
-                    pointPaint.color = if (isLightMode) Color.parseColor("#1C1C1E") else Color.WHITE
+                    pointPaint.color = if (isLightMode) ContextCompat.getColor(context, R.color.text_primary_light) else Color.WHITE
                 } else {
-                    pointPaint.color = if (isLightMode) Color.parseColor("#1C1C1E") else Color.WHITE
+                    pointPaint.color = if (isLightMode) ContextCompat.getColor(context, R.color.text_primary_light) else Color.WHITE
                     canvas.drawCircle(x, y, 3.0f * density, pointPaint)
                 }
             }
