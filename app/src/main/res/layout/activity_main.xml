@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- ★ ルートは FrameLayout。通常 UI は mainRootLayout のみで、
+     Local の再生画面はオーバーレイにせず Local コンテンツ領域内の
+     ページとして出す（上部ステータスヘッダーは常時表示したまま）。 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/mainRootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#000000">
+
+    <LinearLayout
+        android:id="@+id/mainRootLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="#000000">
 
     <LinearLayout
         android:id="@+id/topInfoPanel"
@@ -250,8 +258,10 @@
 
             <!-- ★ Local ライブラリのヘッダー: タイトル＋最小限の操作
                  （再スキャン / SAF フォルダ追加）。取得範囲の本格的な設定 UI は
-                 設定画面側の次 PR で実装する。 -->
+                 設定画面側の次 PR で実装する。ブラウザ側のクロームのため、
+                 「再生」タブ表示中はコード側で隠す（updateLocalChromeVisibility）。 -->
             <LinearLayout
+                android:id="@+id/localHeaderRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
@@ -374,15 +384,416 @@
                     android:ellipsize="middle" />
             </LinearLayout>
 
-            <!-- ★ ライブラリのタブバー（Phase 2-1: 全曲 / アルバム /
-                 アーティスト / フォルダ）。選択状態の配色はコード側で
-                 テーマに合わせて切り替える（updateLocalTabStyles）。 -->
+            <!-- ★ Local コンテンツ領域のページコンテナ: ブラウザ
+                 ページ（検索 / ドリルダウン / 一覧）と再生ページ
+                 （「再生」タブ）を出し分ける。上部ステータスヘッダー
+                 （topInfoPanel）はこの外側にあるため、どちらのページ
+                 でも隠れず常時表示される。 -->
+            <FrameLayout
+                android:id="@+id/localPageContainer"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="8dp">
+
+                <!-- ★ ブラウザページ: 検索 / ソート、グループの
+                     ドリルダウンヘッダー、曲・グループの一覧 -->
+                <LinearLayout
+                    android:id="@+id/localBrowserPage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical">
+
+                    <!-- ★ 検索欄＋ソート切替（Phase 2-1）。検索は
+                         タイトル / アーティスト / アルバムを対象に
+                         した部分一致フィルタ。ソートは全曲タブの並び
+                         （タイトル / アーティスト / アルバム）を
+                         ダイアログで切り替える。ブラウザ系タブでのみ
+                         表示され、「再生」タブではページごと隠れる。 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <EditText
+                            android:id="@+id/editLocalSearch"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_local_search"
+                            android:hint="タイトル・アーティスト・アルバムで検索"
+                            android:imeOptions="actionSearch"
+                            android:inputType="text"
+                            android:maxLines="1"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="7dp"
+                            android:paddingBottom="7dp"
+                            android:textColor="#F0F0F0"
+                            android:textColorHint="#777777"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnLocalSort"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_icon"
+                            android:fontFamily="@font/font_dap_condensed"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="6dp"
+                            android:paddingBottom="6dp"
+                            android:text="タイトル順"
+                            android:textColor="#E5A93C"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- ★ グループ（アルバム等）へドリルダウンした
+                         ときのヘッダー。戻るボタン＋グループ名。
+                         通常時は gone。 -->
+                    <LinearLayout
+                        android:id="@+id/localGroupHeader"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/btnLocalBack"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_btn_icon"
+                            android:fontFamily="@font/font_dap_condensed"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="5dp"
+                            android:paddingBottom="5dp"
+                            android:text="‹ 戻る"
+                            android:textColor="#E5A93C"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/textLocalGroupTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:textColor="#F0F0F0"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- ★ 一覧（曲リスト / グループリストを同じ
+                         ListView で出し分ける） -->
+                    <ListView
+                        android:id="@+id/localTrackList"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:layout_marginTop="6dp"
+                        android:divider="#1C1C1C"
+                        android:dividerHeight="1dp"
+                        android:cacheColorHint="@android:color/transparent"
+                        android:listSelector="@android:color/transparent" />
+                </LinearLayout>
+
+                <!-- ★ 再生ページ（「再生」タブ）: WALKMAN の再生画面
+                     を手本にした、余白を広く取った中央寄せの
+                     Now Playing（詳細は localNpContent 内のコメント）。
+                     全画面オーバーレイにはせず Local コンテンツ領域内
+                     のページとして表示するため、上部ステータス
+                     ヘッダーは隠れない。色はテーマに合わせてコード側で
+                     切り替える（applyThemeUi）。現在曲が無いときは
+                     空状態（textNpEmpty）を出す。 -->
+                <FrameLayout
+                    android:id="@+id/localNowPlaying"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="#000000"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/localNpContent"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:orientation="vertical"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="14dp"
+                        android:paddingBottom="10dp">
+
+                        <!-- ★ WALKMAN の再生画面に寄せた中央寄せレイアウト:
+                             アートワークは左右に余白を残して中央に置き、
+                             その下にフォーマット、タイトル/アーティスト/
+                             アルバムをいずれも中央寄せで静かに並べる。
+                             「NOW PLAYING」ラベルは置かず、キュー位置は
+                             シークバーの上に小さく中央表示する。
+                             縦位置は3つのスペーサ（上 : 中 : 下 =
+                             重み 1 : 2 : 2）で余白を配分する：
+                             アートワークは上寄りに置き、曲情報〜操作行
+                             のブロックはアートワークとの間隔を広く
+                             取って下寄りに置く（中央に固めない）。
+                             下側にも余白を残し、ブロックが下部タブ
+                             バーに張り付かないようにする。 -->
+
+                        <!-- ★ 上側スペーサ（小さめにしてアートワークを上寄りに） -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="1" />
+
+                        <ImageView
+                            android:id="@+id/imgNpArtwork"
+                            android:layout_width="match_parent"
+                            android:layout_height="288dp"
+                            android:layout_marginStart="30dp"
+                            android:layout_marginEnd="30dp"
+                            android:layout_marginTop="4dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_local_artwork_placeholder" />
+
+                        <!-- ★ 中間スペーサ（アートワークと下側ブロックの
+                             間隔を広く取り、曲情報〜操作行を下寄りに） -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="2" />
+
+                        <TextView
+                            android:id="@+id/textNpFormat"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:gravity="center"
+                            android:textColor="#888888"
+                            android:textSize="10.5sp"
+                            android:fontFamily="@font/font_dap_mono"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
+
+                        <TextView
+                            android:id="@+id/textNpTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:gravity="center"
+                            android:textColor="#F0F0F0"
+                            android:textSize="24sp"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/font_dap_heading"
+                            android:ellipsize="end"
+                            android:maxLines="2" />
+
+                        <TextView
+                            android:id="@+id/textNpArtist"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:gravity="center"
+                            android:textColor="#BBBBBB"
+                            android:textSize="16sp"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
+
+                        <TextView
+                            android:id="@+id/textNpAlbum"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:gravity="center"
+                            android:textColor="#888888"
+                            android:textSize="14sp"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
+
+                        <!-- ★ キュー位置（n / N）はシークバーの上に
+                             小さく中央表示（WALKMAN の 56/307 形式） -->
+                        <TextView
+                            android:id="@+id/textNpQueuePosition"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="18dp"
+                            android:gravity="center"
+                            android:textColor="#888888"
+                            android:textSize="10.5sp"
+                            android:fontFamily="@font/font_dap_mono" />
+
+                        <!-- ★ シークバーは左右に余白を持たせて短くし、
+                             両端の時刻表示もバーの範囲内に揃える -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:layout_marginStart="20dp"
+                            android:layout_marginEnd="20dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/textNpCurrentTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0:00"
+                                android:textColor="#888888"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+
+                            <SeekBar
+                                android:id="@+id/seekNpProgress"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:max="1000"
+                                android:progress="0"
+                                android:progressTint="#E5A93C"
+                                android:thumbTint="#FFFFFF"
+                                android:paddingStart="6dp"
+                                android:paddingEnd="6dp" />
+
+                            <TextView
+                                android:id="@+id/textNpTotalTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0:00"
+                                android:textColor="#888888"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+                        </LinearLayout>
+
+                        <!-- ★ 操作行: 左端にシャッフル、右端に
+                             リピート（ユーザー指定の並び）、中央に
+                             前へ/再生・一時停止（大きめ）/次へ。
+                             行に左右マージンを付けて両端のトグルを
+                             画面端から内側へ寄せ、中央3ボタン間の
+                             間隔も広めに取る。両端のトグルは円で
+                             囲わずアイコンのみ（状態は色で示す） -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="14dp"
+                            android:layout_marginStart="16dp"
+                            android:layout_marginEnd="16dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <ImageButton
+                                android:id="@+id/btnNpShuffle"
+                                android:layout_width="40dp"
+                                android:layout_height="40dp"
+                                android:src="@drawable/ic_shuffle"
+                                android:scaleType="centerInside"
+                                android:background="@null"
+                                android:padding="9dp" />
+
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpPrev"
+                                android:layout_width="50dp"
+                                android:layout_height="50dp"
+                                android:src="@drawable/ic_skip_previous"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:padding="10dp"
+                                android:layout_marginEnd="18dp" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpPlayPause"
+                                android:layout_width="68dp"
+                                android:layout_height="68dp"
+                                android:src="@drawable/ic_pause"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_large"
+                                android:padding="15dp"
+                                android:layout_marginEnd="18dp" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpNext"
+                                android:layout_width="50dp"
+                                android:layout_height="50dp"
+                                android:src="@drawable/ic_skip_next"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:padding="10dp" />
+
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpRepeat"
+                                android:layout_width="40dp"
+                                android:layout_height="40dp"
+                                android:src="@drawable/ic_repeat"
+                                android:scaleType="centerInside"
+                                android:background="@null"
+                                android:padding="9dp" />
+                        </LinearLayout>
+
+                        <!-- ★ 下側スペーサ（下側ブロックが下部タブバーに
+                             張り付かないよう、適度な余白を残す） -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="2" />
+                    </LinearLayout>
+
+                    <!-- ★ 空状態: 再生中の曲が無いときの表示 -->
+                    <TextView
+                        android:id="@+id/textNpEmpty"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:text="再生中の曲がありません"
+                        android:textColor="#888888"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+                </FrameLayout>
+            </FrameLayout>
+
+            <!-- ★ ライブラリの下部タブバー: 左から 再生 / 全曲 /
+                 アルバム / アーティスト / フォルダ。各タブはアイコン
+                 （ic_tab_*）＋ラベルの構成で、選択状態の配色（アイコン
+                 の tint とラベル色）はコード側でテーマに合わせて
+                 切り替える（updateLocalTabStyles）。「再生」は再生
+                 ページへの切替で、一覧で曲をタップして再生が始まった
+                 ときも自動で切り替わる（明示タップ起点のみ。自動進行
+                 や通知からの操作では切り替わらない）。ドリルダウン中も
+                 含め Local 表示中は常に出し、タブ切替でドリルダウン
+                 から抜けられるようにする。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tabLocalNowPlaying"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_now_playing"
+                    android:drawablePadding="3dp"
+                    android:text="再生"
+                    android:textColor="#888888"
+                    android:textSize="12sp"
+                    android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
                     android:id="@+id/tabLocalAll"
@@ -392,6 +803,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_all"
+                    android:drawablePadding="3dp"
                     android:text="全曲"
                     android:textColor="#F0F0F0"
                     android:textSize="12sp"
@@ -406,6 +819,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_album"
+                    android:drawablePadding="3dp"
                     android:text="アルバム"
                     android:textColor="#888888"
                     android:textSize="12sp"
@@ -419,6 +834,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_artist"
+                    android:drawablePadding="3dp"
                     android:text="アーティスト"
                     android:textColor="#888888"
                     android:textSize="12sp"
@@ -432,109 +849,15 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_folder"
+                    android:drawablePadding="3dp"
                     android:text="フォルダ"
                     android:textColor="#888888"
                     android:textSize="12sp"
                     android:fontFamily="@font/font_dap_condensed" />
             </LinearLayout>
-
-            <!-- ★ 検索欄＋ソート切替（Phase 2-1）。検索はタイトル /
-                 アーティスト / アルバムを対象にした部分一致フィルタ。
-                 ソートは全曲タブの並び（タイトル / アーティスト /
-                 アルバム）をダイアログで切り替える。 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <EditText
-                    android:id="@+id/editLocalSearch"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_local_search"
-                    android:hint="タイトル・アーティスト・アルバムで検索"
-                    android:imeOptions="actionSearch"
-                    android:inputType="text"
-                    android:maxLines="1"
-                    android:paddingStart="10dp"
-                    android:paddingEnd="10dp"
-                    android:paddingTop="7dp"
-                    android:paddingBottom="7dp"
-                    android:textColor="#F0F0F0"
-                    android:textColorHint="#777777"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/btnLocalSort"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:background="@drawable/bg_btn_icon"
-                    android:fontFamily="@font/font_dap_condensed"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp"
-                    android:text="タイトル順"
-                    android:textColor="#E5A93C"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- ★ グループ（アルバム等）へドリルダウンしたときのヘッダー。
-                 戻るボタン＋グループ名。通常時は gone。 -->
-            <LinearLayout
-                android:id="@+id/localGroupHeader"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-
-                <TextView
-                    android:id="@+id/btnLocalBack"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_btn_icon"
-                    android:fontFamily="@font/font_dap_condensed"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="5dp"
-                    android:paddingBottom="5dp"
-                    android:text="‹ 戻る"
-                    android:textColor="#E5A93C"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/textLocalGroupTitle"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:textColor="#F0F0F0"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- ★ 一覧（曲リスト / グループリストを同じ ListView で出し分ける） -->
-            <ListView
-                android:id="@+id/localTrackList"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:layout_marginTop="6dp"
-                android:divider="#1C1C1C"
-                android:dividerHeight="1dp"
-                android:cacheColorHint="@android:color/transparent"
-                android:listSelector="@android:color/transparent" />
         </LinearLayout>
     </FrameLayout>
+    </LinearLayout>
 
-</LinearLayout>
+</FrameLayout>
