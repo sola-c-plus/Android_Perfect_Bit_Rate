@@ -42,6 +42,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_LOCAL_SORT_MODE = "localSortMode"
         private const val KEY_LOCAL_SHUFFLE_ENABLED = "localShuffleEnabled"
         private const val KEY_LOCAL_REPEAT_MODE = "localRepeatMode"
+        private const val KEY_LOCAL_ARTIST_GROUPING = "localArtistGrouping"
 
         // ★ Local ライブラリ「全曲」タブのソート種別（Phase 2-1）。
         const val LOCAL_SORT_TITLE = 0
@@ -53,6 +54,12 @@ class AppPreferences private constructor(context: Context) {
         const val LOCAL_REPEAT_OFF = 0
         const val LOCAL_REPEAT_ALL = 1
         const val LOCAL_REPEAT_ONE = 2
+
+        // ★ Local ライブラリ「アーティスト」タブのグルーピングキー。
+        //   ALBUM_ARTIST: アルバムアーティスト（タグの album_artist、
+        //   無い曲はアーティストで代替）。ARTIST: 曲のアーティスト。
+        const val LOCAL_ARTIST_GROUPING_ALBUM_ARTIST = 0
+        const val LOCAL_ARTIST_GROUPING_ARTIST = 1
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -197,6 +204,25 @@ class AppPreferences private constructor(context: Context) {
             return if (stored in LOCAL_REPEAT_OFF..LOCAL_REPEAT_ONE) stored else LOCAL_REPEAT_OFF
         }
         set(value) = prefs.edit { putInt(KEY_LOCAL_REPEAT_MODE, value) }
+
+    // ★ Local ライブラリ「アーティスト」タブのグルーピングキー
+    //   （アルバムアーティスト / アーティスト）。選択肢外の値は
+    //   アルバムアーティストへ倒す。導出（MainActivity 側）が都度
+    //   読むため、変更は次回のアーティスト表示へ即時反映される。
+    var localArtistGrouping: Int
+        get() {
+            val stored = prefs.getInt(
+                KEY_LOCAL_ARTIST_GROUPING, LOCAL_ARTIST_GROUPING_ALBUM_ARTIST
+            )
+            return if (stored in
+                LOCAL_ARTIST_GROUPING_ALBUM_ARTIST..LOCAL_ARTIST_GROUPING_ARTIST
+            ) {
+                stored
+            } else {
+                LOCAL_ARTIST_GROUPING_ALBUM_ARTIST
+            }
+        }
+        set(value) = prefs.edit { putInt(KEY_LOCAL_ARTIST_GROUPING, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)

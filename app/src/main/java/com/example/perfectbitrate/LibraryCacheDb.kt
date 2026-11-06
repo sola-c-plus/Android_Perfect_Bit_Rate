@@ -34,7 +34,9 @@ class LibraryCacheDb(context: Context) :
                 "is_dsd INTEGER NOT NULL, " +
                 "source TEXT NOT NULL, " +
                 // 実ファイル同一性キー（v2 で追加。取れない経路では NULL）
-                "file_key TEXT)"
+                "file_key TEXT, " +
+                // アルバムアーティスト（v3 で追加。タグが無い曲は空文字）
+                "album_artist TEXT NOT NULL DEFAULT '')"
         )
     }
 
@@ -61,6 +63,7 @@ class LibraryCacheDb(context: Context) :
             val dsdCol = cursor.getColumnIndexOrThrow("is_dsd")
             val sourceCol = cursor.getColumnIndexOrThrow("source")
             val fileKeyCol = cursor.getColumnIndexOrThrow("file_key")
+            val albumArtistCol = cursor.getColumnIndexOrThrow("album_artist")
             while (cursor.moveToNext()) {
                 result += LibraryRepository.Track(
                     uri = Uri.parse(cursor.getString(uriCol)),
@@ -80,7 +83,8 @@ class LibraryCacheDb(context: Context) :
                     } catch (e: Exception) {
                         LibraryRepository.Track.Source.MEDIASTORE
                     },
-                    fileKey = cursor.getString(fileKeyCol)?.takeIf { it.isNotEmpty() }
+                    fileKey = cursor.getString(fileKeyCol)?.takeIf { it.isNotEmpty() },
+                    albumArtist = cursor.getString(albumArtistCol) ?: ""
                 )
             }
         }
@@ -127,20 +131,22 @@ class LibraryCacheDb(context: Context) :
             put("is_dsd", if (track.isDsd) 1 else 0)
             put("source", track.source.name)
             put("file_key", track.fileKey)
+            put("album_artist", track.albumArtist)
         }
     }
 
     companion object {
         private const val DB_NAME = "local_library.db"
         // v2: file_key 列を追加（onUpgrade は作り直しなので移行は不要）
-        private const val DB_VERSION = 2
+        // v3: album_artist 列を追加（同じく作り直し。再プローブで再構築される）
+        private const val DB_VERSION = 3
         private const val TABLE = "tracks"
         private const val DELETE_CHUNK = 400
         private val COLUMNS = arrayOf(
             "uri", "display_name", "title", "artist", "album",
             "duration_ms", "size_bytes", "modified_ms",
             "sample_rate", "bit_depth", "codec_name", "is_dsd", "source",
-            "file_key"
+            "file_key", "album_artist"
         )
     }
 }

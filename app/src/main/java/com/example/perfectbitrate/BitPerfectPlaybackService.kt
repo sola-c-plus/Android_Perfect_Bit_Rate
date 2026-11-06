@@ -107,6 +107,21 @@ class BitPerfectPlaybackService : Service() {
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
+    // ★ 現在の供給元が Local（LocalPlayer）かどうか（MainActivity が
+    //   モード切替時に設定する）。ストリーム構成の切替中（isSwitchingRate）
+    //   の pushPcm の扱いを供給元で分けるために使う: YT は実時間供給の
+    //   ため切替中のチャンクは破棄してよいが、Local はデコード側が
+    //   Service キュー残量で律速される前提のため、破棄するとキューが
+    //   空のままデコードだけが走り切ってしまう（awaitSwitchComplete 参照）。
+    @Volatile
+    var isLocalSourceActive = false
+
+    // ストリーム構成切替の完了待ち（Local 供給時）。切替は trackExecutor
+    // 上の AudioTrack 再初期化で、通常は短時間で終わる。上限は安全弁で、
+    // 超えた場合は従来どおり破棄に倒す（デコードを無期限には止めない）。
+    private val SWITCH_WAIT_MAX_MS = 3000L
+    private val SWITCH_WAIT_POLL_MS = 5L
+
     // ★ ポーズで閉じた AudioTrack の再生成時に、停止前のシステム音量を維持するための保留記録。
     //   ウィジェット/通知ポーズは forceCloseDacStream() で AudioTrack を破棄するため、再再生時の
     //   再生成で restoreVolumeForDevice() が走り、接続/切断時の安全策（USB は音量0から開始、
@@ -238,6 +253,41 @@ class BitPerfectPlaybackService : Service() {
     var onPeakListener: ((Float, Float, Int, Int, Int) -> Unit)? = null
     // ★ Phase 4: 実績値の通知は表示専用。受け手は要求値や Prefs へ書き戻してはならない。
     var onActualBitModeChanged: ((String) -> Unit)? = null
+
+    // ★ ストリーム構成の結果通知（MainActivity が表示と Local 側の
+    //   対処に使う）。いずれも initAudioTrack の実行スレッドから
+    //   呼ばれるため、受け手は UI 操作を UI スレッドへ寄せること。
+    // レートフォールバック発生（要求レート → 実績レート）。整数倍に
+    // 落とす範囲のフォールバック（アップサンプリング倍率の切り下げ）。
+    var onStreamRateFallback: ((requestedRate: Int, actualRate: Int) -> Unit)? = null
+    // 出力レート上限の要求: ソースレートそのもので AudioTrack を作れ
+    // なかったため、供給側（Local のデコーダ）にこのレートへの変換を
+    // 求める通知。受け手が上限を適用して再供給すると、その レートで
+    // 再構成が走り直す。
+    var onOutputRateCapNeeded: ((capRateHz: Int) -> Unit)? = null
+    // 構成失敗の上限到達: 同じ構成で MAX_STREAM_INIT_FAILURES 回連続
+    // して AudioTrack を作れなかった（理由は「構成できません」として
+    // ユーザーへ出し、Local 供給時はその曲を終えるための通知）。
+    var onStreamConfigurationFailed: ((baseRate: Int, targetRate: Int) -> Unit)? = null
+
+    // doInit が記録し、initAudioTrack が消費する保留中の構成結果。
+    private var pendingRateFallback: Pair<Int, Int>? = null
+    private var pendingOutputRateCapHz = 0
+
+    // ★ 構成失敗の連続回数（同じ構成＝署名が同じ間だけ数える）。
+    //   pushPcm の再構成ループに上限を設けるための記録で、成功する
+    //   か構成（署名）が変わればリセットされる。レート上限の適用で
+    //   回復が進んでいる間（pendingOutputRateCapHz が出た失敗）は
+    //   数えない（上限適用は「一段下げる」進行そのもののため）。
+    private var streamInitFailureCount = 0
+    private var streamInitFailureSignature: String? = null
+    private var streamFailureNotified = false
+    private val MAX_STREAM_INIT_FAILURES = 3
+
+    // ソースレート未満へのフォールバック先候補（高い順）。出力
+    // デバイスの対応レートが取れない経路（本体出力等）で使う。
+    private val STANDARD_FALLBACK_RATES =
+        listOf(48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000)
 
     // ★ Phase 0: 表示用スナップショット。ライブ再生状態の正は Service であり、
     //   MainActivity はこれを「表示キャッシュ」として読む（ミラー変数の代わり）。
@@ -628,7 +678,19 @@ class BitPerfectPlaybackService : Service() {
         }
 
         if (isSwitchingRate.get()) {
-            return
+            // ★ Local 供給時は破棄せず、構成切替の完了を待ってから
+            //   通常経路で処理する。Local のデコードは Service キュー
+            //   残量へのフロー制御（awaitQueueRoom）で実時間に追従する
+            //   前提だが、切替中は pushPcm が素通りで破棄され、再生
+            //   ループも止まるためキュー残量が 0 のままになり、律速が
+            //   効かずデコードがファイル末尾まで走り切ってしまう。
+            //   あわせて再生し切り待ち（waitForDrainThenAdvance）も
+            //   残量 0 を読み続けて即進行するため、モード切替直後の
+            //   最初の曲だけが「爆速で終わって」次曲へ進んでいた。
+            //   YT はページ側が実時間で供給し続けるため、従来どおり
+            //   破棄で問題ない（待ちを入れると供給が詰まる）。
+            if (!isLocalSourceActive) return
+            if (!awaitSwitchComplete()) return
         }
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
@@ -641,6 +703,16 @@ class BitPerfectPlaybackService : Service() {
                              actualInputRate != baseSampleRate || targetEffectiveRate != lastRequestedTargetRate)
 
         if (needsRecreate) {
+            // ★ 再構成の無限ループ防止: 同じ構成で AudioTrack を
+            //   作れなかったことが上限回数続いている間は、再構成を
+            //   起動せずチャンクを捨てるだけにする。従来は AudioTrack
+            //   が null の間「再構成 → チャンク破棄」を無制限に
+            //   繰り返し、1 チャンクごとに再構成（数百 ms）が走って
+            //   再生位置が実時間の約 1/10 でしか進まず、無音で
+            //   固まったように見えた。構成が変われば（別のレート・
+            //   デバイス・倍率・ビットモード）署名が変わり、通常
+            //   どおり再構成される。
+            if (isStreamInitExhausted(actualInputRate, factorToApply)) return
             baseSampleRate = actualInputRate
             switchStreamConfiguration()
             return
@@ -675,6 +747,83 @@ class BitPerfectPlaybackService : Service() {
             if (underrunOpen.compareAndSet(true, false)) {
                 bufferResumeCount.incrementAndGet()
             }
+        }
+    }
+
+    // ★ ストリーム構成切替（isSwitchingRate）の完了を上限付きで待つ。
+    //   Local のデコードスレッドから pushPcm 経由で呼ばれる。切替は
+    //   trackExecutor 上の AudioTrack 再初期化であり、この待ちの間も
+    //   そちらは進む（このメソッドはロックを取らない）。完了したら
+    //   true（呼び出し側は通常処理へ進む）、上限を超えたら false
+    //   （呼び出し側はそのチャンクを破棄して従来動作に倒す）。
+    private fun awaitSwitchComplete(): Boolean {
+        val deadline = System.currentTimeMillis() + SWITCH_WAIT_MAX_MS
+        while (isSwitchingRate.get()) {
+            if (System.currentTimeMillis() >= deadline) return false
+            try {
+                Thread.sleep(SWITCH_WAIT_POLL_MS)
+            } catch (e: InterruptedException) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // 構成の同一性を表す署名（失敗回数の数え分けと上限判定に使う）。
+    private fun streamInitSignature(baseRate: Int, factor: Int): String =
+        "$baseRate/$factor/${activeOutputDevice?.id}/$requestedBitMode"
+
+    // 同じ構成での AudioTrack 生成失敗が上限に達しているか
+    // （pushPcm の再構成ループの上限判定）。
+    private fun isStreamInitExhausted(inputRate: Int, factor: Int): Boolean {
+        if (streamInitFailureCount < MAX_STREAM_INIT_FAILURES) return false
+        return streamInitSignature(inputRate, factor) == streamInitFailureSignature
+    }
+
+    // ★ initAudioTrack の結果処理: doInit が残した保留（フォール
+    //   バック発生・出力レート上限の要求）をコールバックへ流し、
+    //   失敗の連続回数を更新する。成功すれば失敗記録はリセット。
+    //   上限要求が出た失敗は「一段下げての回復が進行中」なので
+    //   失敗として数えない（上限の梯子が尽きた後の失敗から数える）。
+    private fun handleStreamInitOutcome(success: Boolean) {
+        pendingRateFallback?.let { (requested, actual) ->
+            pendingRateFallback = null
+            Log.i(
+                "BitPerfect",
+                "★ Stream rate fallback: requested ${requested}Hz -> actual ${actual}Hz"
+            )
+            onStreamRateFallback?.invoke(requested, actual)
+        }
+        if (success) {
+            streamInitFailureCount = 0
+            streamInitFailureSignature = null
+            streamFailureNotified = false
+            return
+        }
+        val capHz = pendingOutputRateCapHz
+        pendingOutputRateCapHz = 0
+        if (capHz > 0) {
+            onOutputRateCapNeeded?.invoke(capHz)
+            return
+        }
+        val signature = streamInitSignature(baseSampleRate, effectiveFactor)
+        if (signature == streamInitFailureSignature) {
+            streamInitFailureCount++
+        } else {
+            streamInitFailureSignature = signature
+            streamInitFailureCount = 1
+            streamFailureNotified = false
+        }
+        if (streamInitFailureCount >= MAX_STREAM_INIT_FAILURES && !streamFailureNotified) {
+            streamFailureNotified = true
+            Log.w(
+                "BitPerfect",
+                "★ Stream configuration failed $streamInitFailureCount times " +
+                    "for $signature; giving up on this configuration"
+            )
+            onStreamConfigurationFailed?.invoke(
+                baseSampleRate, baseSampleRate * effectiveFactor
+            )
         }
     }
 
@@ -1117,20 +1266,26 @@ class BitPerfectPlaybackService : Service() {
     //   呼び出し側は「呼ぶ前にフィールドへ書く」ことが要求伝達そのものである。
     // ★ hasPendingInit の合体仕様: 初期化の実行中に追加要求が来た場合は保留フラグだけを立て、
     //   実行中ループが「その時点の最新フィールド値」で再実行する（要求キューではなく最後の状態が勝つ）。
-    fun initAudioTrack() {
+    // 戻り値: 使える AudioTrack を用意できたか。生成の成否は従来
+    // 呼び出し側へ伝わらず、失敗しても成功時と同じ「Ready」ログが
+    // 出ていた（そのため pushPcm が再構成と破棄を繰り返し続けた）。
+    fun initAudioTrack(): Boolean {
         if (isInitializingTrack.getAndSet(true)) {
             hasPendingInit.set(true)
-            return
+            return audioTrack != null
         }
 
+        var success = audioTrack != null
         try {
             do {
                 hasPendingInit.set(false)
-                doInitAudioTrackInternal(requestedBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+                success = doInitAudioTrackInternal(requestedBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
+                handleStreamInitOutcome(success)
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
         }
+        return success
     }
 
     private fun doInitAudioTrackInternal(
@@ -1138,7 +1293,8 @@ class BitPerfectPlaybackService : Service() {
         baseRate: Int,
         factor: Int,
         targetDevice: AudioDeviceInfo?
-    ) {
+    ): Boolean {
+        var initSucceeded = false
         try {
             audioLock.lock()
             try {
@@ -1193,14 +1349,13 @@ class BitPerfectPlaybackService : Service() {
                         actualTargetRate = clampedRate
                     }
                 }
-                val actualFactor = if (baseRate > 0) actualTargetRate / baseRate else factorToApply
+                var actualFactor = if (baseRate > 0) actualTargetRate / baseRate else factorToApply
 
-                // ★ 要求は要求として記録し（pushPcm の再生成判定用）、実績だけを
-                //   effectiveSampleRate / native 初期化へ反映する。
+                // ★ 要求は要求として記録する（pushPcm の再生成判定用）。
+                //   実績（negotiatedFactor / effectiveSampleRate / native
+                //   初期化）は生成が成功したレートで後段に確定する
+                //   （生成失敗時のフォールバック先が実績になるため）。
                 lastRequestedTargetRate = targetRate
-                negotiatedFactor = actualFactor
-                effectiveSampleRate = actualTargetRate
-                NativeAudioEngine.nativeConfigureUpsampler(actualFactor, baseSampleRate)
 
                 val mediaAttr = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -1337,43 +1492,84 @@ class BitPerfectPlaybackService : Service() {
                     else -> 2
                 }
 
-                val minBuf = AudioTrack.getMinBufferSize(actualTargetRate, AudioFormat.CHANNEL_OUT_STEREO, finalEncoding)
-                val desiredBuf = actualTargetRate * 2 * bytesPerSample / 4
-                val bufferSize = max(if (minBuf > 0) minBuf * 4 else 16384, desiredBuf)
+                // ★ 指定レートで AudioTrack の生成を試みる（従来の
+                //   3 回リトライ）。成功したらそのトラックを返す。
+                fun tryCreateTrack(rateHz: Int): AudioTrack? {
+                    val minBuf = AudioTrack.getMinBufferSize(rateHz, AudioFormat.CHANNEL_OUT_STEREO, finalEncoding)
+                    val desiredBuf = rateHz * 2 * bytesPerSample / 4
+                    val bufferSize = max(if (minBuf > 0) minBuf * 4 else 16384, desiredBuf)
+                    for (retry in 0..2) {
+                        try {
+                            val track = AudioTrack.Builder()
+                                .setAudioAttributes(mediaAttr)
+                                .setAudioFormat(
+                                    AudioFormat.Builder()
+                                        .setEncoding(finalEncoding)
+                                        .setSampleRate(rateHz)
+                                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                        .build()
+                                )
+                                .setBufferSizeInBytes(bufferSize)
+                                .setTransferMode(AudioTrack.MODE_STREAM)
+                                .build()
 
-                var createdTrack: AudioTrack? = null
-                for (retry in 0..2) {
-                    try {
-                        val track = AudioTrack.Builder()
-                            .setAudioAttributes(mediaAttr)
-                            .setAudioFormat(
-                                AudioFormat.Builder()
-                                    .setEncoding(finalEncoding)
-                                    .setSampleRate(actualTargetRate)
-                                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                                    .build()
-                            )
-                            .setBufferSizeInBytes(bufferSize)
-                            .setTransferMode(AudioTrack.MODE_STREAM)
-                            .build()
-
-                        if (track.state == AudioTrack.STATE_INITIALIZED) {
-                            targetDevice?.let { track.setPreferredDevice(it) }
-                            // ★ ポーズ後の同一デバイス再生成では接続時の安全策（音量 0 化）を
-                            //   適用せず、停止前の音量を維持する。それ以外は従来どおり。
-                            if (!consumeVolumePreserve(targetDevice)) {
-                                restoreVolumeForDevice(targetDevice)
+                            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                                targetDevice?.let { track.setPreferredDevice(it) }
+                                // ★ ポーズ後の同一デバイス再生成では接続時の安全策（音量 0 化）を
+                                //   適用せず、停止前の音量を維持する。それ以外は従来どおり。
+                                if (!consumeVolumePreserve(targetDevice)) {
+                                    restoreVolumeForDevice(targetDevice)
+                                }
+                                track.setVolume(1.0f)
+                                track.play()
+                                return track
+                            } else {
+                                track.release()
+                                try { Thread.sleep(60) } catch (e: InterruptedException) {}
                             }
-                            track.setVolume(1.0f)
-                            track.play()
-                            createdTrack = track
-                            break
-                        } else {
-                            track.release()
+                        } catch (e: Exception) {
                             try { Thread.sleep(60) } catch (e: InterruptedException) {}
                         }
-                    } catch (e: Exception) {
-                        try { Thread.sleep(60) } catch (e: InterruptedException) {}
+                    }
+                    return null
+                }
+
+                // ★ 生成候補レート（高い順）: 実績要求レート → 倍率を
+                //   段階的に下げたレート（baseRate × f、f は整数）。
+                //   本体出力等ではレートクランプが効かず、96k × 8 =
+                //   768k のような生成不能レートが要求され得る。従来は
+                //   生成失敗が伝わらず再構成が無限に繰り返されたため、
+                //   作れなかったら倍率を落として作り直す（この範囲の
+                //   レート変換は既存の交渉済み倍率の仕組みが担う）。
+                val candidateRates = buildList {
+                    add(actualTargetRate)
+                    var f = actualFactor / 2
+                    while (f >= 1) {
+                        add(baseRate * f)
+                        f /= 2
+                    }
+                }.distinct()
+
+                var createdTrack: AudioTrack? = null
+                var usedRate = actualTargetRate
+                for ((index, candidateRate) in candidateRates.withIndex()) {
+                    if (index > 0) {
+                        // 前のレートで設定したミキサー属性（USB）は
+                        // そのレート専用のため解除し、既定ミキシング
+                        // で作り直す（従来はこの時点で無音が確定して
+                        // いた経路の劣化であり、無音よりは良い）。
+                        clearPreviousMixerAttributes()
+                        lockSuccess = false
+                        Log.w(
+                            "BitPerfect",
+                            "★ AudioTrack creation failed at ${candidateRates[index - 1]}Hz, " +
+                                "falling back to ${candidateRate}Hz"
+                        )
+                    }
+                    createdTrack = tryCreateTrack(candidateRate)
+                    if (createdTrack != null) {
+                        usedRate = candidateRate
+                        break
                     }
                 }
 
@@ -1381,29 +1577,80 @@ class BitPerfectPlaybackService : Service() {
                 totalWrittenFrames = 0L
                 resetSpectrumTimeline()
 
-                val actualModeStr = when (finalEncoding) {
-                    AudioFormat.ENCODING_PCM_32BIT -> "32bit"
-                    AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24bit"
-                    else -> "16bit"
-                }
-                // ★ Phase 4: 交渉結果は実績値にだけ記録する。要求値には書き戻さない。
-                actualBitMode = actualModeStr
-                onActualBitModeChanged?.invoke(actualModeStr)
-                notifyPlaybackStateChanged()
+                if (createdTrack == null) {
+                    // ★ 全候補で生成できなかった。失敗を呼び出し側へ
+                    //   伝える（戻り値 false）ため、実績値は更新せず、
+                    //   ソースレート未満へのフォールバック先（供給側
+                    //   で変換してもらう上限レート）を保留に残す。
+                    //   従来はここで成功時と同じ Ready ログが出て、
+                    //   失敗がどこにも伝わらなかった。
+                    pendingOutputRateCapHz = computeOutputRateCapHz(targetDevice, baseRate)
+                    Log.w(
+                        "BitPerfect",
+                        "★ AudioTrack creation FAILED: requested ${targetRate}Hz " +
+                            "(base=${baseRate}Hz), cap candidate=${pendingOutputRateCapHz}Hz"
+                    )
+                } else {
+                    initSucceeded = true
+                    // ★ 実績の確定: 成功したレートが実績になる。要求
+                    //   （lastRequestedTargetRate / requestedBitMode）
+                    //   には書き戻さない（PR #40 のクランプ方針と
+                    //   同じ: 次回 init は要求から再試行する）。
+                    if (usedRate != actualTargetRate) {
+                        pendingRateFallback = targetRate to usedRate
+                    }
+                    actualTargetRate = usedRate
+                    actualFactor = if (baseRate > 0) usedRate / baseRate else factorToApply
+                    negotiatedFactor = actualFactor
+                    effectiveSampleRate = actualTargetRate
+                    NativeAudioEngine.nativeConfigureUpsampler(actualFactor, baseSampleRate)
 
-                Log.i("BitPerfect", "★ AudioTrack Ready: ${actualTargetRate}Hz ($actualModeStr) -> ${targetDevice?.productName ?: "Default"} (Lock: $lockSuccess)")
+                    val actualModeStr = when (finalEncoding) {
+                        AudioFormat.ENCODING_PCM_32BIT -> "32bit"
+                        AudioFormat.ENCODING_PCM_24BIT_PACKED -> "24bit"
+                        else -> "16bit"
+                    }
+                    // ★ Phase 4: 交渉結果は実績値にだけ記録する。要求値には書き戻さない。
+                    actualBitMode = actualModeStr
+                    onActualBitModeChanged?.invoke(actualModeStr)
+                    notifyPlaybackStateChanged()
+
+                    Log.i("BitPerfect", "★ AudioTrack Ready: ${actualTargetRate}Hz ($actualModeStr) -> ${targetDevice?.productName ?: "Default"} (Lock: $lockSuccess)")
+                }
             } finally {
                 audioLock.unlock()
             }
         } catch (e: Exception) {
             Log.e("BitPerfect", "Critical AudioTrack init error", e)
         }
+        return initSucceeded
+    }
+
+    // ★ ソースレート未満へのフォールバック先（供給側で変換して
+    //   もらう上限レート）の決定規則: 出力デバイスの対応レートが
+    //   取れれば、そのうちソースレート未満の最大値。取れない経路
+    //   （本体出力等）では標準レート梯子のうちソースレート未満の
+    //   最大値（例: 96k → 48k、48k → 44.1k）。候補が無ければ 0
+    //   （= これ以上下げられない。その失敗は通常の失敗として
+    //   数えられ、上限到達で理由を表示して止まる）。
+    private fun computeOutputRateCapHz(targetDevice: AudioDeviceInfo?, baseRate: Int): Int {
+        val deviceRates = try {
+            targetDevice?.sampleRates?.toList().orEmpty()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val fromDevice = deviceRates.filter { it in 8000 until baseRate }.maxOrNull()
+        if (fromDevice != null) return fromDevice
+        return STANDARD_FALLBACK_RATES.firstOrNull { it < baseRate } ?: 0
     }
 
     private fun startPlaybackLoop() {
         isRunning = true
         playbackThread = Thread {
             var heartbeatCounter = 0
+            // AudioTrack 書込みエラーの連続回数。一時的なエラーと本物の
+            // 切断を切り分けるために使う（成功でリセット）。
+            var writeErrorStreak = 0
             while (isRunning) {
                 try {
                     heartbeatCounter++
@@ -1460,6 +1707,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written > 0) {
+                            writeErrorStreak = 0
                             val bytesPerSample = when (actualBitMode) {
                                 "32bit" -> 4
                                 "24bit" -> 3
@@ -1473,7 +1721,31 @@ class BitPerfectPlaybackService : Service() {
                             //   で再生ヘッド位置のチャンクのものを取得する。
                             capturePeakSnapshot(totalWrittenFrames, chunkPeak[0], chunkPeak[1])
                         } else if (written < 0) {
-                            handleBecomingNoisyOrDisconnected()
+                            // ★ 書込みエラーを即「デバイス切断」と断定しない。
+                            //   ストリーム構成の切替（updateBaseSampleRate 等に
+                            //   よる AudioTrack 再生成）では、再生ループが掴んだ
+                            //   旧トラック参照への書込みが切替と競合してエラーに
+                            //   なることがある。従来はその1回で切断フローへ倒れ、
+                            //   「pause」コマンド経由で供給係（Local 再生中なら
+                            //   LocalPlayer）まで止まってしまい、再生中の突然の
+                            //   停止として現れていた。切替中・トラック入れ替わり
+                            //   中のエラーはこのチャンクを捨てて継続し、現在の
+                            //   トラックへの書込みエラーが連続した場合だけ
+                            //   従来どおり切断フローへ倒す（本物の切断では
+                            //   エラーが続くため検出は1チャンク分しか遅れない）。
+                            var currentTrack: AudioTrack? = null
+                            audioLock.lock()
+                            try {
+                                currentTrack = audioTrack
+                            } finally {
+                                audioLock.unlock()
+                            }
+                            if (isSwitchingRate.get() || currentTrack !== track) {
+                                writeErrorStreak = 0
+                            } else if (++writeErrorStreak >= 2) {
+                                writeErrorStreak = 0
+                                handleBecomingNoisyOrDisconnected()
+                            }
                         }
                     }
                 } catch (e: InterruptedException) {

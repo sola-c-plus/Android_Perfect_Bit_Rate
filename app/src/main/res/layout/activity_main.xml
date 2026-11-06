@@ -6,21 +6,21 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="@color/main_background">
 
     <LinearLayout
         android:id="@+id/mainRootLayout"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:background="#000000">
+        android:background="@color/main_background">
 
     <LinearLayout
         android:id="@+id/topInfoPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:background="#0D0D0D"
+        android:background="@color/main_background"
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
         android:paddingTop="6dp"
@@ -249,7 +249,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:background="#000000"
+            android:background="@color/main_background"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:paddingTop="12dp"
@@ -518,7 +518,7 @@
                     android:id="@+id/localNowPlaying"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:background="#000000"
+                    android:background="@color/main_background"
                     android:visibility="gone">
 
                     <LinearLayout
@@ -855,9 +855,10 @@
                     android:paddingBottom="6dp"
                     android:drawableTop="@drawable/ic_tab_queue"
                     android:drawablePadding="3dp"
-                    android:text="キュー"
+                    android:text="QUEUE"
                     android:textColor="#888888"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
+                    android:maxLines="1"
                     android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
@@ -870,9 +871,10 @@
                     android:paddingBottom="6dp"
                     android:drawableTop="@drawable/ic_tab_now_playing"
                     android:drawablePadding="3dp"
-                    android:text="再生"
+                    android:text="PLAY"
                     android:textColor="#888888"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
+                    android:maxLines="1"
                     android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
@@ -885,9 +887,10 @@
                     android:paddingBottom="6dp"
                     android:drawableTop="@drawable/ic_tab_all"
                     android:drawablePadding="3dp"
-                    android:text="全曲"
+                    android:text="TRACKS"
                     android:textColor="#F0F0F0"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
+                    android:maxLines="1"
                     android:textStyle="bold"
                     android:fontFamily="@font/font_dap_condensed" />
 
@@ -901,9 +904,10 @@
                     android:paddingBottom="6dp"
                     android:drawableTop="@drawable/ic_tab_album"
                     android:drawablePadding="3dp"
-                    android:text="アルバム"
+                    android:text="ALBUMS"
                     android:textColor="#888888"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
+                    android:maxLines="1"
                     android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
@@ -916,9 +920,10 @@
                     android:paddingBottom="6dp"
                     android:drawableTop="@drawable/ic_tab_artist"
                     android:drawablePadding="3dp"
-                    android:text="アーティスト"
+                    android:text="ARTISTS"
                     android:textColor="#888888"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
+                    android:maxLines="1"
                     android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
@@ -931,9 +936,10 @@
                     android:paddingBottom="6dp"
                     android:drawableTop="@drawable/ic_tab_playlist"
                     android:drawablePadding="3dp"
-                    android:text="プレイリスト"
+                    android:text="PLAYLISTS"
                     android:textColor="#888888"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
+                    android:maxLines="1"
                     android:fontFamily="@font/font_dap_condensed" />
             </LinearLayout>
         </LinearLayout>
