@@ -937,10 +937,30 @@ class MainActivity : AppCompatActivity() {
         )
         for ((view, tab) in tabs) {
             val selected = tab == localTab
-            view.setTextColor(if (selected) colorSelected else colorNormal)
+            val color = if (selected) colorSelected else colorNormal
+            view.setTextColor(color)
             view.paint.isFakeBoldText = selected
+            // ★ タブのアイコンもラベルと同じ色で着色する
+            //   （選択中はアクセント色、通常時はグレー）。
+            //   mutate してから tint し、他所の drawable と
+            //   状態を共有しないようにする。
+            val icon = ContextCompat.getDrawable(this, localTabIconRes(tab))?.mutate()
+            icon?.setTint(color)
+            view.setCompoundDrawablesWithIntrinsicBounds(null, icon, null, null)
         }
         btnLocalSort.text = localSortLabel(appPrefs.localSortMode)
+    }
+
+    // ★ 下部タブバーの各タブに割り当てるアイコン（ic_tab_*）。
+    //   when は LocalTab の全値を網羅すること。
+    private fun localTabIconRes(tab: LocalTab): Int {
+        return when (tab) {
+            LocalTab.NOW_PLAYING -> R.drawable.ic_tab_now_playing
+            LocalTab.ALL -> R.drawable.ic_tab_all
+            LocalTab.ALBUM -> R.drawable.ic_tab_album
+            LocalTab.ARTIST -> R.drawable.ic_tab_artist
+            LocalTab.FOLDER -> R.drawable.ic_tab_folder
+        }
     }
 
     private fun localSortLabel(sortMode: Int): String {
@@ -1807,8 +1827,8 @@ class MainActivity : AppCompatActivity() {
             seekNpProgress.thumbTintList = ColorStateList.valueOf(Color.WHITE)
             btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
             btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
-            btnNpShuffle.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
-            btnNpRepeat.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            // ★ シャッフル / リピートは円で囲わない（アイコンのみ、
+            //   状態は updateNpToggleStates の色付けで示す）
             btnNpPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large)
             btnNpPrev.clearColorFilter()
             btnNpNext.clearColorFilter()
@@ -1867,8 +1887,7 @@ class MainActivity : AppCompatActivity() {
                 ColorStateList.valueOf(Color.parseColor("#1C1C1E"))
             btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
-            btnNpShuffle.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
-            btnNpRepeat.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            // ★ シャッフル / リピートは円で囲わない（ダーク側と同じ）
             btnNpPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
             btnNpPrev.setColorFilter(Color.parseColor("#1C1C1E"))
             btnNpNext.setColorFilter(Color.parseColor("#1C1C1E"))

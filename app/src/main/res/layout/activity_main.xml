@@ -535,12 +535,13 @@
                              その下にフォーマット、タイトル/アーティスト/
                              アルバムをいずれも中央寄せで静かに並べる。
                              「NOW PLAYING」ラベルは置かず、キュー位置は
-                             シークバーの上に小さく中央表示する。 -->
+                             シークバーの上に小さく中央表示する。
+                             アートワークは固定高とし、残りの縦スペースは
+                             下側に余らせる（全体が下に寄らないように）。 -->
                         <ImageView
                             android:id="@+id/imgNpArtwork"
                             android:layout_width="match_parent"
-                            android:layout_height="0dp"
-                            android:layout_weight="1"
+                            android:layout_height="288dp"
                             android:layout_marginStart="30dp"
                             android:layout_marginEnd="30dp"
                             android:layout_marginTop="4dp"
@@ -566,7 +567,7 @@
                             android:layout_marginTop="8dp"
                             android:gravity="center"
                             android:textColor="#F0F0F0"
-                            android:textSize="20sp"
+                            android:textSize="24sp"
                             android:textStyle="bold"
                             android:fontFamily="@font/font_dap_heading"
                             android:ellipsize="end"
@@ -579,7 +580,7 @@
                             android:layout_marginTop="4dp"
                             android:gravity="center"
                             android:textColor="#BBBBBB"
-                            android:textSize="14sp"
+                            android:textSize="16sp"
                             android:ellipsize="end"
                             android:maxLines="1" />
 
@@ -590,7 +591,7 @@
                             android:layout_marginTop="2dp"
                             android:gravity="center"
                             android:textColor="#888888"
-                            android:textSize="12sp"
+                            android:textSize="14sp"
                             android:ellipsize="end"
                             android:maxLines="1" />
 
@@ -606,10 +607,14 @@
                             android:textSize="10.5sp"
                             android:fontFamily="@font/font_dap_mono" />
 
+                        <!-- ★ シークバーは左右に余白を持たせて短くし、
+                             両端の時刻表示もバーの範囲内に揃える -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
+                            android:layout_marginStart="20dp"
+                            android:layout_marginEnd="20dp"
                             android:orientation="horizontal"
                             android:gravity="center_vertical">
 
@@ -646,7 +651,8 @@
 
                         <!-- ★ 操作行は WALKMAN 式: 左端にリピート、
                              右端にシャッフル、中央に 前へ/再生・
-                             一時停止（大きめ）/次へ -->
+                             一時停止（大きめ）/次へ。両端のトグルは
+                             円で囲わずアイコンのみ（状態は色で示す） -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
@@ -660,7 +666,7 @@
                                 android:layout_height="40dp"
                                 android:src="@drawable/ic_repeat"
                                 android:scaleType="centerInside"
-                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:background="@null"
                                 android:padding="9dp" />
 
                             <View
@@ -670,32 +676,32 @@
 
                             <ImageButton
                                 android:id="@+id/btnNpPrev"
-                                android:layout_width="44dp"
-                                android:layout_height="44dp"
+                                android:layout_width="50dp"
+                                android:layout_height="50dp"
                                 android:src="@drawable/ic_skip_previous"
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_small"
-                                android:padding="9dp"
+                                android:padding="10dp"
                                 android:layout_marginEnd="10dp" />
 
                             <ImageButton
                                 android:id="@+id/btnNpPlayPause"
-                                android:layout_width="60dp"
-                                android:layout_height="60dp"
+                                android:layout_width="68dp"
+                                android:layout_height="68dp"
                                 android:src="@drawable/ic_pause"
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_large"
-                                android:padding="13dp"
+                                android:padding="15dp"
                                 android:layout_marginEnd="10dp" />
 
                             <ImageButton
                                 android:id="@+id/btnNpNext"
-                                android:layout_width="44dp"
-                                android:layout_height="44dp"
+                                android:layout_width="50dp"
+                                android:layout_height="50dp"
                                 android:src="@drawable/ic_skip_next"
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_small"
-                                android:padding="9dp" />
+                                android:padding="10dp" />
 
                             <View
                                 android:layout_width="0dp"
@@ -708,7 +714,7 @@
                                 android:layout_height="40dp"
                                 android:src="@drawable/ic_shuffle"
                                 android:scaleType="centerInside"
-                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:background="@null"
                                 android:padding="9dp" />
                         </LinearLayout>
                     </LinearLayout>
@@ -727,14 +733,15 @@
             </FrameLayout>
 
             <!-- ★ ライブラリの下部タブバー: 左から 再生 / 全曲 /
-                 アルバム / アーティスト / フォルダ。「再生」は再生
+                 アルバム / アーティスト / フォルダ。各タブはアイコン
+                 （ic_tab_*）＋ラベルの構成で、選択状態の配色（アイコン
+                 の tint とラベル色）はコード側でテーマに合わせて
+                 切り替える（updateLocalTabStyles）。「再生」は再生
                  ページへの切替で、一覧で曲をタップして再生が始まった
                  ときも自動で切り替わる（明示タップ起点のみ。自動進行
-                 や通知からの操作では切り替わらない）。選択状態の配色は
-                 コード側でテーマに合わせて切り替える
-                 （updateLocalTabStyles）。ドリルダウン中も含め Local
-                 表示中は常に出し、タブ切替でドリルダウンから抜けられる
-                 ようにする。 -->
+                 や通知からの操作では切り替わらない）。ドリルダウン中も
+                 含め Local 表示中は常に出し、タブ切替でドリルダウン
+                 から抜けられるようにする。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"
@@ -750,6 +757,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_now_playing"
+                    android:drawablePadding="3dp"
                     android:text="再生"
                     android:textColor="#888888"
                     android:textSize="12sp"
@@ -763,6 +772,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_all"
+                    android:drawablePadding="3dp"
                     android:text="全曲"
                     android:textColor="#F0F0F0"
                     android:textSize="12sp"
@@ -777,6 +788,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_album"
+                    android:drawablePadding="3dp"
                     android:text="アルバム"
                     android:textColor="#888888"
                     android:textSize="12sp"
@@ -790,6 +803,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_artist"
+                    android:drawablePadding="3dp"
                     android:text="アーティスト"
                     android:textColor="#888888"
                     android:textSize="12sp"
@@ -803,6 +818,8 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
+                    android:drawableTop="@drawable/ic_tab_folder"
+                    android:drawablePadding="3dp"
                     android:text="フォルダ"
                     android:textColor="#888888"
                     android:textSize="12sp"
