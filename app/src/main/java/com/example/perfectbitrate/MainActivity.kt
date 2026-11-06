@@ -2712,6 +2712,14 @@ class MainActivity : AppCompatActivity() {
         val isLocal = currentPlaybackMode == PlaybackMode.LOCAL
         geckoView.visibility = if (isLocal) View.GONE else View.VISIBLE
         localPlaceholder.visibility = if (isLocal) View.VISIBLE else View.GONE
+        // ★ リログ（Direct ストリーム再初期化）は YT モード専用の
+        //   操作のため、Local では無効化して半透明にする（対象の
+        //   ストリームが存在しない。万一押されても reloadDirectStream
+        //   側のモード分岐で Service 再初期化は行わない）。
+        if (::btnReload.isInitialized) {
+            btnReload.isEnabled = !isLocal
+            btnReload.alpha = if (isLocal) 0.35f else 1.0f
+        }
     }
 
     // ★ モード切替トグルの配色を現在モードとテーマへ同期する。
@@ -3830,8 +3838,13 @@ class MainActivity : AppCompatActivity() {
             onBitModeChanged = { newMode ->
                 currentBitMode = newMode
                 playbackService?.requestedBitMode = newMode
-                // ★ Phase 1: フィールドへ先に書くことが要求伝達そのもの（initAudioTrack は自フィールドを読む）
-                playbackService?.initAudioTrack()
+                // ★ Phase 1: フィールドへ先に書くことが要求伝達そのもの（初期化は自フィールドを読む）
+                // ★ 案A: 初期化は trackExecutor 経由の非同期要求に統一する。
+                //   従来は initAudioTrack を UI スレッドから直接・同期で
+                //   呼んでおり、Local 再生中はリログと同じ捕捉（保留
+                //   ループにメインスレッドが捕まる）が起こりうる経路
+                //   だった（調査: investigation-local-relog-freeze）。
+                playbackService?.requestStreamReconfiguration()
                 bitActivityMask = 0
                 peakDbL = -60f
                 peakDbR = -60f
@@ -4368,11 +4381,27 @@ class MainActivity : AppCompatActivity() {
             peakDbR = -60f
             currentLatencyMs = 0
             walkmanLevelMeter?.reset()
-            playbackService?.resetBuffer("direct")
-            playbackService?.setUpsampling(upsampleFactor)
-            // ★ Phase 1: 引数で渡していた構成は全て Service の自フィールドが正（initAudioTrack は引数なし）
-            playbackService?.initAudioTrack()
-            if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
+            // ★ 案A: モード分岐。Local モードではこのボタンの対象
+            //   （保持中の YT ページ側 Direct ストリーム）が存在せず、
+            //   Service のストリーム再初期化は意味を持たない。従来は
+            //   モードガードなしで再初期化が走り、initAudioTrack の
+            //   保留ループにメインスレッドが捕まってフリーズした
+            //   （調査: investigation-local-relog-freeze）。Local では
+            //   Service に一切触れず、押したことが分かる表示だけ出す
+            //   （ボタン自体も applyPlaybackModeVisibility で無効化）。
+            if (currentPlaybackMode == PlaybackMode.LOCAL) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Local モードでは再初期化は不要です",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                playbackService?.resetBuffer("direct")
+                playbackService?.setUpsampling(upsampleFactor)
+                // ★ 案A: 初期化は trackExecutor 経由の非同期要求に統一
+                //   （UI スレッドで initAudioTrack を同期実行しない）。
+                //   構成は Service の自フィールドが正（Phase 1）。
+                playbackService?.requestStreamReconfiguration()
                 geckoController.reload()
             }
             updateStatus()
