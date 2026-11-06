@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textLocalUpdating: TextView
     // ★ ライブラリブラウザのクローム（Phase 2-1: タブ / 検索 / ソート /
     //   ドリルダウン用ヘッダー）
+    private lateinit var tabLocalNowPlaying: TextView
     private lateinit var tabLocalAll: TextView
     private lateinit var tabLocalAlbum: TextView
     private lateinit var tabLocalArtist: TextView
@@ -97,15 +98,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localGroupHeader: View
     private lateinit var btnLocalBack: TextView
     private lateinit var textLocalGroupTitle: TextView
-    // ★ ミニプレイヤーバー（Local 画面下部）と再生画面（Now Playing）
-    private lateinit var localMiniPlayer: View
-    private lateinit var imgLocalMiniArtwork: ImageView
-    private lateinit var textLocalMiniTitle: TextView
-    private lateinit var textLocalMiniArtist: TextView
-    private lateinit var btnLocalMiniPlayPause: ImageButton
-    private lateinit var btnLocalMiniNext: ImageButton
+    // ★ 再生ページ（「再生」タブの Now Playing）とブラウザページ。
+    //   再生画面は全画面オーバーレイではなく Local コンテンツ領域内の
+    //   ページとして表示する（上部ステータスヘッダーは常時表示）。
+    private lateinit var localBrowserPage: View
     private lateinit var localNowPlaying: View
-    private lateinit var btnNpClose: ImageButton
+    private lateinit var localNpContent: View
+    private lateinit var textNpEmpty: TextView
     private lateinit var textNpQueuePosition: TextView
     private lateinit var imgNpArtwork: ImageView
     private lateinit var textNpTitle: TextView
@@ -121,9 +120,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnNpNext: ImageButton
     private lateinit var btnNpRepeat: ImageButton
 
-    // ★ 再生画面の開閉状態と、シークバーのドラッグ中フラグ
+    // ★ 再生画面のシークバーのドラッグ中フラグ
     //   （ドラッグ中は進捗ポーリングで表示位置を上書きしない）。
-    private var isNowPlayingOpen = false
     private var isNpSeeking = false
 
     // ★ Local Music の供給係と楽曲インデックス（仕様書 §4.1 / §6）
@@ -137,12 +135,13 @@ class MainActivity : AppCompatActivity() {
     private var localLibraryShown = false
     private var localScanRunning = false
 
-    // ★ ライブラリブラウザの状態（Phase 2-1）。
-    //   localTab: 表示中のタブ。localGroupKey: ドリルダウン中のグループ
+    // ★ ライブラリブラウザの状態（Phase 2-1、下部タブバー）。
+    //   localTab: 表示中のタブ（NOW_PLAYING = 再生ページ、それ以外は
+    //   ブラウザページ）。localGroupKey: ドリルダウン中のグループ
     //   キー（null = 全曲リスト or グループ一覧を表示中）。
     //   localDisplayedTracks: いま曲リストとして表示している並び
     //   （＝ LocalPlayer へ渡しているキューと一致させる）。
-    private enum class LocalTab { ALL, ALBUM, ARTIST, FOLDER }
+    private enum class LocalTab { NOW_PLAYING, ALL, ALBUM, ARTIST, FOLDER }
 
     private data class LocalGroup(
         val key: String,
@@ -522,7 +521,7 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updateMetadataWithBitmap(title, artist, artwork)
             runOnUiThread {
                 updateDialogPlayerUi()
-                // ★ アートワーク到着も含め、ミニバー / 再生画面へ反映する
+                // ★ アートワーク到着も含め、再生画面へ反映する
                 updateLocalPlayerChrome()
             }
         }
@@ -572,9 +571,9 @@ class MainActivity : AppCompatActivity() {
     //   ようにする。Local → YT は LocalPlayer を停止しデコーダを解放する。
     private fun switchPlaybackMode(newMode: PlaybackMode) {
         if (newMode == currentPlaybackMode) return
-        // ★ 再生画面（Now Playing）は Local モード専用。モードを離れたら
-        //   必ず閉じる（YT 側に Local の画面が残らないように）。
-        closeLocalNowPlaying()
+        // ★ 再生ページは Local コンテンツ領域内の一ページのため、
+        //   モードを離れると localPlaceholder ごと隠れる。選択中の
+        //   タブは保持され、Local へ戻れば同じページが復元される。
         if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
             geckoController.sendCommand("pause")
             userWantsPlayback = false
@@ -622,8 +621,8 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
             playbackService?.updateProgress(0L, 0L, false)
         }
-        // ★ ミニバーの表示もモードと現在曲に合わせておく（Local へ戻った
-        //   ときに前回曲のバーが再生中アイコンのまま残らないように）
+        // ★ 再生ページの表示もモードと現在曲に合わせておく（Local へ
+        //   戻ったときに前回曲の情報が再生中表示のまま残らないように）
         updateLocalPlayerChrome()
         updateStatus()
         updateDialogPlayerUi()
@@ -769,8 +768,35 @@ class MainActivity : AppCompatActivity() {
     // 自動進行がすべて表示順と一致する）。表示が「グループリスト」の
     // 間はキューに触らない。
 
+    // ★ Local コンテンツ領域内のページ出し分け: 「再生」タブなら
+    //   再生ページ、それ以外はブラウザページ（検索 / 一覧）を出す。
+    //   上部ステータスヘッダー（topInfoPanel）はモード共通で常時
+    //   表示される領域のため、ここでは一切触らない。選択中タブは
+    //   localTab が唯一の正で、再描画のたびにここから復元される。
+    private fun updateLocalPageVisibility() {
+        if (!::localNowPlaying.isInitialized) return
+        val showNowPlaying = localTab == LocalTab.NOW_PLAYING
+        localNowPlaying.visibility = if (showNowPlaying) View.VISIBLE else View.GONE
+        localBrowserPage.visibility = if (showNowPlaying) View.GONE else View.VISIBLE
+        if (showNowPlaying) {
+            if (::localPlayer.isInitialized) {
+                updateLocalNowPlaying(localPlayer.currentTrack)
+            }
+            // ブラウザ側の空表示メッセージは再生ページでは出さない
+            textLocalMessage.visibility = View.GONE
+        }
+    }
+
     private fun refreshLocalBrowser() {
         if (!::localTrackList.isInitialized) return
+        // ★ 「再生」タブ表示中はブラウザ側（一覧の導出・キューの
+        //   同期）には触らず、ページの出し分けだけを行う。
+        if (localTab == LocalTab.NOW_PLAYING) {
+            updateLocalPageVisibility()
+            updateLocalTabStyles()
+            return
+        }
+        updateLocalPageVisibility()
         val groupKey = localGroupKey
         if (groupKey != null && localTab != LocalTab.ALL) {
             // ドリルダウン中: 選択中グループの曲一覧（検索フィルタ適用、
@@ -842,6 +868,8 @@ class MainActivity : AppCompatActivity() {
     // 一覧のタップ振り分け: グループ一覧ならドリルダウン、曲リストなら
     // 表示中リストをキューとしてその曲から再生する。
     private fun onLocalListItemClicked(position: Int) {
+        // 再生ページ表示中は一覧が見えていないため到達しないが、保険として弾く
+        if (localTab == LocalTab.NOW_PLAYING) return
         if (localGroupKey == null && localTab != LocalTab.ALL) {
             val group = (localTrackList.adapter as? LocalGroupAdapter)
                 ?.getItem(position) ?: return
@@ -861,6 +889,7 @@ class MainActivity : AppCompatActivity() {
         val colorSelected = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
         val colorNormal = Color.parseColor(if (isDark) "#888888" else "#636366")
         val tabs = listOf(
+            tabLocalNowPlaying to LocalTab.NOW_PLAYING,
             tabLocalAll to LocalTab.ALL,
             tabLocalAlbum to LocalTab.ALBUM,
             tabLocalArtist to LocalTab.ARTIST,
@@ -963,7 +992,7 @@ class MainActivity : AppCompatActivity() {
             LocalTab.ALBUM -> track.album.ifBlank { unknownAlbumLabel }
             LocalTab.ARTIST -> track.artist.ifBlank { unknownArtistLabel }
             LocalTab.FOLDER -> localFolderKeyOf(track)
-            LocalTab.ALL -> ""
+            LocalTab.ALL, LocalTab.NOW_PLAYING -> ""
         }
     }
 
@@ -1340,6 +1369,7 @@ class MainActivity : AppCompatActivity() {
         textLocalScanCurrent = findViewById(R.id.textLocalScanCurrent)
         localScanUpdating = findViewById(R.id.localScanUpdating)
         textLocalUpdating = findViewById(R.id.textLocalUpdating)
+        tabLocalNowPlaying = findViewById(R.id.tabLocalNowPlaying)
         tabLocalAll = findViewById(R.id.tabLocalAll)
         tabLocalAlbum = findViewById(R.id.tabLocalAlbum)
         tabLocalArtist = findViewById(R.id.tabLocalArtist)
@@ -1349,14 +1379,10 @@ class MainActivity : AppCompatActivity() {
         localGroupHeader = findViewById(R.id.localGroupHeader)
         btnLocalBack = findViewById(R.id.btnLocalBack)
         textLocalGroupTitle = findViewById(R.id.textLocalGroupTitle)
-        localMiniPlayer = findViewById(R.id.localMiniPlayer)
-        imgLocalMiniArtwork = findViewById(R.id.imgLocalMiniArtwork)
-        textLocalMiniTitle = findViewById(R.id.textLocalMiniTitle)
-        textLocalMiniArtist = findViewById(R.id.textLocalMiniArtist)
-        btnLocalMiniPlayPause = findViewById(R.id.btnLocalMiniPlayPause)
-        btnLocalMiniNext = findViewById(R.id.btnLocalMiniNext)
+        localBrowserPage = findViewById(R.id.localBrowserPage)
         localNowPlaying = findViewById(R.id.localNowPlaying)
-        btnNpClose = findViewById(R.id.btnNpClose)
+        localNpContent = findViewById(R.id.localNpContent)
+        textNpEmpty = findViewById(R.id.textNpEmpty)
         textNpQueuePosition = findViewById(R.id.textNpQueuePosition)
         imgNpArtwork = findViewById(R.id.imgNpArtwork)
         textNpTitle = findViewById(R.id.textNpTitle)
@@ -1502,12 +1528,8 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                // ★ 戻る操作の優先順位: 再生画面を閉じる → Local の
-                //   ドリルダウンを戻る → Gecko の履歴を戻る → 終了確認。
-                if (isNowPlayingOpen) {
-                    closeLocalNowPlaying()
-                    return
-                }
+                // ★ 戻る操作の優先順位: Local のドリルダウンを戻る →
+                //   Gecko の履歴を戻る → 終了確認。
                 // ★ Local のドリルダウン中は、まずグループ一覧へ戻る
                 if (currentPlaybackMode == PlaybackMode.LOCAL && localGroupKey != null) {
                     localGroupKey = null
@@ -1578,6 +1600,10 @@ class MainActivity : AppCompatActivity() {
             //   一覧ならそのグループへドリルダウン（Phase 2-1）
             onLocalListItemClicked(position)
         }
+        tabLocalNowPlaying.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTab(LocalTab.NOW_PLAYING)
+        }
         tabLocalAll.setOnClickListener {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.ALL)
@@ -1627,28 +1653,7 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             safFolderPickerLauncher.launch(null)
         }
-        // ★ ミニプレイヤーバー: 本体タップで再生画面を開く。子ボタンの
-        //   クリックは親へ伝播しないため、本体と競合しない。
-        localMiniPlayer.setOnClickListener {
-            it.hapticTick(appPrefs)
-            openLocalNowPlaying()
-        }
-        btnLocalMiniPlayPause.setOnClickListener {
-            it.hapticTick(appPrefs)
-            val cmd = resolvePlayPauseCommand()
-            noteUserPlaybackIntent(cmd)
-            localPlayer.handleCommand(cmd)
-        }
-        btnLocalMiniNext.setOnClickListener {
-            it.hapticTick(appPrefs)
-            noteUserPlaybackIntent("next")
-            localPlayer.next()
-        }
-        // ★ 再生画面（Now Playing）の操作系
-        btnNpClose.setOnClickListener {
-            it.hapticTick(appPrefs)
-            closeLocalNowPlaying()
-        }
+        // ★ 再生ページ（Now Playing）の操作系
         btnNpPlayPause.setOnClickListener {
             it.hapticTick(appPrefs)
             val cmd = resolvePlayPauseCommand()
@@ -1747,16 +1752,8 @@ class MainActivity : AppCompatActivity() {
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon)
             btnLocalBack.setTextColor(Color.parseColor("#E5A93C"))
             textLocalGroupTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            localMiniPlayer.setBackgroundResource(R.drawable.bg_btn_icon)
-            textLocalMiniTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            textLocalMiniArtist.setTextColor(Color.parseColor("#888888"))
-            btnLocalMiniPlayPause.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalMiniPlayPause.clearColorFilter()
-            btnLocalMiniNext.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalMiniNext.clearColorFilter()
             localNowPlaying.setBackgroundColor(Color.parseColor("#000000"))
-            btnNpClose.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnNpClose.setColorFilter(Color.parseColor("#CCCCCC"))
+            textNpEmpty.setTextColor(Color.parseColor("#888888"))
             textNpQueuePosition.setTextColor(Color.parseColor("#888888"))
             textNpTitle.setTextColor(Color.parseColor("#F0F0F0"))
             textNpArtist.setTextColor(Color.parseColor("#BBBBBB"))
@@ -1814,16 +1811,8 @@ class MainActivity : AppCompatActivity() {
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnLocalBack.setTextColor(Color.parseColor("#D49B28"))
             textLocalGroupTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            localMiniPlayer.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            textLocalMiniTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            textLocalMiniArtist.setTextColor(Color.parseColor("#636366"))
-            btnLocalMiniPlayPause.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalMiniPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnLocalMiniNext.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalMiniNext.setColorFilter(Color.parseColor("#1C1C1E"))
             localNowPlaying.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            btnNpClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnNpClose.setColorFilter(Color.parseColor("#1C1C1E"))
+            textNpEmpty.setTextColor(Color.parseColor("#636366"))
             textNpQueuePosition.setTextColor(Color.parseColor("#636366"))
             textNpTitle.setTextColor(Color.parseColor("#1C1C1E"))
             textNpArtist.setTextColor(Color.parseColor("#48484A"))
@@ -1869,92 +1858,28 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ── Local ミニプレイヤーバー / 再生画面（Now Playing） ──
+    // ── Local 再生画面（「再生」タブの Now Playing ページ） ──
 
-    // ★ ミニバーと再生画面の曲情報を LocalPlayer の現在曲へ同期する。
-    //   曲の変化・再生状態の変化・メタデータ（アートワーク到着）のたびに
-    //   localPlayerListener から呼ばれる。ミニバーは「再生中または
-    //   読み込み済みの曲がある」ときだけ出す（＝再生していない状態で
-    //   再生画面を開く導線は作らない）。
+    // ★ 再生ページの曲情報を LocalPlayer の現在曲へ同期する。
+    //   曲の変化・再生状態の変化・メタデータ（アートワーク到着）の
+    //   たびに localPlayerListener から呼ばれる。ページ自体の
+    //   表示 / 非表示は選択中タブで決まる（updateLocalPageVisibility）。
     private fun updateLocalPlayerChrome() {
-        if (!::localPlayer.isInitialized || !::localMiniPlayer.isInitialized) return
-        val track = localPlayer.currentTrack
-        updateLocalMiniPlayer(track)
-        if (isNowPlayingOpen) updateLocalNowPlaying(track)
-    }
-
-    private fun updateLocalMiniPlayer(track: LibraryRepository.Track?) {
-        if (track == null) {
-            localMiniPlayer.visibility = View.GONE
-            return
-        }
-        localMiniPlayer.visibility = View.VISIBLE
-        textLocalMiniTitle.text = track.title
-        textLocalMiniArtist.text = track.artist.ifBlank { track.displayName }
-        btnLocalMiniPlayPause.setImageResource(
-            if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
-        )
-        bindMiniArtwork(track)
-    }
-
-    // ミニバー用サムネイル: 曲行と同じメモリキャッシュ＋遅延読み込みを
-    // 使い回す。再生中アートワーク（currentArtworkBitmap）が既にあれば
-    // それを優先する。tag の URI 照合で別曲の絵の混入を防ぐ（行と同じ作法）。
-    private fun bindMiniArtwork(track: LibraryRepository.Track) {
-        val cacheKey = track.uri.toString()
-        imgLocalMiniArtwork.tag = cacheKey
-        val cached = localThumbCache.get(cacheKey)
-        if (cached != null) {
-            imgLocalMiniArtwork.setImageBitmap(cached)
-            return
-        }
-        val fullArtwork = currentArtworkBitmap
-        if (fullArtwork != null) {
-            imgLocalMiniArtwork.setImageBitmap(fullArtwork)
-            return
-        }
-        imgLocalMiniArtwork.setImageResource(R.drawable.ic_local_artwork_placeholder)
-        if (!::libraryRepository.isInitialized) return
-        libraryRepository.loadThumbnail(track) { bitmap ->
-            if (bitmap == null) return@loadThumbnail
-            localThumbCache.put(cacheKey, bitmap)
-            runOnUiThread {
-                if (imgLocalMiniArtwork.tag == cacheKey) {
-                    imgLocalMiniArtwork.setImageBitmap(bitmap)
-                }
-            }
-        }
-    }
-
-    // ★ 再生画面を開く。Local モード専用で、現在曲が無いときは開かない。
-    private fun openLocalNowPlaying() {
-        if (currentPlaybackMode != PlaybackMode.LOCAL) return
-        if (!::localPlayer.isInitialized) return
-        val track = localPlayer.currentTrack ?: return
-        isNowPlayingOpen = true
-        localNowPlaying.visibility = View.VISIBLE
-        localNowPlaying.bringToFront()
-        updateLocalNowPlaying(track)
-        updateLocalNowPlayingProgress()
-    }
-
-    private fun closeLocalNowPlaying() {
-        if (!isNowPlayingOpen) return
-        isNowPlayingOpen = false
-        isNpSeeking = false
-        if (::localNowPlaying.isInitialized) {
-            localNowPlaying.visibility = View.GONE
-        }
+        if (!::localPlayer.isInitialized || !::localNowPlaying.isInitialized) return
+        updateLocalNowPlaying(localPlayer.currentTrack)
     }
 
     // 再生画面の曲情報ブロックを現在曲で描き直す（シーク位置は
-    // updateLocalNowPlayingProgress が別途担う）。現在曲が消えたら
-    // 画面自体を閉じる。
+    // updateLocalNowPlayingProgress が別途担う）。現在曲が無ければ
+    // コンテンツを隠して空状態の表示に切り替える。
     private fun updateLocalNowPlaying(track: LibraryRepository.Track?) {
         if (track == null) {
-            closeLocalNowPlaying()
+            localNpContent.visibility = View.GONE
+            textNpEmpty.visibility = View.VISIBLE
             return
         }
+        localNpContent.visibility = View.VISIBLE
+        textNpEmpty.visibility = View.GONE
         textNpTitle.text = track.title
         textNpArtist.text = track.artist
         textNpArtist.visibility = if (track.artist.isBlank()) View.GONE else View.VISIBLE
@@ -2027,7 +1952,7 @@ class MainActivity : AppCompatActivity() {
     // 呼び出しは Local の進捗ポーリング（250ms）と LocalPlayer の
     // onProgress からのみ。ドラッグ中は表示を上書きしない。
     private fun updateLocalNowPlayingProgress() {
-        if (!isNowPlayingOpen || isNpSeeking) return
+        if (localTab != LocalTab.NOW_PLAYING || isNpSeeking) return
         seekNpProgress.progress = if (currentDuration > 0) {
             ((currentPosition.toDouble() / currentDuration.toDouble()) * 1000)
                 .toInt().coerceIn(0, 1000)

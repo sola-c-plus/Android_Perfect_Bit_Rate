@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ★ ルートは FrameLayout: 通常 UI（mainRootLayout）の上に Local の
-     再生画面（localNowPlaying）を全画面オーバーレイとして重ねるため。 -->
+<!-- ★ ルートは FrameLayout。通常 UI は mainRootLayout のみで、
+     Local の再生画面はオーバーレイにせず Local コンテンツ領域内の
+     ページとして出す（上部ステータスヘッダーは常時表示したまま）。 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -381,15 +382,366 @@
                     android:ellipsize="middle" />
             </LinearLayout>
 
-            <!-- ★ ライブラリのタブバー（Phase 2-1: 全曲 / アルバム /
-                 アーティスト / フォルダ）。選択状態の配色はコード側で
-                 テーマに合わせて切り替える（updateLocalTabStyles）。 -->
+            <!-- ★ Local コンテンツ領域のページコンテナ: ブラウザ
+                 ページ（検索 / ドリルダウン / 一覧）と再生ページ
+                 （「再生」タブ）を出し分ける。上部ステータスヘッダー
+                 （topInfoPanel）はこの外側にあるため、どちらのページ
+                 でも隠れず常時表示される。 -->
+            <FrameLayout
+                android:id="@+id/localPageContainer"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="8dp">
+
+                <!-- ★ ブラウザページ: 検索 / ソート、グループの
+                     ドリルダウンヘッダー、曲・グループの一覧 -->
+                <LinearLayout
+                    android:id="@+id/localBrowserPage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical">
+
+                    <!-- ★ 検索欄＋ソート切替（Phase 2-1）。検索は
+                         タイトル / アーティスト / アルバムを対象に
+                         した部分一致フィルタ。ソートは全曲タブの並び
+                         （タイトル / アーティスト / アルバム）を
+                         ダイアログで切り替える。ブラウザ系タブでのみ
+                         表示され、「再生」タブではページごと隠れる。 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <EditText
+                            android:id="@+id/editLocalSearch"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_local_search"
+                            android:hint="タイトル・アーティスト・アルバムで検索"
+                            android:imeOptions="actionSearch"
+                            android:inputType="text"
+                            android:maxLines="1"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="7dp"
+                            android:paddingBottom="7dp"
+                            android:textColor="#F0F0F0"
+                            android:textColorHint="#777777"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnLocalSort"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_icon"
+                            android:fontFamily="@font/font_dap_condensed"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="6dp"
+                            android:paddingBottom="6dp"
+                            android:text="タイトル順"
+                            android:textColor="#E5A93C"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- ★ グループ（アルバム等）へドリルダウンした
+                         ときのヘッダー。戻るボタン＋グループ名。
+                         通常時は gone。 -->
+                    <LinearLayout
+                        android:id="@+id/localGroupHeader"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/btnLocalBack"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_btn_icon"
+                            android:fontFamily="@font/font_dap_condensed"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="5dp"
+                            android:paddingBottom="5dp"
+                            android:text="‹ 戻る"
+                            android:textColor="#E5A93C"
+                            android:textSize="10sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/textLocalGroupTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:textColor="#F0F0F0"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- ★ 一覧（曲リスト / グループリストを同じ
+                         ListView で出し分ける） -->
+                    <ListView
+                        android:id="@+id/localTrackList"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:layout_marginTop="6dp"
+                        android:divider="#1C1C1C"
+                        android:dividerHeight="1dp"
+                        android:cacheColorHint="@android:color/transparent"
+                        android:listSelector="@android:color/transparent" />
+                </LinearLayout>
+
+                <!-- ★ 再生ページ（「再生」タブ）: YT Music の再生画面
+                     の文法（大きなアートワーク → 曲名 → アーティスト
+                     → シークバー → 主要操作）に寄せた Now Playing。
+                     全画面オーバーレイにはせず Local コンテンツ領域内
+                     のページとして表示するため、上部ステータス
+                     ヘッダーは隠れない。フォーマット情報の小行は
+                     このアプリの性格に合わせた独自要素。色はテーマに
+                     合わせてコード側で切り替える（applyThemeUi）。
+                     現在曲が無いときは空状態（textNpEmpty）を出す。 -->
+                <FrameLayout
+                    android:id="@+id/localNowPlaying"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="#000000"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/localNpContent"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:orientation="vertical"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="10dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="NOW PLAYING"
+                                android:textColor="#888888"
+                                android:textSize="10.5sp"
+                                android:textStyle="bold"
+                                android:fontFamily="@font/font_dap_condensed"
+                                android:letterSpacing="0.08" />
+
+                            <TextView
+                                android:id="@+id/textNpQueuePosition"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textColor="#888888"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+                        </LinearLayout>
+
+                        <ImageView
+                            android:id="@+id/imgNpArtwork"
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="1"
+                            android:layout_marginTop="18dp"
+                            android:scaleType="fitCenter"
+                            android:src="@drawable/ic_local_artwork_placeholder" />
+
+                        <TextView
+                            android:id="@+id/textNpTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="18dp"
+                            android:textColor="#F0F0F0"
+                            android:textSize="20sp"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/font_dap_heading"
+                            android:ellipsize="end"
+                            android:maxLines="2" />
+
+                        <TextView
+                            android:id="@+id/textNpArtist"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textColor="#BBBBBB"
+                            android:textSize="14sp"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
+
+                        <TextView
+                            android:id="@+id/textNpAlbum"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:textColor="#888888"
+                            android:textSize="12sp"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
+
+                        <TextView
+                            android:id="@+id/textNpFormat"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textColor="#888888"
+                            android:textSize="10.5sp"
+                            android:fontFamily="@font/font_dap_mono"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/textNpCurrentTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0:00"
+                                android:textColor="#888888"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+
+                            <SeekBar
+                                android:id="@+id/seekNpProgress"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:max="1000"
+                                android:progress="0"
+                                android:progressTint="#E5A93C"
+                                android:thumbTint="#FFFFFF"
+                                android:paddingStart="6dp"
+                                android:paddingEnd="6dp" />
+
+                            <TextView
+                                android:id="@+id/textNpTotalTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0:00"
+                                android:textColor="#888888"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="14dp"
+                            android:orientation="horizontal"
+                            android:gravity="center">
+
+                            <ImageButton
+                                android:id="@+id/btnNpShuffle"
+                                android:layout_width="40dp"
+                                android:layout_height="40dp"
+                                android:src="@drawable/ic_shuffle"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:padding="9dp"
+                                android:layout_marginEnd="10dp" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpPrev"
+                                android:layout_width="44dp"
+                                android:layout_height="44dp"
+                                android:src="@drawable/ic_skip_previous"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:padding="9dp"
+                                android:layout_marginEnd="10dp" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpPlayPause"
+                                android:layout_width="60dp"
+                                android:layout_height="60dp"
+                                android:src="@drawable/ic_pause"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_large"
+                                android:padding="13dp"
+                                android:layout_marginEnd="10dp" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpNext"
+                                android:layout_width="44dp"
+                                android:layout_height="44dp"
+                                android:src="@drawable/ic_skip_next"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:padding="9dp"
+                                android:layout_marginEnd="10dp" />
+
+                            <ImageButton
+                                android:id="@+id/btnNpRepeat"
+                                android:layout_width="40dp"
+                                android:layout_height="40dp"
+                                android:src="@drawable/ic_repeat"
+                                android:scaleType="centerInside"
+                                android:background="@drawable/bg_btn_walkman_circle_small"
+                                android:padding="9dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- ★ 空状態: 再生中の曲が無いときの表示 -->
+                    <TextView
+                        android:id="@+id/textNpEmpty"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:text="再生中の曲がありません"
+                        android:textColor="#888888"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+                </FrameLayout>
+            </FrameLayout>
+
+            <!-- ★ ライブラリの下部タブバー: 左から 再生 / 全曲 /
+                 アルバム / アーティスト / フォルダ。「再生」は再生
+                 ページへの切替で、再生が始まっても自動では切り替わ
+                 らない。選択状態の配色はコード側でテーマに合わせて
+                 切り替える（updateLocalTabStyles）。ドリルダウン中
+                 も含め Local 表示中は常に出し、タブ切替でドリル
+                 ダウンから抜けられるようにする。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tabLocalNowPlaying"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:text="再生"
+                    android:textColor="#888888"
+                    android:textSize="12sp"
+                    android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
                     android:id="@+id/tabLocalAll"
@@ -444,379 +796,8 @@
                     android:textSize="12sp"
                     android:fontFamily="@font/font_dap_condensed" />
             </LinearLayout>
-
-            <!-- ★ 検索欄＋ソート切替（Phase 2-1）。検索はタイトル /
-                 アーティスト / アルバムを対象にした部分一致フィルタ。
-                 ソートは全曲タブの並び（タイトル / アーティスト /
-                 アルバム）をダイアログで切り替える。 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <EditText
-                    android:id="@+id/editLocalSearch"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_local_search"
-                    android:hint="タイトル・アーティスト・アルバムで検索"
-                    android:imeOptions="actionSearch"
-                    android:inputType="text"
-                    android:maxLines="1"
-                    android:paddingStart="10dp"
-                    android:paddingEnd="10dp"
-                    android:paddingTop="7dp"
-                    android:paddingBottom="7dp"
-                    android:textColor="#F0F0F0"
-                    android:textColorHint="#777777"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/btnLocalSort"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:background="@drawable/bg_btn_icon"
-                    android:fontFamily="@font/font_dap_condensed"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp"
-                    android:text="タイトル順"
-                    android:textColor="#E5A93C"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- ★ グループ（アルバム等）へドリルダウンしたときのヘッダー。
-                 戻るボタン＋グループ名。通常時は gone。 -->
-            <LinearLayout
-                android:id="@+id/localGroupHeader"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-
-                <TextView
-                    android:id="@+id/btnLocalBack"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_btn_icon"
-                    android:fontFamily="@font/font_dap_condensed"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="5dp"
-                    android:paddingBottom="5dp"
-                    android:text="‹ 戻る"
-                    android:textColor="#E5A93C"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/textLocalGroupTitle"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:textColor="#F0F0F0"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- ★ 一覧（曲リスト / グループリストを同じ ListView で出し分ける） -->
-            <ListView
-                android:id="@+id/localTrackList"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:layout_marginTop="6dp"
-                android:divider="#1C1C1C"
-                android:dividerHeight="1dp"
-                android:cacheColorHint="@android:color/transparent"
-                android:listSelector="@android:color/transparent" />
-
-            <!-- ★ ミニプレイヤーバー: 再生中 / 読み込み済みの曲がある
-                 ときだけ Local 画面の下部に出す。バー本体のタップで
-                 再生画面（localNowPlaying）を開く。表示条件と内容の
-                 更新は updateLocalMiniPlayer が担う。 -->
-            <LinearLayout
-                android:id="@+id/localMiniPlayer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:background="@drawable/bg_btn_icon"
-                android:paddingStart="8dp"
-                android:paddingEnd="4dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
-                android:visibility="gone">
-
-                <ImageView
-                    android:id="@+id/imgLocalMiniArtwork"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:scaleType="centerCrop"
-                    android:src="@drawable/ic_local_artwork_placeholder" />
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="10dp"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:id="@+id/textLocalMiniTitle"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="#F0F0F0"
-                        android:textSize="13sp"
-                        android:textStyle="bold"
-                        android:ellipsize="end"
-                        android:maxLines="1" />
-
-                    <TextView
-                        android:id="@+id/textLocalMiniArtist"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="1dp"
-                        android:textColor="#888888"
-                        android:textSize="11sp"
-                        android:ellipsize="end"
-                        android:maxLines="1" />
-                </LinearLayout>
-
-                <ImageButton
-                    android:id="@+id/btnLocalMiniPlayPause"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:src="@drawable/ic_pause"
-                    android:scaleType="centerInside"
-                    android:background="@drawable/bg_btn_icon"
-                    android:padding="9dp" />
-
-                <ImageButton
-                    android:id="@+id/btnLocalMiniNext"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:src="@drawable/ic_skip_next"
-                    android:scaleType="centerInside"
-                    android:background="@drawable/bg_btn_icon"
-                    android:padding="9dp" />
-            </LinearLayout>
         </LinearLayout>
     </FrameLayout>
-    </LinearLayout>
-
-    <!-- ★ Local 再生画面（Now Playing）: YT Music の再生画面の文法
-         （大きなアートワーク → 曲名 → アーティスト → シークバー →
-         主要操作）に寄せた全画面オーバーレイ。Local モード専用で、
-         モードを離れたら閉じる（switchPlaybackMode）。フォーマット
-         情報の小行はこのアプリの性格に合わせた独自要素。色はテーマに
-         合わせてコード側で切り替える（applyThemeUi）。 -->
-    <LinearLayout
-        android:id="@+id/localNowPlaying"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:background="#000000"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="22dp"
-        android:visibility="gone">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <ImageButton
-                android:id="@+id/btnNpClose"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:src="@drawable/ic_expand_more"
-                android:scaleType="centerInside"
-                android:background="@drawable/bg_btn_icon"
-                android:padding="7dp" />
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="12dp"
-                android:text="NOW PLAYING"
-                android:textColor="#888888"
-                android:textSize="10.5sp"
-                android:textStyle="bold"
-                android:fontFamily="@font/font_dap_condensed"
-                android:letterSpacing="0.08" />
-
-            <TextView
-                android:id="@+id/textNpQueuePosition"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="#888888"
-                android:textSize="10.5sp"
-                android:fontFamily="@font/font_dap_mono" />
-        </LinearLayout>
-
-        <ImageView
-            android:id="@+id/imgNpArtwork"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:layout_marginTop="18dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_local_artwork_placeholder" />
-
-        <TextView
-            android:id="@+id/textNpTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:textColor="#F0F0F0"
-            android:textSize="20sp"
-            android:textStyle="bold"
-            android:fontFamily="@font/font_dap_heading"
-            android:ellipsize="end"
-            android:maxLines="2" />
-
-        <TextView
-            android:id="@+id/textNpArtist"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#BBBBBB"
-            android:textSize="14sp"
-            android:ellipsize="end"
-            android:maxLines="1" />
-
-        <TextView
-            android:id="@+id/textNpAlbum"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:textColor="#888888"
-            android:textSize="12sp"
-            android:ellipsize="end"
-            android:maxLines="1" />
-
-        <TextView
-            android:id="@+id/textNpFormat"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textColor="#888888"
-            android:textSize="10.5sp"
-            android:fontFamily="@font/font_dap_mono"
-            android:ellipsize="end"
-            android:maxLines="1" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:id="@+id/textNpCurrentTime"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0:00"
-                android:textColor="#888888"
-                android:textSize="10.5sp"
-                android:fontFamily="@font/font_dap_mono" />
-
-            <SeekBar
-                android:id="@+id/seekNpProgress"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:max="1000"
-                android:progress="0"
-                android:progressTint="#E5A93C"
-                android:thumbTint="#FFFFFF"
-                android:paddingStart="6dp"
-                android:paddingEnd="6dp" />
-
-            <TextView
-                android:id="@+id/textNpTotalTime"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0:00"
-                android:textColor="#888888"
-                android:textSize="10.5sp"
-                android:fontFamily="@font/font_dap_mono" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:orientation="horizontal"
-            android:gravity="center">
-
-            <ImageButton
-                android:id="@+id/btnNpShuffle"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:src="@drawable/ic_shuffle"
-                android:scaleType="centerInside"
-                android:background="@drawable/bg_btn_walkman_circle_small"
-                android:padding="9dp"
-                android:layout_marginEnd="10dp" />
-
-            <ImageButton
-                android:id="@+id/btnNpPrev"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
-                android:src="@drawable/ic_skip_previous"
-                android:scaleType="centerInside"
-                android:background="@drawable/bg_btn_walkman_circle_small"
-                android:padding="9dp"
-                android:layout_marginEnd="10dp" />
-
-            <ImageButton
-                android:id="@+id/btnNpPlayPause"
-                android:layout_width="60dp"
-                android:layout_height="60dp"
-                android:src="@drawable/ic_pause"
-                android:scaleType="centerInside"
-                android:background="@drawable/bg_btn_walkman_circle_large"
-                android:padding="13dp"
-                android:layout_marginEnd="10dp" />
-
-            <ImageButton
-                android:id="@+id/btnNpNext"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
-                android:src="@drawable/ic_skip_next"
-                android:scaleType="centerInside"
-                android:background="@drawable/bg_btn_walkman_circle_small"
-                android:padding="9dp"
-                android:layout_marginEnd="10dp" />
-
-            <ImageButton
-                android:id="@+id/btnNpRepeat"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:src="@drawable/ic_repeat"
-                android:scaleType="centerInside"
-                android:background="@drawable/bg_btn_walkman_circle_small"
-                android:padding="9dp" />
-        </LinearLayout>
     </LinearLayout>
 
 </FrameLayout>
