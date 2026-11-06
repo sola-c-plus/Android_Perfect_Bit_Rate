@@ -859,7 +859,7 @@ class MainActivity : AppCompatActivity() {
 
     // ★ 設定画面（SettingsActivity）からの戻り: 永続化されたモードを正として
     //   同期し（設定画面は永続化までを担当、実際の切替はここで一元化する）、
-    //   依頼があれば既存の DSP / UI 設定ダイアログを開く。
+    //   依頼があれば既存の UI 設定ダイアログを開く。
     //   モードが変わっていない Local 表示中は、取得範囲（MediaStore
     //   ON/OFF・SAF フォルダ）の変更を一覧へ反映するため再読込する
     //   （仕様書 §6.1: 取得範囲を変えたら再スキャンして一覧を更新する）。
@@ -871,7 +871,6 @@ class MainActivity : AppCompatActivity() {
                 switchPlaybackMode(savedMode)
             }
             when (result.data?.getStringExtra(SettingsActivity.EXTRA_ACTION)) {
-                SettingsActivity.ACTION_OPEN_DSP -> showDspSettingsDialog()
                 SettingsActivity.ACTION_OPEN_UI -> showUiSettingsDialog()
             }
             if (!modeChanged && currentPlaybackMode == PlaybackMode.LOCAL) {
@@ -1159,13 +1158,16 @@ class MainActivity : AppCompatActivity() {
         }
         btnUiSettings.setOnClickListener {
             it.hapticTick(appPrefs)
-            showUiSettingsDialog()
+            // ★ 設定画面（リスト形式）への導線は単押しに統合する（ユーザー判断）。
+            //   従来の UI 設定ダイアログは、設定画面の「画面と UI」行から
+            //   ACTION_OPEN_UI 経由で引き続き開ける。
+            openSettings()
         }
         btnUiSettings.setOnLongClickListener {
-            it.hapticTick(appPrefs)
-            // ★ 新しい設定画面（リスト形式）への導線。短押しは従来の UI 設定
-            //   ダイアログのまま変えない。
-            openSettings()
+            // ★ 長押しは裏設定（開発者プリセット）専用に統一する
+            //   （DSP ボタンの長押しと同じ）。
+            Toast.makeText(this, "DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
+            showDevPresetsDialog()
             true
         }
         textModeSwitch.setOnClickListener {

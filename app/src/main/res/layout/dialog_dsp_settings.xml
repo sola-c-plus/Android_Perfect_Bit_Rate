@@ -824,6 +824,55 @@
                 android:background="#1C1C1C"
                 android:layout_marginBottom="12dp" />
 
+            <!-- DSD CONVERSION RATE (Local 再生専用: デコード側の設定) -->
+            <LinearLayout
+                android:id="@+id/layoutSectionDsdRate"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textDsdRateTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="DSD CONVERSION RATE"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold"
+                        android:fontFamily="@font/font_dap_heading" />
+
+                    <TextView
+                        android:id="@+id/textDsdRateSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Local再生時 DSD→PCM 変換レート"
+                        android:textColor="#777777"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+
+                <Spinner
+                    android:id="@+id/dialogSpinnerDsdRate"
+                    android:layout_width="wrap_content"
+                    android:layout_height="30dp"
+                    android:background="@drawable/bg_spinner_dap"
+                    android:popupBackground="#1A1A1A" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/dividerDspDsd"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#1C1C1C"
+                android:layout_marginBottom="12dp" />
+
             <!-- 0dB VOLUME LOCK -->
             <LinearLayout
                 android:id="@+id/layoutSectionVolLock"

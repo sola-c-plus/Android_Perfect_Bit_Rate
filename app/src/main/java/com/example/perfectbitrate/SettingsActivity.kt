@@ -16,17 +16,18 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.documentfile.provider.DocumentFile
-import java.util.Locale
 
 // ★ 設定画面（仕様書 §7）: Sony 系アプリ（Music Center / WALKMAN 系）の作法に
 //   寄せたリスト形式の設定トップ。カテゴリ見出し（小さなキャプション）＋
 //   「タイトル／現在値 or 要約（小さく下）／右端の遷移マーク」の項目で構成する。
-//   Local モード Phase 1 の設定項目として、再生モード / DSD 変換レート /
+//   Local モード Phase 1 の設定項目として、再生モード /
 //   ライブラリ取得範囲（MediaStore ON/OFF、SAF フォルダの追加・削除、
 //   再スキャン予約）を実装する。スイッチ項目は右端にトグルを置く。
-//   既存の DSP / UI 設定はダイアログのまま MainActivity 側に残し、項目タップで
-//   設定画面を閉じて MainActivity に開かせる導線を用意する
-//   （リスト画面への全面移行の仕上げは Phase 2、仕様書 §9）。
+//   音に関する設定（DSD 変換レートを含む）はドメインで寄せ、DSP ボタン
+//   単押しの DSP 設定ダイアログ側を正規の置き場所とする（ここには
+//   項目を置かない）。既存の UI 設定はダイアログのまま MainActivity 側に
+//   残し、項目タップで設定画面を閉じて MainActivity に開かせる導線を
+//   用意する（リスト画面への全面移行の仕上げは Phase 2、仕様書 §9）。
 //   モード変更はここでは永続化までを行い、実際の切替（再生停止＋flush＋
 //   表示切替）は戻った先の MainActivity が永続値を正として同期する。
 //   取得範囲の変更も同様に prefs への保存までで、戻った先の MainActivity が
@@ -36,7 +37,6 @@ class SettingsActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_ACTION = "extra_action"
-        const val ACTION_OPEN_DSP = "open_dsp"
         const val ACTION_OPEN_UI = "open_ui"
     }
 
@@ -46,7 +46,6 @@ class SettingsActivity : AppCompatActivity() {
 
     private var isDark = true
     private var modeValueText: TextView? = null
-    private var dsdValueText: TextView? = null
 
     // テーマ色（MainActivity.applyThemeUi と同じパレットに揃える）
     private val colorBg get() = if (isDark) "#000000" else "#FFFFFF"
@@ -97,11 +96,6 @@ class SettingsActivity : AppCompatActivity() {
             value = appPrefs.playbackMode.displayName,
             onClick = { showPlaybackModeDialog() }
         )
-        dsdValueText = addRow(
-            title = "DSD 変換レート",
-            value = formatDsdRate(appPrefs.dsdPcmRateHz),
-            onClick = { showDsdRateDialog() }
-        )
 
         addCategory("ライブラリ取得範囲")
         addSwitchRow(
@@ -130,13 +124,6 @@ class SettingsActivity : AppCompatActivity() {
                 appPrefs.localRescanRequested = true
                 Toast.makeText(this, "再スキャンを予約しました", Toast.LENGTH_SHORT).show()
             }
-        )
-
-        addCategory("音質")
-        addRow(
-            title = "DSP 設定",
-            value = "従来のダイアログで開きます",
-            onClick = { finishWithAction(ACTION_OPEN_DSP) }
         )
 
         addCategory("画面と UI")
@@ -295,30 +282,6 @@ class SettingsActivity : AppCompatActivity() {
             }
             .setNegativeButton("キャンセル", null)
             .show()
-    }
-
-    // ★ DSD 変換レート（仕様書 §5.2）: 選択肢は AppPreferences の
-    //   DSD_PCM_RATE_CHOICES が正。変更すると、次回のライブラリ
-    //   リフレッシュで DSD 曲が再プローブされ、キャッシュの表示レートも
-    //   新しい値に追いつく（LibraryRepository 側の再プローブ判定）。
-    private fun showDsdRateDialog() {
-        val choices = AppPreferences.DSD_PCM_RATE_CHOICES
-        val labels = Array<CharSequence>(choices.size) { formatDsdRate(choices[it]) }
-        val currentIndex = choices.indexOf(appPrefs.dsdPcmRateHz).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle("DSD 変換レート")
-            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
-                val selected = choices[which]
-                appPrefs.dsdPcmRateHz = selected
-                dsdValueText?.text = formatDsdRate(selected)
-                dialog.dismiss()
-            }
-            .setNegativeButton("キャンセル", null)
-            .show()
-    }
-
-    private fun formatDsdRate(hz: Int): String {
-        return String.format(Locale.US, "%.1fkHz", hz / 1000.0)
     }
 
     // ★ SAF フォルダ追加: Local 画面側の導線と同じ prefs（safFolderUris）を
