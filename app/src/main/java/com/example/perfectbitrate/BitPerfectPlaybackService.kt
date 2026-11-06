@@ -104,6 +104,16 @@ class BitPerfectPlaybackService : Service() {
     private val trackExecutor = Executors.newSingleThreadExecutor()
     private val isInitializingTrack = AtomicBoolean(false)
     private val hasPendingInit = AtomicBoolean(false)
+    // ★ 保留再実行の上限（案B: initAudioTrack の do-while が要求の
+    //   連打で無限に回らないための保険）。署名が変わらない再要求は
+    //   結果が同じため数えずに捨て、署名が変わる再実行もこの回数で
+    //   打ち切る。詳細は initAudioTrack 参照。
+    private val MAX_PENDING_INIT_ROUNDS = 3
+    // ★ initAudioTrack が初期化を実際に実行した回数（案C で
+    //   switchStreamConfiguration のタスクが「自分の呼び出しが
+    //   実行したか、保留を立てただけか」を判定するために使う）。
+    @Volatile
+    private var initExecutionCount = 0
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
@@ -669,10 +679,23 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★ AudioTrack 初期化の非同期要求（案A: UI スレッド等からの入口）。
+    //   initAudioTrack を呼び出しスレッドで同期実行すると、実行中に
+    //   追加要求が来た場合に保留ループ（hasPendingInit の do-while）が
+    //   そのスレッドを捕まえ続ける（Local 再生中のリログ操作でメイン
+    //   スレッドが捕まりフリーズした事故の経路）。初期化の実行は
+    //   常に trackExecutor へ寄せ、呼び出し側は「現在のフィールド値
+    //   での初期化を要求した」だけで即座に戻る。
+    fun requestStreamReconfiguration() {
+        trackExecutor.execute {
+            initAudioTrack()
+        }
+    }
+
     private fun switchStreamConfiguration() {
         val factorToApply = effectiveFactor
         val targetRate = baseSampleRate * factorToApply
-        
+
         isSwitchingRate.set(true)
         isBuffering.set(true)
         pcmQueue.clear()
@@ -682,11 +705,25 @@ class BitPerfectPlaybackService : Service() {
         notifyPlaybackStateChanged()
 
         trackExecutor.execute {
+            // ★ 案C: isSwitchingRate を落とすのは、このタスク自身が
+            //   init を実行した場合だけにする。従来は finally で無条件
+            //   に落としていたため、初期化の実行中（audioTrack が null
+            //   の窓）に割り込んで保留を立てただけのタスクでもフラグが
+            //   先に落ちて供給が再開され、pushPcm がその窓で再構成
+            //   要求を出し直す連鎖が成立していた。保留の再実行は実行中
+            //   の initAudioTrack 呼び出しの中で行われ、その呼び出しの
+            //   タスクが実行者として戻るため、フラグは必ず実行者側で
+            //   落ちる（案A で初期化の実行は trackExecutor へ統一済み）。
+            var executedInit = false
             try {
+                val executionsBefore = initExecutionCount
                 initAudioTrack()
+                executedInit = initExecutionCount > executionsBefore
             } finally {
                 pcmQueue.clear()
-                isSwitchingRate.set(false)
+                if (executedInit) {
+                    isSwitchingRate.set(false)
+                }
             }
         }
     }
@@ -1296,10 +1333,43 @@ class BitPerfectPlaybackService : Service() {
 
         var success = audioTrack != null
         try {
+            // ★ 案B: 保留再実行への上限。実行中に追加要求が来ると
+            //   hasPendingInit が立ち、このループが再実行するが、
+            //   (1) 構成署名が前回実行時から変わっていない再要求は
+            //   結果が同じため再実行せず保留を捨てる、(2) 署名が
+            //   変わる再実行も MAX_PENDING_INIT_ROUNDS 回で打ち切る
+            //   （いずれも理由をログに残す）。従来は上限がなく、再構成
+            //   要求が続く限り実行スレッドが初期化を繰り返し続けた
+            //   （Local 再生中のリログでメインスレッドが捕まった事故）。
+            var lastExecutedSignature = ""
+            var pendingRounds = 0
             do {
                 hasPendingInit.set(false)
+                lastExecutedSignature = streamInitSignature(baseSampleRate, effectiveFactor)
+                initExecutionCount++
                 success = doInitAudioTrackInternal(requestedBitMode, baseSampleRate, effectiveFactor, activeOutputDevice)
                 handleStreamInitOutcome(success)
+                if (hasPendingInit.get()) {
+                    val currentSignature = streamInitSignature(baseSampleRate, effectiveFactor)
+                    when {
+                        currentSignature == lastExecutedSignature -> {
+                            Log.w(
+                                "BitPerfect",
+                                "★ Pending stream init dropped: configuration unchanged ($currentSignature)"
+                            )
+                            hasPendingInit.set(false)
+                        }
+                        pendingRounds >= MAX_PENDING_INIT_ROUNDS -> {
+                            Log.w(
+                                "BitPerfect",
+                                "★ Pending stream init dropped: round limit " +
+                                    "$MAX_PENDING_INIT_ROUNDS reached (next: $currentSignature)"
+                            )
+                            hasPendingInit.set(false)
+                        }
+                        else -> pendingRounds++
+                    }
+                }
             } while (hasPendingInit.get())
         } finally {
             isInitializingTrack.set(false)
