@@ -784,6 +784,32 @@ class BitPerfectPlaybackService : Service() {
         }
     }
 
+    // ★ Local Music 用のメタデータ受け口（仕様書 §4.3）: アートワークが URL でなく
+    //   Bitmap で届くソース向けに、既存 updateMetadata（URL 経路）とは別に用意する。
+    //   既存経路の挙動は変えない。artwork=null は「アートワークなし」として
+    //   前ソースの画像を残さずクリアする。
+    fun updateMetadataWithBitmap(title: String, artist: String, artwork: Bitmap?) {
+        currentTitle = title
+        currentArtist = artist
+        currentArtworkBitmap = artwork
+
+        val metaBuilder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "perfect_bitrate_${System.currentTimeMillis()}")
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, currentDuration)
+
+        if (artwork != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork)
+        }
+
+        mediaSession.setMetadata(metaBuilder.build())
+        updateNotification()
+        PlayerWidgetProvider.updateAllWidgets(this, title, artist, artwork, isCurrentlyPlaying, currentPosition, currentDuration)
+        notifyPlaybackStateChanged()
+    }
+
     private fun createActionPendingIntent(action: String, requestCode: Int): PendingIntent {
         val intent = Intent(this, BitPerfectPlaybackService::class.java).apply { this.action = action }
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
