@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Size
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import java.util.Locale
@@ -447,6 +448,57 @@ class LibraryRepository(private val context: Context) {
         )
     }
 
+    // ★ 一覧のサムネイル取得（非ブロッキング、結果はワーカースレッドで返る）。
+    //   ライブラリブラウザの曲行用（Phase 2-1）。取得は安い経路から試す:
+    //   1. ContentResolver.loadThumbnail（MediaStore 由来はアルバムアートが
+    //      そのまま返る。SAF 由来はプロバイダがサムネイル提供に対応して
+    //      いれば返る）
+    //   2. FFmpeg による埋め込みアートワーク抽出（loadArtwork を流用し、
+    //      一覧表示に十分な大きさまで縮小する）
+    //   どちらも取れなければ null（呼び出し側でプレースホルダ表示）。
+    fun loadThumbnail(track: Track, onResult: (Bitmap?) -> Unit) {
+        try {
+            executor.execute {
+                val bitmap = try {
+                    loadThumbnailBlocking(track)
+                } catch (e: Exception) {
+                    Log.w(TAG, "loadThumbnail failed", e)
+                    null
+                }
+                try {
+                    onResult(bitmap)
+                } catch (e: Exception) {
+                    // 表示側の都合でサムネイル取得自体を失敗扱いにしない
+                }
+            }
+        } catch (e: Exception) {
+            // executor 停止後（画面破棄後）などは黙って諦める
+            Log.w(TAG, "loadThumbnail rejected", e)
+        }
+    }
+
+    private fun loadThumbnailBlocking(track: Track): Bitmap? {
+        val fromResolver = try {
+            context.contentResolver.loadThumbnail(
+                track.uri, Size(THUMBNAIL_SIZE_PX, THUMBNAIL_SIZE_PX), null
+            )
+        } catch (e: Exception) {
+            null
+        }
+        if (fromResolver != null) return fromResolver
+        val artwork = loadArtwork(track) ?: return null
+        return scaleDownToThumbnail(artwork)
+    }
+
+    private fun scaleDownToThumbnail(bitmap: Bitmap): Bitmap {
+        val maxDimension = maxOf(bitmap.width, bitmap.height)
+        if (maxDimension <= THUMBNAIL_SIZE_PX) return bitmap
+        val scale = THUMBNAIL_SIZE_PX.toFloat() / maxDimension
+        val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, width, height, true)
+    }
+
     // ★ 再生中トラックのアートワーク取得（ブロッキング、呼び出し側スレッドで実行）。
     fun loadArtwork(track: Track): Bitmap? {
         if (!FfmpegDecoder.isAvailable) return null
@@ -625,6 +677,8 @@ class LibraryRepository(private val context: Context) {
     companion object {
         private const val TAG = "LibraryRepository"
         private const val MAX_SAF_DEPTH = 8
+        // 一覧サムネイルの目標サイズ（一辺 px）。行の高さに対して十分な解像度。
+        private const val THUMBNAIL_SIZE_PX = 144
 
         // 対応拡張子は §5.2 のデコーダ有効範囲に合わせる
         private val SUPPORTED_EXTENSIONS = setOf(
