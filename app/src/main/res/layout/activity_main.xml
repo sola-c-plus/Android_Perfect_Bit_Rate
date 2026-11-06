@@ -256,60 +256,10 @@
             android:paddingBottom="8dp"
             android:visibility="gone">
 
-            <!-- ★ Local ライブラリのヘッダー: タイトル＋最小限の操作
-                 （再スキャン / SAF フォルダ追加）。取得範囲の本格的な設定 UI は
-                 設定画面側の次 PR で実装する。ブラウザ側のクロームのため、
-                 「再生」タブ表示中はコード側で隠す（updateLocalChromeVisibility）。 -->
-            <LinearLayout
-                android:id="@+id/localHeaderRow"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:id="@+id/textLocalTitle"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="LOCAL MUSIC"
-                    android:textColor="@color/text_primary"
-                    android:textSize="17sp"
-                    android:textStyle="bold"
-                    android:fontFamily="@font/font_dap_heading"
-                    android:letterSpacing="0.06" />
-
-                <TextView
-                    android:id="@+id/btnLocalAddFolder"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="フォルダ追加"
-                    android:textColor="@color/accent"
-                    android:textSize="10sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_btn_icon"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp"
-                    android:fontFamily="@font/font_dap_condensed"
-                    android:layout_marginEnd="6dp" />
-
-                <TextView
-                    android:id="@+id/btnLocalRescan"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="再スキャン"
-                    android:textColor="@color/accent"
-                    android:textSize="10sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_btn_icon"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp"
-                    android:fontFamily="@font/font_dap_condensed" />
-            </LinearLayout>
+            <!-- ★ Local 画面の見出し行（LOCAL MUSIC 表記＋フォルダ追加 /
+                 再スキャン）は置かない（ユーザー指定で削除）。取得範囲の
+                 管理は設定画面側に集約する。スキャン進捗の表示は下の
+                 ブロックでまかなう。 -->
 
             <!-- ★ 裏側の差分スキャン中に出す控えめな更新中インジケータ
                  （キャッシュ表示中用。件数が出るので進捗も追える） -->
@@ -554,9 +504,9 @@
                         <ImageView
                             android:id="@+id/imgNpArtwork"
                             android:layout_width="match_parent"
-                            android:layout_height="288dp"
-                            android:layout_marginStart="30dp"
-                            android:layout_marginEnd="30dp"
+                            android:layout_height="320dp"
+                            android:layout_marginStart="16dp"
+                            android:layout_marginEnd="16dp"
                             android:layout_marginTop="4dp"
                             android:scaleType="fitCenter"
                             android:src="@drawable/ic_local_artwork_placeholder" />
@@ -704,11 +654,14 @@
                              行に左右マージンを付けて両端のトグルを
                              画面端から内側へ寄せ、中央3ボタン間の
                              間隔も広めに取る。両端のトグルは円で
-                             囲わずアイコンのみ（状態は色で示す） -->
+                             囲わずアイコンのみ（状態は色で示す）。
+                             シークバーとの間隔はボタン類だけを少し
+                             下げるため marginTop を広げてある
+                             （シークバー側の位置は不変）。 -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="14dp"
+                            android:layout_marginTop="26dp"
                             android:layout_marginStart="16dp"
                             android:layout_marginEnd="16dp"
                             android:orientation="horizontal"
@@ -829,15 +782,20 @@
             </FrameLayout>
 
             <!-- ★ ライブラリの下部タブバー: 左から キュー / 再生 /
-                 全曲 / アルバム / アーティスト / プレイリスト。各タブは
-                 アイコン（ic_tab_*）＋ラベルの構成で、選択状態の配色
-                 （アイコンの tint とラベル色）はコード側でテーマに
-                 合わせて切り替える（updateLocalTabStyles）。「再生」は
-                 再生ページへの切替で、一覧で曲をタップして再生が
-                 始まったときも自動で切り替わる（明示タップ起点のみ。
-                 自動進行や通知からの操作では切り替わらない）。ドリル
-                 ダウン中も含め Local 表示中は常に出し、タブ切替で
-                 ドリルダウンから抜けられるようにする。 -->
+                 ライブラリ（統合） / プレイリスト の4つ。TRACKS /
+                 ALBUMS / ARTISTS は1つの統合ボタンにまとめ、ボタン
+                 を押すと3つのどれを表示するか選べる（選択ダイアログ）。
+                 統合ボタンのラベルとアイコンは、現在表示中（または
+                 最後に選んだ）ライブラリビューに合わせてコード側で
+                 切り替える。各タブはアイコン（ic_tab_*）＋ラベルの
+                 構成で、選択状態の配色（アイコンの tint とラベル色）
+                 はコード側でテーマに合わせて切り替える
+                 （updateLocalTabStyles）。「再生」は再生ページへの
+                 切替で、一覧で曲をタップして再生が始まったときも
+                 自動で切り替わる（明示タップ起点のみ。自動進行や
+                 通知からの操作では切り替わらない）。ドリルダウン
+                 中も含め Local 表示中は常に出し、タブ切替でドリル
+                 ダウンから抜けられるようにする。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"
@@ -878,7 +836,7 @@
                     android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
-                    android:id="@+id/tabLocalAll"
+                    android:id="@+id/tabLocalLibrary"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
@@ -892,38 +850,6 @@
                     android:textSize="11sp"
                     android:maxLines="1"
                     android:textStyle="bold"
-                    android:fontFamily="@font/font_dap_condensed" />
-
-                <TextView
-                    android:id="@+id/tabLocalAlbum"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp"
-                    android:drawableTop="@drawable/ic_tab_album"
-                    android:drawablePadding="3dp"
-                    android:text="ALBUMS"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp"
-                    android:maxLines="1"
-                    android:fontFamily="@font/font_dap_condensed" />
-
-                <TextView
-                    android:id="@+id/tabLocalArtist"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp"
-                    android:drawableTop="@drawable/ic_tab_artist"
-                    android:drawablePadding="3dp"
-                    android:text="ARTISTS"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp"
-                    android:maxLines="1"
                     android:fontFamily="@font/font_dap_condensed" />
 
                 <TextView
