@@ -32,6 +32,13 @@ class GeckoSessionController(
         fun onContentProcessGone(kind: String)
     }
 
+    companion object {
+        // ★ プロセス寿命で保持する唯一の GeckoRuntime。Activity ごとに生成される
+        //   本クラスのインスタンス間で共有し、プロセス内では最大1回だけ create() する。
+        //   Runtime には終了 API が無い前提のため、onDestroy でも破棄しない。
+        private var sharedRuntime: GeckoRuntime? = null
+    }
+
     private lateinit var geckoSession: GeckoSession
     private var geckoRuntime: GeckoRuntime? = null
     private var activePort: WebExtension.Port? = null
@@ -74,15 +81,24 @@ class GeckoSessionController(
     }
 
     fun init() {
-        val runtimeSettings = GeckoRuntimeSettings.Builder()
-            .consoleOutput(true)
-            .aboutConfigEnabled(true)
-            .build()
+        // ★ GeckoRuntime はプロセス内で1つだけしか作れない（create() の二重呼び出しは
+        //   例外になる、というのが Mozilla 公式の仕様）。フォアグラウンドサービスが
+        //   プロセスを残すため、スワイプ終了後に Activity だけが再生成され、init() が
+        //   同一プロセスで再度走ることがある。その場合は companion object で保持した
+        //   既存 Runtime を再利用し、create() はプロセス初回のみに限定する。
+        //   runtimeSettings が適用されるのはその初回生成時だけだが、これは現行仕様
+        //   （＝プロセス内で Runtime 設定は不変）どおりで、PR #60 の目的は損なわない。
+        geckoRuntime = sharedRuntime ?: run {
+            val runtimeSettings = GeckoRuntimeSettings.Builder()
+                .consoleOutput(true)
+                .aboutConfigEnabled(true)
+                .build()
 
-        // ★ 以前は build した runtimeSettings を渡さず getDefault() を使っていたため、
-        //   ランタイム設定が一切効かない構造だった。create() に切り替えて設定を実際に
-        //   適用する（設定内容自体は従来の build のまま変えていない）。
-        geckoRuntime = GeckoRuntime.create(activity, runtimeSettings)
+            // ★ 以前は build した runtimeSettings を渡さず getDefault() を使っていたため、
+            //   ランタイム設定が一切効かない構造だった。create() に切り替えて設定を実際に
+            //   適用する（設定内容自体は従来の build のまま変えていない）。
+            GeckoRuntime.create(activity, runtimeSettings).also { sharedRuntime = it }
+        }
         openSession()
     }
 
