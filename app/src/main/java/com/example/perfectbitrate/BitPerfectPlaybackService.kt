@@ -1450,6 +1450,9 @@ class BitPerfectPlaybackService : Service() {
         isRunning = true
         playbackThread = Thread {
             var heartbeatCounter = 0
+            // AudioTrack 書込みエラーの連続回数。一時的なエラーと本物の
+            // 切断を切り分けるために使う（成功でリセット）。
+            var writeErrorStreak = 0
             while (isRunning) {
                 try {
                     heartbeatCounter++
@@ -1506,6 +1509,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written > 0) {
+                            writeErrorStreak = 0
                             val bytesPerSample = when (actualBitMode) {
                                 "32bit" -> 4
                                 "24bit" -> 3
@@ -1519,7 +1523,31 @@ class BitPerfectPlaybackService : Service() {
                             //   で再生ヘッド位置のチャンクのものを取得する。
                             capturePeakSnapshot(totalWrittenFrames, chunkPeak[0], chunkPeak[1])
                         } else if (written < 0) {
-                            handleBecomingNoisyOrDisconnected()
+                            // ★ 書込みエラーを即「デバイス切断」と断定しない。
+                            //   ストリーム構成の切替（updateBaseSampleRate 等に
+                            //   よる AudioTrack 再生成）では、再生ループが掴んだ
+                            //   旧トラック参照への書込みが切替と競合してエラーに
+                            //   なることがある。従来はその1回で切断フローへ倒れ、
+                            //   「pause」コマンド経由で供給係（Local 再生中なら
+                            //   LocalPlayer）まで止まってしまい、再生中の突然の
+                            //   停止として現れていた。切替中・トラック入れ替わり
+                            //   中のエラーはこのチャンクを捨てて継続し、現在の
+                            //   トラックへの書込みエラーが連続した場合だけ
+                            //   従来どおり切断フローへ倒す（本物の切断では
+                            //   エラーが続くため検出は1チャンク分しか遅れない）。
+                            var currentTrack: AudioTrack? = null
+                            audioLock.lock()
+                            try {
+                                currentTrack = audioTrack
+                            } finally {
+                                audioLock.unlock()
+                            }
+                            if (isSwitchingRate.get() || currentTrack !== track) {
+                                writeErrorStreak = 0
+                            } else if (++writeErrorStreak >= 2) {
+                                writeErrorStreak = 0
+                                handleBecomingNoisyOrDisconnected()
+                            }
                         }
                     }
                 } catch (e: InterruptedException) {

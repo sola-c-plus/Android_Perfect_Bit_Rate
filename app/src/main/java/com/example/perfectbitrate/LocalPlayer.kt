@@ -438,9 +438,14 @@ class LocalPlayer(
     // ── 内部 ──
 
     // stateLock 保持必須。指定曲のデコーダを開いてデコードを開始する。
-    private fun startTrackLocked(index: Int, startAtMs: Long) {
+    // isDecodeRetry: デコードエラーのリトライとして開き直す場合のみ true
+    // （リトライ位置の記録をリセットしないため）。
+    private fun startTrackLocked(index: Int, startAtMs: Long, isDecodeRetry: Boolean = false) {
         val track = queue[index]
         val gen = ++generation
+        if (!isDecodeRetry) {
+            lastDecodeErrorRetryPositionMs = -1L
+        }
 
         // ★ フラッシュはデコーダのオープンより先に送る。Service の
         //   キューには前曲の未再生 PCM が数秒分残っているため、
@@ -552,6 +557,26 @@ class LocalPlayer(
             if (gen != generation) return // 古い世代の終了は無視する
             decodeFinished = true
             if (error) {
+                // ★ デコードエラーで即・全停止にしない。一時的な読み取り
+                //   失敗（SAF 越しの瞬断など）やコーデックの一時的な
+                //   異常でも、聞こえている位置から開き直せば再開できる
+                //   ことが多い。同じ位置付近で繰り返す場合（ファイル
+                //   自体の破損など）はリトライせず従来どおり止める:
+                //   リトライ位置が前回のリトライ位置から十分に進んで
+                //   いる場合だけ、もう一度だけ開き直す。
+                val retryAtMs = displayPositionMs()
+                val lastRetryAtMs = lastDecodeErrorRetryPositionMs
+                if (currentIndex in queue.indices &&
+                    (lastRetryAtMs < 0L || retryAtMs - lastRetryAtMs > DECODE_RETRY_MIN_ADVANCE_MS)
+                ) {
+                    lastDecodeErrorRetryPositionMs = retryAtMs
+                    Log.w(
+                        TAG,
+                        "decode error at index=$currentIndex, reopening at ${retryAtMs}ms"
+                    )
+                    startTrackLocked(currentIndex, retryAtMs, isDecodeRetry = true)
+                    return
+                }
                 Log.w(TAG, "decode ended with error at index=$currentIndex")
                 isPlaying = false
                 listener.onState(false)
@@ -657,6 +682,11 @@ class LocalPlayer(
 
     private var consecutiveOpenFailures = 0
 
+    // デコードエラーのリトライを行った位置（表示位置 ms）。同じ位置
+    // 付近での再エラーではリトライしないための記録で、新しい曲の
+    // 開始（リトライでない startTrackLocked）でリセットされる。
+    private var lastDecodeErrorRetryPositionMs = -1L
+
     private fun autoAdvanceAfterFailure(gen: Int, failedIndex: Int) {
         // startTrackLocked 内（stateLock 保持中）から呼ばれる前提
         consecutiveOpenFailures++
@@ -731,5 +761,8 @@ class LocalPlayer(
         // 流れ切るまで待つ猶予と、そのポーリング間隔
         private const val DRAIN_POLL_INTERVAL_MS = 50L
         private const val DRAIN_SETTLE_MS = 500L
+        // デコードエラーのリトライ可否: 前回のリトライ位置からこの時間
+        // 以上デコード（表示位置）が進んでいる場合だけ再リトライする
+        private const val DECODE_RETRY_MIN_ADVANCE_MS = 3000L
     }
 }

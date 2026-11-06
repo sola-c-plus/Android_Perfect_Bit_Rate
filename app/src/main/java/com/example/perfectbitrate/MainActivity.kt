@@ -30,7 +30,6 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
 import android.util.LruCache
-import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -117,6 +116,9 @@ class MainActivity : AppCompatActivity() {
     //   状態と干渉しないようにする。
     private lateinit var localQueuePage: View
     private lateinit var localQueueList: ListView
+    // Local 3ページの親コンテナ。スワイプ検出は dispatchTouchEvent で
+    // この範囲内のタッチだけを対象にする（傍受のみ、消費はしない）。
+    private lateinit var localPageContainer: View
     private lateinit var textQueueEmpty: TextView
     private lateinit var localNpContent: View
     private lateinit var textNpEmpty: TextView
@@ -178,6 +180,10 @@ class MainActivity : AppCompatActivity() {
 
     private var localTab = LocalTab.ALL
     private var localGroupKey: String? = null
+    // ★ アーティスト配下のアルバムドリルダウンキー（null = アルバム
+    //   一覧を表示中）。アーティスト → アルバム一覧 → アルバム内の
+    //   曲、の2段ドリルダウンにするための追加状態。
+    private var localArtistAlbumKey: String? = null
     private var localSearchQuery: String = ""
     private var localDisplayedTracks: List<LibraryRepository.Track> = emptyList()
     private var localGroupAdapter: LocalGroupAdapter? = null
@@ -947,14 +953,36 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val groupKey = localGroupKey
-        if (groupKey != null && localTab != LocalTab.ALL) {
+        if (groupKey != null && localTab == LocalTab.ARTIST && localArtistAlbumKey == null) {
+            // ★ アーティストのドリルダウン1段目: そのアーティストの
+            //   アルバム一覧を出す（先頭行は「全てのアルバムを再生」）。
+            //   曲をアルバム混在のまま並べず、アルバム単位に分ける。
+            val albums = localAlbumsForArtist(groupKey, localSearchQuery)
+            val totalTracks = localTracks.count { artistGroupKeyOf(it) == groupKey }
+            localDisplayedTracks = emptyList()
+            localTrackList.adapter = LocalArtistAlbumsAdapter(albums, totalTracks)
+            updateLocalEmptyMessage(albums.size, isTrackPage = false)
+            textLocalGroupTitle.text = groupKey
+            localGroupHeader.visibility = View.VISIBLE
+        } else if (groupKey != null && localTab != LocalTab.ALL) {
             // ドリルダウン中: 選択中グループの曲一覧（検索フィルタ適用、
-            // 並びはタイトル順で固定。グループ内の曲順はソート対象外）
+            // 並びはタイトル順で固定。グループ内の曲順はソート対象外）。
+            // アーティストの2段目ではアルバムでも絞り込む。
+            val albumKey = localArtistAlbumKey
             val groupTracks = localTracks
                 .filter { localGroupKeyOf(localTab, it) == groupKey }
+                .filter {
+                    albumKey == null || localTab != LocalTab.ARTIST ||
+                        albumKeyOf(it) == albumKey
+                }
                 .filter { localTrackMatchesQuery(it, localSearchQuery) }
             showLocalTrackPage(sortLocalTracks(groupTracks, AppPreferences.LOCAL_SORT_TITLE))
-            textLocalGroupTitle.text = groupKey
+            textLocalGroupTitle.text =
+                if (localTab == LocalTab.ARTIST && albumKey != null) {
+                    "$groupKey › $albumKey"
+                } else {
+                    groupKey
+                }
             localGroupHeader.visibility = View.VISIBLE
         } else {
             localGroupHeader.visibility = View.GONE
@@ -1123,8 +1151,28 @@ class MainActivity : AppCompatActivity() {
     private fun selectLocalTab(tab: LocalTab) {
         localTab = tab
         localGroupKey = null
+        localArtistAlbumKey = null
         localPlaylistDrillId = null
         refreshLocalBrowser()
+    }
+
+    // ★ ドリルダウンを1段戻る。戻れたら true。アーティストの
+    //   2段目（アルバム内）からはアルバム一覧へ、グループ／
+    //   プレイリストのドリルダウンからは一覧へ戻る。戻るボタン
+    //   （ヘッダー）と Android の戻る操作で共用する。
+    private fun localDrillBack(): Boolean {
+        if (localArtistAlbumKey != null) {
+            localArtistAlbumKey = null
+            refreshLocalBrowser()
+            return true
+        }
+        if (localGroupKey != null || localPlaylistDrillId != null) {
+            localGroupKey = null
+            localPlaylistDrillId = null
+            refreshLocalBrowser()
+            return true
+        }
+        return false
     }
 
     // ★ 下部タブの並び順（左→右）。スワイプでの隣接移動に使う。
@@ -1155,51 +1203,76 @@ class MainActivity : AppCompatActivity() {
         selectLocalTab(localTabOrder[target])
     }
 
-    // ★ Local コンテンツ領域の左右スワイプでタブを切り替える配線。
-    //   リスナは常に false を返し、通常のタッチ処理（リストの縦
-    //   スクロール・クリック・長押し）を一切妨げない。タブ切替に
-    //   使うのは、水平成分が垂直成分を明確に上回るフリックだけ。
-    //   再生ページではシークバーやボタンが自分のタッチを消費する
-    //   ため、ページ側のリスナには届かず競合しない（シーク中の
-    //   フラグでも追加で弾く）。
-    private fun setupLocalTabSwipe() {
-        val detector = GestureDetector(
-            this,
-            object : GestureDetector.SimpleOnGestureListener() {
-                override fun onFling(
-                    e1: MotionEvent?,
-                    e2: MotionEvent,
-                    velocityX: Float,
-                    velocityY: Float
-                ): Boolean {
-                    if (currentPlaybackMode != PlaybackMode.LOCAL) return false
-                    if (isNpSeeking) return false
-                    val start = e1 ?: return false
-                    val dx = e2.x - start.x
-                    val dy = e2.y - start.y
-                    val minDistance = LOCAL_TAB_SWIPE_MIN_DISTANCE_DP *
-                        resources.displayMetrics.density
-                    if (abs(dx) < minDistance) return false
-                    if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return false
-                    if (abs(velocityX) < LOCAL_TAB_SWIPE_MIN_VELOCITY) return false
-                    if (abs(velocityX) < abs(velocityY) * LOCAL_TAB_SWIPE_AXIS_RATIO) {
-                        return false
-                    }
-                    // 左スワイプ（指が左へ, dx < 0）→ 左隣のタブ
-                    switchLocalTabBySwipe(toLeft = dx < 0)
-                    return true
-                }
+    // ★ スワイプ検出の追跡状態（dispatchTouchEvent で傍受する）。
+    //   前実装（GestureDetector＋各ページへの非消費 OnTouchListener）は
+    //   実機で全く反応しなかった: SimpleOnGestureListener は onDown が
+    //   既定で false を返すため GestureDetector がジェスチャを破棄し、
+    //   onFling が一度も呼ばれなかったのが主因（加えてリスト行などの
+    //   子 View がタッチを掴むとページ側リスナへの配送も不安定）。
+    //   そのため検出はアクティビティのタッチ配送の入り口で自前
+    //   追跡する。傍受のみでイベントは一切消費せず、通常のタッチ
+    //   処理（縦スクロール・クリック・長押し・シーク）は無影響。
+    private var localSwipeTracking = false
+    private var localSwipeStartX = 0f
+    private var localSwipeStartY = 0f
+    private var localSwipeStartTimeMs = 0L
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        trackLocalTabSwipe(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun trackLocalTabSwipe(ev: MotionEvent) {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                localSwipeTracking = false
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return
+                if (isNpSeeking) return
+                if (!::localPageContainer.isInitialized) return
+                if (localPageContainer.visibility != View.VISIBLE) return
+                val rect = android.graphics.Rect()
+                if (!localPageContainer.getGlobalVisibleRect(rect)) return
+                val x = ev.rawX.toInt()
+                val y = ev.rawY.toInt()
+                if (!rect.contains(x, y)) return
+                // シークバーと検索欄の上から始まるタッチは対象外
+                // （ドラッグや文字入力と誤認しないため）。
+                if (::seekNpProgress.isInitialized && isTouchInside(seekNpProgress, x, y)) return
+                if (::editLocalSearch.isInitialized && isTouchInside(editLocalSearch, x, y)) return
+                localSwipeTracking = true
+                localSwipeStartX = ev.rawX
+                localSwipeStartY = ev.rawY
+                localSwipeStartTimeMs = android.os.SystemClock.uptimeMillis()
             }
-        )
-        val listener = View.OnTouchListener { _, event ->
-            detector.onTouchEvent(event)
-            false
+            MotionEvent.ACTION_UP -> {
+                if (!localSwipeTracking) return
+                localSwipeTracking = false
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return
+                if (isNpSeeking) return
+                val dx = ev.rawX - localSwipeStartX
+                val dy = ev.rawY - localSwipeStartY
+                val dtMs = android.os.SystemClock.uptimeMillis() - localSwipeStartTimeMs
+                if (dtMs <= 0L) return
+                val minDistance = LOCAL_TAB_SWIPE_MIN_DISTANCE_DP *
+                    resources.displayMetrics.density
+                if (abs(dx) < minDistance) return
+                if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return
+                val velocityX = abs(dx) / dtMs * 1000f
+                if (velocityX < LOCAL_TAB_SWIPE_MIN_VELOCITY) return
+                // 左スワイプ（指が左へ, dx < 0）→ 左隣のタブ
+                switchLocalTabBySwipe(toLeft = dx < 0)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                localSwipeTracking = false
+            }
         }
-        localTrackList.setOnTouchListener(listener)
-        localQueueList.setOnTouchListener(listener)
-        localBrowserPage.setOnTouchListener(listener)
-        localQueuePage.setOnTouchListener(listener)
-        localNowPlaying.setOnTouchListener(listener)
+    }
+
+    private fun isTouchInside(view: View, rawX: Int, rawY: Int): Boolean {
+        if (view.visibility != View.VISIBLE) return false
+        val rect = android.graphics.Rect()
+        if (!view.getGlobalVisibleRect(rect)) return false
+        return rect.contains(rawX, rawY)
     }
 
     // 一覧のタップ振り分け: グループ一覧ならドリルダウン、曲リストなら
@@ -1216,6 +1289,20 @@ class MainActivity : AppCompatActivity() {
             val playlist = (localTrackList.adapter as? LocalPlaylistAdapter)
                 ?.getItem(position) ?: return
             localPlaylistDrillId = playlist.id
+            refreshLocalBrowser()
+            return
+        }
+        if (localTab == LocalTab.ARTIST && localGroupKey != null && localArtistAlbumKey == null) {
+            // ★ アーティストのアルバム一覧: 先頭行はそのアーティストの
+            //   全曲再生、それ以外はアルバムへのドリルダウン。
+            val artistKey = localGroupKey ?: return
+            if (position == 0) {
+                playAllArtistTracks(artistKey)
+                return
+            }
+            val album = (localTrackList.adapter as? LocalArtistAlbumsAdapter)
+                ?.albumGroupAt(position) ?: return
+            localArtistAlbumKey = album.key
             refreshLocalBrowser()
             return
         }
@@ -1263,6 +1350,10 @@ class MainActivity : AppCompatActivity() {
             showPlaylistManageDialog(playlist)
             return true
         }
+        if (localTab == LocalTab.ARTIST && localGroupKey != null && localArtistAlbumKey == null) {
+            // アーティストのアルバム一覧では長押しは無効（消費だけする）
+            return true
+        }
         if (localGroupKey == null && (localTab == LocalTab.ALBUM || localTab == LocalTab.ARTIST)) {
             return true
         }
@@ -1274,6 +1365,18 @@ class MainActivity : AppCompatActivity() {
             showAddToPlaylistDialog(track)
         }
         return true
+    }
+
+    // ★ アーティストの全曲再生（アルバム一覧の先頭行）。全アルバムを
+    //   横断して、そのアーティストの全曲をアルバム順のキューにして
+    //   先頭から再生し、「再生」タブへ切り替える（曲タップと同じ作法）。
+    private fun playAllArtistTracks(artistKey: String) {
+        val tracks = localTracks.filter { artistGroupKeyOf(it) == artistKey }
+        if (tracks.isEmpty()) return
+        val queue = sortLocalTracks(tracks, AppPreferences.LOCAL_SORT_ALBUM)
+        localPlayer.setQueue(queue)
+        localPlayer.playAt(0)
+        selectLocalTab(LocalTab.NOW_PLAYING)
     }
 
     // ── プレイリスト操作（ダイアログ群） ──
@@ -1611,10 +1714,51 @@ class MainActivity : AppCompatActivity() {
 
     private fun localGroupKeyOf(tab: LocalTab, track: LibraryRepository.Track): String {
         return when (tab) {
-            LocalTab.ALBUM -> track.album.ifBlank { unknownAlbumLabel }
-            LocalTab.ARTIST -> track.artist.ifBlank { unknownArtistLabel }
+            LocalTab.ALBUM -> albumKeyOf(track)
+            LocalTab.ARTIST -> artistGroupKeyOf(track)
             LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE -> ""
         }
+    }
+
+    // アルバムのグループキー（アルバム名そのもの。空は不明ラベル）
+    private fun albumKeyOf(track: LibraryRepository.Track): String {
+        return track.album.ifBlank { unknownAlbumLabel }
+    }
+
+    // ★ アーティストのグループキー。設定「アーティストの分類」で
+    //   切り替わる: アルバムアーティスト指定時はタグの albumArtist
+    //   （無い曲は曲のアーティストで代替）、アーティスト指定時は
+    //   曲のアーティストそのもの。空は不明ラベル。
+    private fun artistGroupKeyOf(track: LibraryRepository.Track): String {
+        val raw = if (appPrefs.localArtistGrouping ==
+            AppPreferences.LOCAL_ARTIST_GROUPING_ARTIST
+        ) {
+            track.artist
+        } else {
+            track.albumArtist.ifBlank { track.artist }
+        }
+        return raw.ifBlank { unknownArtistLabel }
+    }
+
+    // ★ アーティスト配下のアルバム一覧の導出。検索中は、アルバム名に
+    //   一致するか、そのアルバム内に検索に一致する曲を含むアルバムを
+    //   残す（グループ一覧と同じ流儀）。
+    private fun localAlbumsForArtist(artistKey: String, query: String): List<LocalGroup> {
+        val grouped = LinkedHashMap<String, MutableList<LibraryRepository.Track>>()
+        for (track in localTracks) {
+            if (artistGroupKeyOf(track) != artistKey) continue
+            grouped.getOrPut(albumKeyOf(track)) { mutableListOf() } += track
+        }
+        val q = query.lowercase(Locale.ROOT)
+        return grouped.map { (key, tracks) ->
+            LocalGroup(key = key, label = key, tracks = tracks, uniformArtist = null)
+        }.filter { group ->
+            q.isBlank() ||
+                group.label.lowercase(Locale.ROOT).contains(q) ||
+                group.tracks.any { localTrackMatchesQuery(it, query) }
+        }.sortedWith(
+            compareBy<LocalGroup> { it.label.lowercase(Locale.ROOT) }
+        )
     }
 
     private fun requestAudioPermission() {
@@ -1669,8 +1813,14 @@ class MainActivity : AppCompatActivity() {
     //   Gecko へ反映するために保持する（settingsLauncher 参照）。
     private var adBlockEnabledBeforeSettings: Boolean? = null
 
+    // ★ 設定画面を開く直前のアーティスト分類。変わって戻ってきたら、
+    //   ドリルダウン中のキーが新しい分類では無効になるため、ドリル
+    //   状態をリセットしてからアーティスト表示を組み替える。
+    private var artistGroupingBeforeSettings: Int? = null
+
     private fun openSettings() {
         adBlockEnabledBeforeSettings = appPrefs.isAdBlockEnabled
+        artistGroupingBeforeSettings = appPrefs.localArtistGrouping
         settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
     }
 
@@ -1848,6 +1998,17 @@ class MainActivity : AppCompatActivity() {
                 geckoController.sendAdBlock(appPrefs.isAdBlockEnabled)
             }
             adBlockEnabledBeforeSettings = null
+            // ★ アーティスト分類が変わっていたら、ドリルダウン状態
+            //   （旧分類のキー）をリセットする。分類自体は導出時に
+            //   prefs を都度読むため、下の再読込で新しい分類の
+            //   アーティスト表示に組み替わる。
+            val beforeGrouping = artistGroupingBeforeSettings
+            if (beforeGrouping != null && appPrefs.localArtistGrouping != beforeGrouping) {
+                localGroupKey = null
+                localArtistAlbumKey = null
+                localPlaylistDrillId = null
+            }
+            artistGroupingBeforeSettings = null
             val savedMode = appPrefs.playbackMode
             val modeChanged = savedMode != currentPlaybackMode
             if (modeChanged) {
@@ -1991,6 +2152,7 @@ class MainActivity : AppCompatActivity() {
         localBrowserPage = findViewById(R.id.localBrowserPage)
         localNowPlaying = findViewById(R.id.localNowPlaying)
         localQueuePage = findViewById(R.id.localQueuePage)
+        localPageContainer = findViewById(R.id.localPageContainer)
         localQueueList = findViewById(R.id.localQueueList)
         textQueueEmpty = findViewById(R.id.textQueueEmpty)
         localNpContent = findViewById(R.id.localNpContent)
@@ -2176,14 +2338,9 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 // ★ 戻る操作の優先順位: Local のドリルダウンを戻る →
                 //   Gecko の履歴を戻る → 終了確認。
-                // ★ Local のドリルダウン中は、まずグループ一覧へ戻る
+                // ★ Local のドリルダウン中は、まず1段戻る
                 //   （プレイリストのドリルダウンも同様）
-                if (currentPlaybackMode == PlaybackMode.LOCAL &&
-                    (localGroupKey != null || localPlaylistDrillId != null)
-                ) {
-                    localGroupKey = null
-                    localPlaylistDrillId = null
-                    refreshLocalBrowser()
+                if (currentPlaybackMode == PlaybackMode.LOCAL && localDrillBack()) {
                     return
                 }
                 if (geckoController.canGoBack) {
@@ -2301,13 +2458,11 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.PLAYLIST)
         }
-        // ★ コンテンツ領域の左右スワイプでもタブ切替できるようにする
-        setupLocalTabSwipe()
+        // （タブ切替スワイプは dispatchTouchEvent 側で傍受するため、
+        //   ここでの配線は不要）
         btnLocalBack.setOnClickListener {
             it.hapticTick(appPrefs)
-            localGroupKey = null
-            localPlaylistDrillId = null
-            refreshLocalBrowser()
+            localDrillBack()
         }
         btnLocalSort.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -2911,6 +3066,94 @@ class MainActivity : AppCompatActivity() {
             subView.text = subParts.joinToString(" • ")
             subView.setTextColor(colorValue)
             chevronView.setTextColor(colorValue)
+            return root
+        }
+
+        private fun buildRow(): LinearLayout {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            val root = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(9), dp(4), dp(9))
+                layoutParams = android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val texts = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val nameView = TextView(this@MainActivity).apply {
+                textSize = 14.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(nameView)
+            texts.addView(subView)
+            val chevronView = TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 16f
+                setPadding(dp(10), 0, dp(2), 0)
+            }
+            root.addView(texts)
+            root.addView(chevronView)
+            return root
+        }
+    }
+
+    // ★ アーティスト配下のアルバム一覧のアダプタ。先頭行は
+    //   「全てのアルバムを再生」のアクション行で、それ以降が
+    //   アルバム本体（名前＋曲数）。行レイアウトはグループ行と
+    //   同じ作りで使い回す（プレイリスト一覧と同じ +1 行方式）。
+    private inner class LocalArtistAlbumsAdapter(
+        private val groups: List<LocalGroup>,
+        private val totalTrackCount: Int
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = groups.size + 1
+
+        // position 0 は全曲再生行のため null を返す
+        fun albumGroupAt(position: Int): LocalGroup? =
+            if (position == 0) null else groups.getOrNull(position - 1)
+
+        override fun getItem(position: Int): LocalGroup? = albumGroupAt(position)
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val isDark = isDarkThemeActive()
+            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
+            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
+            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+
+            val root = (convertView as? LinearLayout) ?: buildRow()
+            val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val chevronView = root.getChildAt(1) as TextView
+
+            if (position == 0) {
+                nameView.text = "全てのアルバムを再生"
+                nameView.setTextColor(colorAccent)
+                subView.text = "全 $totalTrackCount 曲"
+                subView.setTextColor(colorValue)
+                chevronView.text = "▶"
+                chevronView.setTextColor(colorAccent)
+            } else {
+                val group = groups[position - 1]
+                nameView.text = group.label
+                nameView.setTextColor(colorTitle)
+                subView.text = "${group.tracks.size} 曲"
+                subView.setTextColor(colorValue)
+                chevronView.text = "›"
+                chevronView.setTextColor(colorValue)
+            }
             return root
         }
 

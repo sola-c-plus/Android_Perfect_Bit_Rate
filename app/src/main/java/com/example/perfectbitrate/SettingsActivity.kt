@@ -51,6 +51,7 @@ class SettingsActivity : AppCompatActivity() {
     private var isDark = true
     private var modeValueText: TextView? = null
     private var themeValueText: TextView? = null
+    private var artistGroupingValueText: TextView? = null
 
     // テーマ色（MainActivity.applyThemeUi と同じパレットに揃える）
     private val colorBg get() = if (isDark) "#000000" else "#FFFFFF"
@@ -129,6 +130,11 @@ class SettingsActivity : AppCompatActivity() {
                 appPrefs.localRescanRequested = true
                 Toast.makeText(this, "再スキャンを予約しました", Toast.LENGTH_SHORT).show()
             }
+        )
+        artistGroupingValueText = addRow(
+            title = "アーティストの分類",
+            value = artistGroupingLabel(appPrefs.localArtistGrouping),
+            onClick = { showArtistGroupingDialog() }
         )
 
         addCategory("画面と UI")
@@ -328,6 +334,36 @@ class SettingsActivity : AppCompatActivity() {
                 val selected = modes[which]
                 appPrefs.playbackMode = selected
                 modeValueText?.text = selected.displayName
+                dialog.dismiss()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    private fun artistGroupingLabel(grouping: Int): String {
+        return when (grouping) {
+            AppPreferences.LOCAL_ARTIST_GROUPING_ARTIST -> "アーティスト"
+            else -> "アルバムアーティスト"
+        }
+    }
+
+    // ★ アーティストタブのグルーピングキー切替。ここでは prefs への
+    //   保存までで、Local のアーティスト表示は導出時に prefs を都度
+    //   読むため、MainActivity へ戻った時点で新しい分類に組み替わる
+    //   （戻り先がドリルダウン状態をリセットしてから再描画する）。
+    private fun showArtistGroupingDialog() {
+        val values = intArrayOf(
+            AppPreferences.LOCAL_ARTIST_GROUPING_ALBUM_ARTIST,
+            AppPreferences.LOCAL_ARTIST_GROUPING_ARTIST
+        )
+        val labels = Array<CharSequence>(values.size) { artistGroupingLabel(values[it]) }
+        val currentIndex = values.indexOf(appPrefs.localArtistGrouping).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("アーティストの分類")
+            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
+                val selected = values[which]
+                appPrefs.localArtistGrouping = selected
+                artistGroupingValueText?.text = artistGroupingLabel(selected)
                 dialog.dismiss()
             }
             .setNegativeButton("キャンセル", null)

@@ -508,11 +508,12 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeOpen(JNIEnv *env, jobject /*
 //   戻り値の String 配列（固定順）:
 //   [0]=sampleRate [1]=channels [2]=bitDepth [3]=codecName [4]=bitRate
 //   [5]=durationMs [6]=isDsd(0/1) [7]=title [8]=artist [9]=album [10]=track
+//   [11]=albumArtist（タグの album_artist 系。表記揺れを吸収して探す）
 JNIEXPORT jobjectArray JNICALL
 Java_com_example_perfectbitrate_FfmpegDecoder_nativeGetInfo(JNIEnv *env, jobject /*thiz*/, jlong handle) {
     DecoderContext *ctx = fromHandle(handle);
     jclass stringCls = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(11, stringCls, nullptr);
+    jobjectArray result = env->NewObjectArray(12, stringCls, nullptr);
     env->DeleteLocalRef(stringCls);
     if (ctx == nullptr || result == nullptr) return result;
 
@@ -523,7 +524,7 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeGetInfo(JNIEnv *env, jobject
         return entry != nullptr && entry->value != nullptr ? entry->value : "";
     };
 
-    std::string values[11];
+    std::string values[12];
     values[0] = std::to_string(ctx->sampleRate);
     values[1] = std::to_string(ctx->channels);
     values[2] = std::to_string(ctx->bitDepth);
@@ -535,7 +536,12 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeGetInfo(JNIEnv *env, jobject
     values[8] = getMeta("artist");
     values[9] = getMeta("album");
     values[10] = getMeta("track");
-    for (int i = 0; i < 11; i++) {
+    // アルバムアーティストは形式ごとにキー表記が揺れる（FLAC/Vorbis は
+    // album_artist に正規化されるが、albumArtist のまま保持する形式もある）
+    values[11] = getMeta("album_artist");
+    if (values[11].empty()) values[11] = getMeta("albumArtist");
+    if (values[11].empty()) values[11] = getMeta("AlbumArtist");
+    for (int i = 0; i < 12; i++) {
         jstring s = env->NewStringUTF(values[i].c_str());
         env->SetObjectArrayElement(result, i, s);
         env->DeleteLocalRef(s);
@@ -638,6 +644,26 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeDecodeLoop(JNIEnv *env, jobj
 
         int readRet = av_read_frame(ctx->fmtCtx, packet);
         if (readRet < 0) {
+            // ★ 終端付近でない読み取りエラーは EOF と偽らない。
+            //   一部の demuxer は本当の終端でも EIO 等を返すため従来は
+            //   全て「終端」扱いにしていたが、SAF 越しの一時的な読み取り
+            //   失敗（プロバイダの瞬断など）まで終端化すると、曲の途中
+            //   で「再生し切った」ことになって再生が止まる/飛ぶ。
+            //   曲の長さが判明していて、デコード位置から見て終端まで
+            //   十分な残りがある位置でのエラーは異常として報告し、
+            //   Kotlin 側のリトライ（聞こえている位置から開き直して
+            //   再開する）に委ねる。長さ不明・終端付近・クリーンな
+            //   EOF・停止要求による中断は従来どおり終端として扱う。
+            const bool cleanEof = readRet == AVERROR_EOF || ctx->stopRequested.load();
+            const bool farFromEnd = ctx->durationMs > 0 && ctx->lastPositionMs >= 0 &&
+                                    (ctx->durationMs - ctx->lastPositionMs) > 5000;
+            if (!cleanEof && farFromEnd) {
+                LOGW("decodeLoop: read error (%d) at %lldms / %lldms, reporting as error",
+                     readRet, static_cast<long long>(ctx->lastPositionMs),
+                     static_cast<long long>(ctx->durationMs));
+                error = true;
+                break;
+            }
             // EOF 系・終端系エラーは全て「終端」として扱い、デコーダの残りを
             // 吐き出して正常終了する（一部 demuxer は終端で EIO 等を返すため）。
             eof = true;

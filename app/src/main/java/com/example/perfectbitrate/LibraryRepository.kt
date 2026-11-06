@@ -55,7 +55,11 @@ class LibraryRepository(private val context: Context) {
         //   取れない場合は（表示名 + サイズ + 長さ）の複合キーに落とす
         //   （identityKeyOf 参照）。DB にも保存し、キャッシュ表示の段階でも
         //   重複を畳めるようにする。
-        val fileKey: String? = null
+        val fileKey: String? = null,
+        // アルバムアーティスト（タグの album_artist 系、MediaStore では
+        // album_artist 列）。アーティストタブのグルーピング用で、無い
+        // 曲は ""（表示側でアーティストへ代替する）。
+        val albumArtist: String = ""
     ) {
         enum class Source { MEDIASTORE, SAF }
     }
@@ -84,7 +88,9 @@ class LibraryRepository(private val context: Context) {
         val fallbackTitle: String?,
         val fallbackArtist: String?,
         val fallbackAlbum: String?,
-        val fallbackDurationMs: Long
+        val fallbackDurationMs: Long,
+        // MediaStore の album_artist 列（端末により列が無い場合は null）
+        val fallbackAlbumArtist: String? = null
     )
 
     private data class CacheKey(val uri: String, val sizeBytes: Long, val modifiedMs: Long)
@@ -435,6 +441,8 @@ class LibraryRepository(private val context: Context) {
                 ?: entry.fallbackArtist ?: "",
             album = info?.album?.takeIf { it.isNotBlank() }
                 ?: entry.fallbackAlbum ?: "",
+            albumArtist = info?.albumArtist?.takeIf { it.isNotBlank() }
+                ?: entry.fallbackAlbumArtist ?: "",
             durationMs = info?.durationMs?.takeIf { it > 0 }
                 ?: entry.fallbackDurationMs,
             sizeBytes = entry.sizeBytes,
@@ -533,7 +541,11 @@ class LibraryRepository(private val context: Context) {
             MediaStore.Audio.Media.DATE_MODIFIED,
             MediaStore.Audio.Media.MIME_TYPE,
             // 実パス（同一性キーの材料。列が引けない/空の端末では null 扱い）
-            MediaStore.Audio.Media.DATA
+            MediaStore.Audio.Media.DATA,
+            // アルバムアーティスト（列名で指定する: 定数 MediaStore.Audio.Media
+            // .ALBUM_ARTIST は新しい API のため、列が無い端末では getColumnIndex
+            // が -1 を返してフォールバックする作りにする）
+            "album_artist"
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         try {
@@ -547,6 +559,7 @@ class LibraryRepository(private val context: Context) {
                 val sizeCol = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
                 val modifiedCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
                 val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                val albumArtistCol = cursor.getColumnIndex("album_artist")
                 while (cursor.moveToNext()) {
                     val name = cursor.getString(nameCol) ?: continue
                     if (!isSupportedExtension(name)) continue
@@ -566,7 +579,12 @@ class LibraryRepository(private val context: Context) {
                         fallbackTitle = if (titleCol >= 0) cursor.getString(titleCol) else null,
                         fallbackArtist = if (artistCol >= 0) cursor.getString(artistCol) else null,
                         fallbackAlbum = if (albumCol >= 0) cursor.getString(albumCol) else null,
-                        fallbackDurationMs = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
+                        fallbackDurationMs = if (durationCol >= 0) cursor.getLong(durationCol) else 0L,
+                        fallbackAlbumArtist = if (albumArtistCol >= 0) {
+                            cursor.getString(albumArtistCol)
+                        } else {
+                            null
+                        }
                     )
                     reporter.scanning(entries.size, entries.size, name)
                 }
