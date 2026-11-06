@@ -78,15 +78,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var geckoView: GeckoView
     private lateinit var localPlaceholder: View
-    // ★ Local 見出し行（LOCAL MUSIC＋フォルダ追加/再スキャン）。
-    //   ブラウザ側のクロームなので「再生」タブでは隠す。
-    private lateinit var localHeaderRow: View
-    private lateinit var textLocalTitle: TextView
     private lateinit var textLocalMessage: TextView
     private lateinit var textModeSwitch: TextView
     private lateinit var localTrackList: ListView
-    private lateinit var btnLocalAddFolder: TextView
-    private lateinit var btnLocalRescan: TextView
     private lateinit var localScanProgress: View
     private lateinit var progressLocalScan: ProgressBar
     private lateinit var textLocalScanStatus: TextView
@@ -97,10 +91,11 @@ class MainActivity : AppCompatActivity() {
     //   ドリルダウン用ヘッダー）
     private lateinit var tabLocalQueue: TextView
     private lateinit var tabLocalNowPlaying: TextView
-    private lateinit var tabLocalAll: TextView
-    private lateinit var tabLocalAlbum: TextView
-    private lateinit var tabLocalArtist: TextView
-    private lateinit var tabLocalPlaylist: TextView
+    // ★ ライブラリタブ（ライブラリトップページへの切替）。
+    //   ラベルとアイコンは固定（LIBRARY）で、選択状態の配色だけを
+    //   updateLocalTabStyles が切り替える。
+    private lateinit var tabLocalLibrary: TextView
+    private lateinit var localSearchRow: View
     private lateinit var editLocalSearch: EditText
     private lateinit var btnLocalSort: TextView
     private lateinit var localGroupHeader: View
@@ -168,7 +163,7 @@ class MainActivity : AppCompatActivity() {
     //   表示している並び（＝ LocalPlayer へ渡しているキューと
     //   一致させる。キューページは LocalPlayer 側の順序表から
     //   直接描くため、ここには入れない）。
-    private enum class LocalTab { QUEUE, NOW_PLAYING, ALL, ALBUM, ARTIST, PLAYLIST }
+    private enum class LocalTab { QUEUE, NOW_PLAYING, LIBRARY_TOP, ALL, ALBUM, ARTIST, PLAYLIST }
 
     private data class LocalGroup(
         val key: String,
@@ -180,6 +175,13 @@ class MainActivity : AppCompatActivity() {
     )
 
     private var localTab = LocalTab.ALL
+    // ★ ライブラリスロット（下部タブの LIBRARY）の現在のページ。
+    //   ライブラリトップ（LIBRARY_TOP）か、その配下のビュー
+    //   （ALL / ALBUM / ARTIST / PLAYLIST）のうち最後に確定選択
+    //   したもの。スワイプでライブラリスロットへ移動するときの
+    //   移動先に使う（selectLocalTab で確定したときだけ更新
+    //   する。ドラッグの覗き見では更新しない）。
+    private var localLibraryTab = LocalTab.ALL
     private var localGroupKey: String? = null
     // ★ アーティスト配下のアルバムドリルダウンキー（null = アルバム
     //   一覧を表示中）。アーティスト → アルバム一覧 → アルバム内の
@@ -921,16 +923,17 @@ class MainActivity : AppCompatActivity() {
         updateLocalChromeVisibility()
     }
 
-    // ★ ブラウザ側クローム（LOCAL MUSIC 見出し行とスキャン進捗）の
-    //   出し分け。「再生」タブは WALKMAN の再生画面のように情報を
-    //   絞るため、見出し行・進捗表示はどちらも出さない。ブラウザ系
-    //   タブに戻れば、スキャン側が保持する wanted の状態どおりに
-    //   復帰する。スキャン進捗の visibility はここだけが決める
-    //   （スキャン側は wanted の更新のみ）。
+    // ★ ブラウザ側クローム（スキャン進捗）の出し分け。「再生」
+    //   タブは WALKMAN の再生画面のように情報を絞るため、進捗
+    //   表示は出さない。ブラウザ系タブに戻れば、スキャン側が
+    //   保持する wanted の状態どおりに復帰する。スキャン進捗の
+    //   visibility はここだけが決める（スキャン側は wanted の
+    //   更新のみ）。見出し行（LOCAL MUSIC＋フォルダ追加／再
+    //   スキャン）はユーザー指定で廃止したため、ここで扱う
+    //   クロームはスキャン進捗だけになった。
     private fun updateLocalChromeVisibility() {
-        if (!::localHeaderRow.isInitialized) return
+        if (!::localScanProgress.isInitialized) return
         val showBrowserChrome = localTab != LocalTab.NOW_PLAYING
-        localHeaderRow.visibility = if (showBrowserChrome) View.VISIBLE else View.GONE
         localScanProgress.visibility =
             if (showBrowserChrome && localScanProgressWanted) View.VISIBLE else View.GONE
         localScanUpdating.visibility =
@@ -947,6 +950,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         updateLocalPageVisibility()
+        // ライブラリトップでは検索行を出さない（WALKMAN の
+        // ライブラリートップと同様、検索は各ビューの中で使う）。
+        if (::localSearchRow.isInitialized) {
+            localSearchRow.visibility =
+                if (localTab == LocalTab.LIBRARY_TOP) View.GONE else View.VISIBLE
+        }
         if (localTab == LocalTab.PLAYLIST) {
             // プレイリストはライブラリ由来のグループとは導出元が
             // 違う（DB が正）ため、専用経路で描く。
@@ -958,6 +967,12 @@ class MainActivity : AppCompatActivity() {
             // キューは LocalPlayer の順序表が導出元のため、専用
             // 経路で描く（表示＝キューのため setQueue はしない）。
             refreshQueueTab()
+            updateLocalTabStyles()
+            return
+        }
+        if (localTab == LocalTab.LIBRARY_TOP) {
+            // ライブラリトップは入口一覧を出す専用経路で描く。
+            refreshLibraryTop()
             updateLocalTabStyles()
             return
         }
@@ -994,7 +1009,11 @@ class MainActivity : AppCompatActivity() {
                 }
             localGroupHeader.visibility = View.VISIBLE
         } else {
-            localGroupHeader.visibility = View.GONE
+            // ライブラリ配下ビューのトップでは、ライブラリトップへ
+            // 戻るためのヘッダー（戻るボタン＋ビュー名）を出す
+            // （従来はドリルダウン中だけ出していた）。
+            textLocalGroupTitle.text = localLibraryChildTitle(localTab)
+            localGroupHeader.visibility = View.VISIBLE
             when (localTab) {
                 LocalTab.ALL -> {
                     val filtered = localTracks
@@ -1009,11 +1028,12 @@ class MainActivity : AppCompatActivity() {
                     localTrackList.adapter = adapter
                     updateLocalEmptyMessage(groups.size, isTrackPage = false)
                 }
-                LocalTab.PLAYLIST, LocalTab.NOW_PLAYING, LocalTab.QUEUE -> {
-                    // 到達しない分岐（網羅性のため）: PLAYLIST / QUEUE
-                    // は冒頭の専用経路、NOW_PLAYING は関数冒頭の早期
-                    // return でそれぞれ処理済みのため、ここでは
-                    // 何もしない。
+                LocalTab.PLAYLIST, LocalTab.NOW_PLAYING, LocalTab.QUEUE,
+                LocalTab.LIBRARY_TOP -> {
+                    // 到達しない分岐（網羅性のため）: PLAYLIST / QUEUE /
+                    // LIBRARY_TOP は冒頭の専用経路、NOW_PLAYING は関数
+                    // 冒頭の早期 return でそれぞれ処理済みのため、
+                    // ここでは何もしない。
                 }
             }
         }
@@ -1031,7 +1051,10 @@ class MainActivity : AppCompatActivity() {
     private fun refreshPlaylistTab() {
         val drillId = localPlaylistDrillId
         if (drillId == null) {
-            localGroupHeader.visibility = View.GONE
+            // プレイリスト一覧もライブラリ配下のビューのため、
+            // ライブラリトップへ戻るヘッダーを出す。
+            textLocalGroupTitle.text = localLibraryChildTitle(LocalTab.PLAYLIST)
+            localGroupHeader.visibility = View.VISIBLE
             val query = localSearchQuery.trim().lowercase(Locale.ROOT)
             val playlists = playlistStore.listPlaylists().filter {
                 query.isBlank() || it.name.lowercase(Locale.ROOT).contains(query)
@@ -1097,6 +1120,67 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ ライブラリ配下ビューの見出し（グループヘッダーの
+    //   タイトル）。ドリルダウンしていない各ビューのトップで、
+    //   ライブラリトップへ戻る導線とあわせて表示する。
+    private fun localLibraryChildTitle(tab: LocalTab): String {
+        return when (tab) {
+            LocalTab.ALL -> "全曲"
+            LocalTab.ALBUM -> "アルバム"
+            LocalTab.ARTIST -> "アーティスト"
+            LocalTab.PLAYLIST -> "プレイリスト"
+            else -> ""
+        }
+    }
+
+    // ライブラリトップの入口（タップで入るビュー、表示ラベル、
+    // 補助表示＝件数、アイコン）。
+    private data class LocalLibraryEntry(
+        val tab: LocalTab,
+        val label: String,
+        val subLabel: String,
+        val iconRes: Int
+    )
+
+    // ★ ライブラリトップの描画。WALKMAN OS のライブラリートップ
+    //   のように、TRACKS / ALBUMS / ARTISTS / PLAYLISTS の入口を
+    //   一覧で並べる。項目タップで各ビューへ入る（振り分けは
+    //   onLocalListItemClicked）。検索行とグループヘッダーは
+    //   出さない（呼び出し側とここで揃える）。
+    private fun refreshLibraryTop() {
+        localGroupHeader.visibility = View.GONE
+        localDisplayedTracks = emptyList()
+        val entries = listOf(
+            LocalLibraryEntry(
+                LocalTab.ALL, "TRACKS", "${localTracks.size} 曲",
+                R.drawable.ic_tab_all
+            ),
+            LocalLibraryEntry(
+                LocalTab.ALBUM, "ALBUMS",
+                "${localGroupsFor(LocalTab.ALBUM, "").size} アルバム",
+                R.drawable.ic_tab_album
+            ),
+            LocalLibraryEntry(
+                LocalTab.ARTIST, "ARTISTS",
+                "${localGroupsFor(LocalTab.ARTIST, "").size} アーティスト",
+                R.drawable.ic_tab_artist
+            ),
+            LocalLibraryEntry(
+                LocalTab.PLAYLIST, "PLAYLISTS",
+                "${playlistStore.listPlaylists().size} 件",
+                R.drawable.ic_tab_playlist
+            )
+        )
+        localTrackList.adapter = LocalLibraryTopAdapter(entries)
+        if (localTracks.isEmpty() && playlistStore.listPlaylists().isEmpty()) {
+            // ライブラリが完全に空のときだけ案内を出す（入口自体は
+            // 件数 0 で並べ、設定への導線として読めるようにする）。
+            updateLocalEmptyMessage(0, isTrackPage = false)
+        } else {
+            textLocalMessage.visibility = View.GONE
+        }
+    }
+
     // ★ ライブラリに実在しないプレイリスト項目の表示用プレース
     //   ホルダ。追加時点のスナップショット（タイトル等）だけを持ち、
     //   再生キューには入らない（タップ時に実在する曲だけへ絞る
@@ -1139,7 +1223,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateLocalEmptyMessage(displayedCount: Int, isTrackPage: Boolean) {
         if (localTracks.isEmpty()) {
             textLocalMessage.text = if (!libraryRepository.hasAudioPermission() && appPrefs.safFolderUris.isEmpty()) {
-                "曲が見つかりませんでした。音声ファイルへのアクセスを許可するか、「フォルダ追加」からフォルダを選んでください"
+                "曲が見つかりませんでした。音声ファイルへのアクセスを許可するか、設定画面の「ライブラリ取得範囲」からフォルダを追加してください"
             } else {
                 "再生できる曲が見つかりませんでした"
             }
@@ -1161,6 +1245,11 @@ class MainActivity : AppCompatActivity() {
         // スワイプのスライドが進行中なら先に確定させる（退場中
         // ページの終了処理が、切替後の表示を巻き込まないため）。
         finishLocalPageSlide()
+        // 統合ライブラリタブの指すビューは、確定した選択でのみ
+        // 更新する（ドラッグの覗き見では更新しない）。
+        if (isLocalLibraryTab(tab)) {
+            localLibraryTab = tab
+        }
         localTab = tab
         localGroupKey = null
         localArtistAlbumKey = null
@@ -1170,8 +1259,9 @@ class MainActivity : AppCompatActivity() {
 
     // ★ ドリルダウンを1段戻る。戻れたら true。アーティストの
     //   2段目（アルバム内）からはアルバム一覧へ、グループ／
-    //   プレイリストのドリルダウンからは一覧へ戻る。戻るボタン
-    //   （ヘッダー）と Android の戻る操作で共用する。
+    //   プレイリストのドリルダウンからは一覧へ戻り、ライブラリ
+    //   配下ビューのトップからはライブラリトップへ戻る。戻る
+    //   ボタン（ヘッダー）と Android の戻る操作で共用する。
     private fun localDrillBack(): Boolean {
         if (localArtistAlbumKey != null) {
             localArtistAlbumKey = null
@@ -1184,16 +1274,39 @@ class MainActivity : AppCompatActivity() {
             refreshLocalBrowser()
             return true
         }
+        if (isLocalLibraryTab(localTab) && localTab != LocalTab.LIBRARY_TOP) {
+            // ライブラリ配下ビューのトップ → ライブラリトップへ。
+            selectLocalTab(LocalTab.LIBRARY_TOP)
+            return true
+        }
         return false
     }
 
-    // ★ 下部タブの並び順（左→右）。スワイプでの隣接移動に使う。
-    //   レイアウト（activity_main.xml の localTabBar）と LocalTab の
-    //   宣言順に一致させること。
-    private val localTabOrder = listOf(
-        LocalTab.QUEUE, LocalTab.NOW_PLAYING, LocalTab.ALL,
-        LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST
-    )
+    // ★ ライブラリスロット配下のタブかどうか（ライブラリトップ
+    //   自身と、その配下の全ビュー）。
+    private fun isLocalLibraryTab(tab: LocalTab): Boolean =
+        tab == LocalTab.LIBRARY_TOP || tab == LocalTab.ALL ||
+            tab == LocalTab.ALBUM || tab == LocalTab.ARTIST ||
+            tab == LocalTab.PLAYLIST
+
+    // ★ 下部タブバーのスロット（左→右）: キュー / 再生 /
+    //   ライブラリ の3つ。スワイプでの隣接移動は LocalTab 単位
+    //   ではなくこのスロット単位で数える。ライブラリスロットの
+    //   実体は localLibraryTab（ライブラリトップ or 最後に確定
+    //   選択した配下ビュー）。
+    private fun localTabSlot(tab: LocalTab): Int = when (tab) {
+        LocalTab.QUEUE -> 0
+        LocalTab.NOW_PLAYING -> 1
+        LocalTab.LIBRARY_TOP, LocalTab.ALL, LocalTab.ALBUM,
+        LocalTab.ARTIST, LocalTab.PLAYLIST -> 2
+    }
+
+    private fun localTabForSlot(slot: Int): LocalTab? = when (slot) {
+        0 -> LocalTab.QUEUE
+        1 -> LocalTab.NOW_PLAYING
+        2 -> localLibraryTab
+        else -> null
+    }
 
     // スワイプ判定の閾値: 水平フリックとして明確な場合だけタブ切替に
     // 使うための距離（dp）と、水平優位の条件（|dx| が |dy| の何倍か）。
@@ -1206,6 +1319,15 @@ class MainActivity : AppCompatActivity() {
     private val LOCAL_TAB_DRAG_START_DISTANCE_DP = 24f
     private val LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO = 0.27f
     private val LOCAL_TAB_DRAG_COMMIT_VELOCITY = 500f
+    // ジェスチャの鮮度判定: イベントの発生時刻（eventTime）から
+    // 処理までにこれ以上空いたイベントは「古い」とみなす。曲タップ
+    // 直後は LocalPlayer.startTrackLocked がメインスレッド上で前
+    // デコーダの停止待ち（最大2秒）と FFmpeg のオープンを同期実行
+    // するため、その間にユーザーが行ったスワイプの MotionEvent が
+    // ルーパーに溜まり、カクツキが解消した瞬間に一括配送される。
+    // 鮮度で弾くことで「溜まったスワイプが解消後にまとめて発火
+    // してページがジャンプする」のを防ぐ。
+    private val LOCAL_SWIPE_STALE_EVENT_MS = 250L
 
     // ★ スワイプでのタブ移動（指の動きに内容が付いてくる向き）:
     //   左スワイプ → 右隣のタブ、右スワイプ → 左隣のタブ（例:
@@ -1215,17 +1337,37 @@ class MainActivity : AppCompatActivity() {
     //   中なら抜けて対象タブのトップ表示になる）が、スワイプ
     //   起因の切替だけはページのスライドアニメーションを付ける。
     private fun switchLocalTabBySwipe(toNext: Boolean) {
-        val index = localTabOrder.indexOf(localTab)
-        if (index < 0) return
+        val index = localTabSlot(localTab)
         val target = if (toNext) index + 1 else index - 1
-        if (target !in localTabOrder.indices) return
+        val targetTab = localTabForSlot(target) ?: return
         // 進行中のスライドがあれば先に確定させてから現在の
         // ページを取る（アニメーション中のページが両方見えて
         // いる状態で旧ページを取り違えないため）。
         finishLocalPageSlide()
         val oldPage = currentVisibleLocalPage()
-        selectLocalTab(localTabOrder[target])
+        selectLocalTab(targetTab)
         animateLocalPageSlide(oldPage, currentVisibleLocalPage(), toNext)
+    }
+
+    // ★ スライド付きのタブ切替（プログラムからの切替用）。
+    //   曲タップで再生が始まったときの「再生」タブへの自動切替
+    //   で使い、スワイプ切替と同じスライドで遷移させる。方向は
+    //   スロットの並びから決める（右隣のスロットへは次方向）。
+    //   同じスロット内（ライブラリ配下同士など）ではスライド
+    //   せず通常切替にする。
+    private fun selectLocalTabAnimated(tab: LocalTab) {
+        val fromSlot = localTabSlot(localTab)
+        val toSlot = localTabSlot(tab)
+        if (fromSlot == toSlot) {
+            selectLocalTab(tab)
+            return
+        }
+        finishLocalPageSlide()
+        val oldPage = currentVisibleLocalPage()
+        selectLocalTab(tab)
+        animateLocalPageSlide(
+            oldPage, currentVisibleLocalPage(), toNext = toSlot > fromSlot
+        )
     }
 
     // Local 3ページのうち現在見えているもの（ページ出し分けの
@@ -1239,7 +1381,7 @@ class MainActivity : AppCompatActivity() {
     private fun localPageForTab(tab: LocalTab): View = when (tab) {
         LocalTab.QUEUE -> localQueuePage
         LocalTab.NOW_PLAYING -> localNowPlaying
-        LocalTab.ALL, LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST ->
+        LocalTab.LIBRARY_TOP, LocalTab.ALL, LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST ->
             localBrowserPage
     }
 
@@ -1413,10 +1555,10 @@ class MainActivity : AppCompatActivity() {
         val sourceTab = localSwipeDragSourceTab ?: return false
         if (dx == 0f) return localSwipeDragTargetTab != null
         val toNext = dx < 0f
-        val sourceIndex = localTabOrder.indexOf(sourceTab)
-        if (sourceIndex < 0) return false
+        val sourceIndex = localTabSlot(sourceTab)
         val targetIndex = if (toNext) sourceIndex + 1 else sourceIndex - 1
-        if (targetIndex !in localTabOrder.indices) {
+        val targetTab = localTabForSlot(targetIndex)
+        if (targetTab == null) {
             if (localSwipeDragTargetTab != null) {
                 clearLocalTabDragTarget()
             }
@@ -1424,7 +1566,6 @@ class MainActivity : AppCompatActivity() {
             localSwipeDragLastDx = dx
             return false
         }
-        val targetTab = localTabOrder[targetIndex]
         if (localSwipeDragTargetTab == targetTab) {
             localSwipeDragToNext = toNext
             return true
@@ -1455,6 +1596,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateLocalTabDrag(ev: MotionEvent): Boolean {
+        // ★ 古い MOVE（カクツキ中に溜まったイベント）からは
+        //   ドラッグを開始しない。既に追従中のドラッグは最終
+        //   位置の適用だけ行う（確定可否は UP 側の鮮度で決める）。
+        val staleEvent = android.os.SystemClock.uptimeMillis() - ev.eventTime >
+            LOCAL_SWIPE_STALE_EVENT_MS
+        if (staleEvent && !localSwipeDragActive) return false
         val dx = ev.rawX - localSwipeStartX
         val dy = ev.rawY - localSwipeStartY
         val startDistance = LOCAL_TAB_DRAG_START_DISTANCE_DP *
@@ -1658,6 +1805,19 @@ class MainActivity : AppCompatActivity() {
         localSwipeVelocityTracker = null
     }
 
+    // ★ スワイプ追跡のリセット。曲の再生開始（リスト／キューの
+    //   タップ起点）で呼び、追跡中のジェスチャとドラッグプレビュー
+    //   を再生開始をまたいで持ち越さない。溜まった古いイベント
+    //   自体は鮮度判定（LOCAL_SWIPE_STALE_EVENT_MS）で弾くのが
+    //   本筋で、こちらは進行中ドラッグの掃除が目的。
+    private fun resetLocalSwipeTracker() {
+        localSwipeTracking = false
+        recycleLocalSwipeVelocityTracker()
+        if (localSwipeDragActive) {
+            cancelLocalTabDragPreview()
+        }
+    }
+
     private fun dispatchCancelToLocalChildren(ev: MotionEvent) {
         val cancelEvent = MotionEvent.obtain(ev)
         cancelEvent.action = MotionEvent.ACTION_CANCEL
@@ -1724,10 +1884,19 @@ class MainActivity : AppCompatActivity() {
                 // （ドラッグや文字入力と誤認しないため）。
                 if (::seekNpProgress.isInitialized && isTouchInside(seekNpProgress, x, y)) return false
                 if (::editLocalSearch.isInitialized && isTouchInside(editLocalSearch, x, y)) return false
+                // ★ 鮮度判定: 発生から時間が空いた DOWN は、カクツキ
+                //   中に溜まった古いジェスチャなので追跡しない
+                //   （このジェスチャは通常のタッチとして流れる）。
+                val nowMs = android.os.SystemClock.uptimeMillis()
+                if (nowMs - ev.eventTime > LOCAL_SWIPE_STALE_EVENT_MS) return false
                 localSwipeTracking = true
                 localSwipeStartX = ev.rawX
                 localSwipeStartY = ev.rawY
-                localSwipeStartTimeMs = android.os.SystemClock.uptimeMillis()
+                // 開始時刻はイベントの発生時刻（eventTime）を正と
+                // する。配送時刻で測ると、溜まったイベントの所要
+                // 時間がほぼ 0 になり、フリック速度が異常に大きく
+                // 算出されてしまう。
+                localSwipeStartTimeMs = ev.eventTime
                 localSwipeVelocityTracker = android.view.VelocityTracker.obtain()
                 localSwipeVelocityTracker?.addMovement(ev)
                 return false
@@ -1765,6 +1934,20 @@ class MainActivity : AppCompatActivity() {
                     return wasActive
                 }
 
+                // ★ 古い UP: 溜まったジェスチャの終端なので、タブ
+                //   切替は発火させない（ドラッグ中だった場合は確定
+                //   せず元のページへ戻す）。
+                if (android.os.SystemClock.uptimeMillis() - ev.eventTime >
+                    LOCAL_SWIPE_STALE_EVENT_MS
+                ) {
+                    val wasActive = localSwipeDragActive
+                    if (wasActive) {
+                        dispatchCancelToLocalChildren(ev)
+                        rollbackLocalTabDrag()
+                    }
+                    return wasActive
+                }
+
                 // MOVE がほとんど配送されなかった短いフリックでも、
                 // 最終位置でドラッグ成立を判定できるようにする。
                 updateLocalTabDrag(ev)
@@ -1776,7 +1959,9 @@ class MainActivity : AppCompatActivity() {
 
                 val dx = ev.rawX - localSwipeStartX
                 val dy = ev.rawY - localSwipeStartY
-                val dtMs = android.os.SystemClock.uptimeMillis() - localSwipeStartTimeMs
+                // 所要時間はイベント発生時刻同士で測る（開始側も
+                // eventTime に統一済み）。
+                val dtMs = ev.eventTime - localSwipeStartTimeMs
                 if (dtMs <= 0L) return false
                 val minDistance = LOCAL_TAB_SWIPE_MIN_DISTANCE_DP *
                     resources.displayMetrics.density
@@ -1812,6 +1997,13 @@ class MainActivity : AppCompatActivity() {
     private fun onLocalListItemClicked(position: Int) {
         // 再生ページ表示中は一覧が見えていないため到達しないが、保険として弾く
         if (localTab == LocalTab.NOW_PLAYING) return
+        if (localTab == LocalTab.LIBRARY_TOP) {
+            // ライブラリトップ: 項目タップで各ビューへ入る。
+            val entry = (localTrackList.adapter as? LocalLibraryTopAdapter)
+                ?.getItem(position) ?: return
+            selectLocalTab(entry.tab)
+            return
+        }
         if (localTab == LocalTab.PLAYLIST && localPlaylistDrillId == null) {
             // プレイリスト一覧: 先頭行は新規作成、それ以外はドリルダウン
             if (position == 0) {
@@ -1862,10 +2054,13 @@ class MainActivity : AppCompatActivity() {
         // ★ 明示的な曲タップで再生が始まったときだけ「再生」タブへ
         //   自動で切り替える（曲終わりの自動進行や通知・ウィジェット
         //   からの操作では切り替えない。ここは一覧タップの単一の
-        //   起点なので、他の再生開始経路は通らない）。切替の作法は
-        //   タブの手動タップと同じ selectLocalTab に揃える
-        //   （ドリルダウン状態も合わせてリセットされる）。
-        selectLocalTab(LocalTab.NOW_PLAYING)
+        //   起点なので、他の再生開始経路は通らない）。切替は
+        //   スワイプ切替と同じスライドアニメーション付きで行う。
+        //   あわせてスワイプ追跡をリセットする（再生開始直後の
+        //   ジェスチャ状態を持ち越さないため。詳細は
+        //   resetLocalSwipeTracker のコメント参照）。
+        resetLocalSwipeTracker()
+        selectLocalTabAnimated(LocalTab.NOW_PLAYING)
     }
 
     // 一覧の長押し振り分け: プレイリスト一覧では名前変更/削除、
@@ -1875,6 +2070,7 @@ class MainActivity : AppCompatActivity() {
     // ダウン）を防ぐため消費だけする。
     private fun onLocalListItemLongClicked(position: Int): Boolean {
         if (localTab == LocalTab.NOW_PLAYING) return false
+        if (localTab == LocalTab.LIBRARY_TOP) return true // トップの入口行は対象外（消費だけする）
         if (localTab == LocalTab.PLAYLIST && localPlaylistDrillId == null) {
             if (position == 0) return true // 新規作成行は対象外
             val playlist = (localTrackList.adapter as? LocalPlaylistAdapter)
@@ -1908,7 +2104,8 @@ class MainActivity : AppCompatActivity() {
         val queue = sortLocalTracks(tracks, AppPreferences.LOCAL_SORT_ALBUM)
         localPlayer.setQueue(queue)
         localPlayer.playAt(0)
-        selectLocalTab(LocalTab.NOW_PLAYING)
+        resetLocalSwipeTracker()
+        selectLocalTabAnimated(LocalTab.NOW_PLAYING)
     }
 
     // ── プレイリスト操作（ダイアログ群） ──
@@ -2119,20 +2316,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateLocalTabStyles() {
-        if (!::tabLocalAll.isInitialized) return
+        if (!::tabLocalLibrary.isInitialized) return
         val isDark = isDarkThemeActive()
         val colorSelected = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
         val colorNormal = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+        // ★ ライブラリタブは固定ラベル（LIBRARY）。選択状態は
+        //   ライブラリトップ／配下ビューのいずれを表示中かで
+        //   決まる（スロット単位の選択表示）。
+        tabLocalLibrary.text = "LIBRARY"
+        // (view, アイコンを決めるタブ, 選択中か) の組。
         val tabs = listOf(
-            tabLocalQueue to LocalTab.QUEUE,
-            tabLocalNowPlaying to LocalTab.NOW_PLAYING,
-            tabLocalAll to LocalTab.ALL,
-            tabLocalAlbum to LocalTab.ALBUM,
-            tabLocalArtist to LocalTab.ARTIST,
-            tabLocalPlaylist to LocalTab.PLAYLIST
+            Triple(tabLocalQueue, LocalTab.QUEUE, localTab == LocalTab.QUEUE),
+            Triple(
+                tabLocalNowPlaying, LocalTab.NOW_PLAYING,
+                localTab == LocalTab.NOW_PLAYING
+            ),
+            Triple(
+                tabLocalLibrary, LocalTab.LIBRARY_TOP,
+                isLocalLibraryTab(localTab)
+            )
         )
-        for ((view, tab) in tabs) {
-            val selected = tab == localTab
+        for ((view, tab, selected) in tabs) {
             val color = if (selected) colorSelected else colorNormal
             view.setTextColor(color)
             view.paint.isFakeBoldText = selected
@@ -2145,6 +2349,11 @@ class MainActivity : AppCompatActivity() {
             view.setCompoundDrawablesWithIntrinsicBounds(null, icon, null, null)
         }
         btnLocalSort.text = localSortLabel(appPrefs.localSortMode)
+        // ★ 並び替えボタンは TRACKS（全曲）のときだけ出す
+        //   （ユーザー指定）。それ以外のビューでは検索欄が
+        //   全幅を使う。
+        btnLocalSort.visibility =
+            if (localTab == LocalTab.ALL) View.VISIBLE else View.GONE
     }
 
     // ★ 下部タブバーの各タブに割り当てるアイコン（ic_tab_*）。
@@ -2153,6 +2362,7 @@ class MainActivity : AppCompatActivity() {
         return when (tab) {
             LocalTab.QUEUE -> R.drawable.ic_tab_queue
             LocalTab.NOW_PLAYING -> R.drawable.ic_tab_now_playing
+            LocalTab.LIBRARY_TOP -> R.drawable.ic_tab_library
             LocalTab.ALL -> R.drawable.ic_tab_all
             LocalTab.ALBUM -> R.drawable.ic_tab_album
             LocalTab.ARTIST -> R.drawable.ic_tab_artist
@@ -2248,7 +2458,8 @@ class MainActivity : AppCompatActivity() {
         return when (tab) {
             LocalTab.ALBUM -> albumKeyOf(track)
             LocalTab.ARTIST -> artistGroupKeyOf(track)
-            LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE -> ""
+            LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE,
+            LocalTab.LIBRARY_TOP -> ""
         }
     }
 
@@ -2303,28 +2514,8 @@ class MainActivity : AppCompatActivity() {
             if (granted) {
                 reloadLocalLibrary()
             } else {
-                textLocalMessage.text = "アクセスが許可されませんでした。「フォルダ追加」からフォルダを選ぶ方法でも曲を追加できます"
+                textLocalMessage.text = "アクセスが許可されませんでした。設定画面の「ライブラリ取得範囲」からフォルダを追加する方法でも曲を追加できます"
                 textLocalMessage.visibility = View.VISIBLE
-            }
-        }
-
-    // ★ SAF フォルダ追加: 永続化許可を取って prefs へ保存し、ライブラリを再読込する。
-    //   取得範囲の管理（追加/削除）は設定画面にも同じ導線がある（prefs を共有）。
-    private val safFolderPickerLauncher =
-        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-            if (uri == null) return@registerForActivityResult
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-                appPrefs.safFolderUris = appPrefs.safFolderUris + uri.toString()
-                Toast.makeText(this, "フォルダを追加しました", Toast.LENGTH_SHORT).show()
-                if (currentPlaybackMode == PlaybackMode.LOCAL) {
-                    reloadLocalLibrary()
-                }
-            } catch (e: Exception) {
-                Log.w("MainActivity", "SAF folder add failed", e)
-                Toast.makeText(this, "フォルダを追加できませんでした", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -2707,13 +2898,9 @@ class MainActivity : AppCompatActivity() {
 
         geckoView = findViewById(R.id.geckoview)
         localPlaceholder = findViewById(R.id.localPlaceholder)
-        localHeaderRow = findViewById(R.id.localHeaderRow)
-        textLocalTitle = findViewById(R.id.textLocalTitle)
         textLocalMessage = findViewById(R.id.textLocalMessage)
         textModeSwitch = findViewById(R.id.textModeSwitch)
         localTrackList = findViewById(R.id.localTrackList)
-        btnLocalAddFolder = findViewById(R.id.btnLocalAddFolder)
-        btnLocalRescan = findViewById(R.id.btnLocalRescan)
         localScanProgress = findViewById(R.id.localScanProgress)
         progressLocalScan = findViewById(R.id.progressLocalScan)
         textLocalScanStatus = findViewById(R.id.textLocalScanStatus)
@@ -2722,10 +2909,8 @@ class MainActivity : AppCompatActivity() {
         textLocalUpdating = findViewById(R.id.textLocalUpdating)
         tabLocalQueue = findViewById(R.id.tabLocalQueue)
         tabLocalNowPlaying = findViewById(R.id.tabLocalNowPlaying)
-        tabLocalAll = findViewById(R.id.tabLocalAll)
-        tabLocalAlbum = findViewById(R.id.tabLocalAlbum)
-        tabLocalArtist = findViewById(R.id.tabLocalArtist)
-        tabLocalPlaylist = findViewById(R.id.tabLocalPlaylist)
+        tabLocalLibrary = findViewById(R.id.tabLocalLibrary)
+        localSearchRow = findViewById(R.id.localSearchRow)
         editLocalSearch = findViewById(R.id.editLocalSearch)
         btnLocalSort = findViewById(R.id.btnLocalSort)
         localGroupHeader = findViewById(R.id.localGroupHeader)
@@ -3007,10 +3192,12 @@ class MainActivity : AppCompatActivity() {
             view?.hapticTick(appPrefs)
             // ★ キューの行タップは、その曲（実効再生順の位置）へ
             //   ジャンプして再生する。他のリストと同じ作法で、
-            //   ジャンプ後は「再生」タブへ自動で切り替える。
+            //   ジャンプ後は「再生」タブへ自動で切り替える
+            //   （スライドアニメーション付き）。
             if (::localPlayer.isInitialized) {
                 localPlayer.playAtEffectivePosition(position)
-                selectLocalTab(LocalTab.NOW_PLAYING)
+                resetLocalSwipeTracker()
+                selectLocalTabAnimated(LocalTab.NOW_PLAYING)
             }
         }
         localQueueList.setOnItemLongClickListener { _, view, position, _ ->
@@ -3024,21 +3211,11 @@ class MainActivity : AppCompatActivity() {
             showAddToPlaylistDialog(track)
             true
         }
-        tabLocalAll.setOnClickListener {
+        tabLocalLibrary.setOnClickListener {
             it.hapticTick(appPrefs)
-            selectLocalTab(LocalTab.ALL)
-        }
-        tabLocalAlbum.setOnClickListener {
-            it.hapticTick(appPrefs)
-            selectLocalTab(LocalTab.ALBUM)
-        }
-        tabLocalArtist.setOnClickListener {
-            it.hapticTick(appPrefs)
-            selectLocalTab(LocalTab.ARTIST)
-        }
-        tabLocalPlaylist.setOnClickListener {
-            it.hapticTick(appPrefs)
-            selectLocalTab(LocalTab.PLAYLIST)
+            // ★ ライブラリタブ: ライブラリトップページへ切り
+            //   替える（トップから各ビューへは項目タップで入る）。
+            selectLocalTab(LocalTab.LIBRARY_TOP)
         }
         // （タブ切替スワイプは dispatchTouchEvent 側で傍受するため、
         //   ここでの配線は不要）
@@ -3061,19 +3238,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-        btnLocalRescan.setOnClickListener {
-            it.hapticTick(appPrefs)
-            // ★「再スキャン」は強制フルリフレッシュ（全件再プローブ＋進捗表示）
-            if (!FfmpegDecoder.isAvailable) {
-                ensureLocalLibrary()
-            } else {
-                startLocalRefresh(forceFull = true)
-            }
-        }
-        btnLocalAddFolder.setOnClickListener {
-            it.hapticTick(appPrefs)
-            safFolderPickerLauncher.launch(null)
-        }
         // ★ 再生ページ（Now Playing）の操作系
         btnNpPlayPause.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -3186,12 +3350,7 @@ class MainActivity : AppCompatActivity() {
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon)
             textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             localPlaceholder.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
-            textLocalTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
             textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
-            btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalAddFolder.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
-            btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalRescan.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider))
             editLocalSearch.setBackgroundResource(R.drawable.bg_local_search)
             editLocalSearch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
@@ -3245,12 +3404,7 @@ class MainActivity : AppCompatActivity() {
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon_light)
             textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             localPlaceholder.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
-            textLocalTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
-            btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalAddFolder.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
-            btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalRescan.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
             editLocalSearch.setBackgroundResource(R.drawable.bg_local_search_light)
             editLocalSearch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
@@ -3618,6 +3772,90 @@ class MainActivity : AppCompatActivity() {
 
     // ★ グループ行（アルバム / アーティスト / フォルダの一覧用）。
     //   行レイアウトは曲行と同じ作りで、右端は長さの代わりに遷移マーク。
+    // ★ ライブラリトップの入口一覧のアダプタ。行は
+    //   アイコン＋ラベル＋件数＋シェブロンで、グループ行と
+    //   同じ寸法感に揃える。
+    private inner class LocalLibraryTopAdapter(
+        private val entries: List<LocalLibraryEntry>
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = entries.size
+        override fun getItem(position: Int): LocalLibraryEntry = entries[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val entry = entries[position]
+            val isDark = isDarkThemeActive()
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+
+            val root = (convertView as? LinearLayout)?.takeIf { it.tag == ROW_TAG }
+                ?: buildRow()
+            val iconView = root.getChildAt(0) as android.widget.ImageView
+            val nameView = root.getChildAt(1).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(1).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val chevronView = root.getChildAt(2) as TextView
+
+            val icon = ContextCompat.getDrawable(this@MainActivity, entry.iconRes)?.mutate()
+            icon?.setTint(colorTitle)
+            iconView.setImageDrawable(icon)
+            nameView.text = entry.label
+            nameView.setTextColor(colorTitle)
+            subView.text = entry.subLabel
+            subView.setTextColor(colorValue)
+            chevronView.setTextColor(colorValue)
+            return root
+        }
+
+        private fun buildRow(): LinearLayout {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            val root = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(11), dp(4), dp(11))
+                layoutParams = android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                tag = ROW_TAG
+            }
+            val iconView = android.widget.ImageView(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                    marginEnd = dp(12)
+                }
+            }
+            val texts = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val nameView = TextView(this@MainActivity).apply {
+                textSize = 14.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(nameView)
+            texts.addView(subView)
+            val chevronView = TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 16f
+                setPadding(dp(10), 0, dp(2), 0)
+            }
+            root.addView(iconView)
+            root.addView(texts)
+            root.addView(chevronView)
+            return root
+        }
+
+        private val ROW_TAG = "localLibraryTopRow"
+    }
+
     private inner class LocalGroupAdapter(
         private val groups: List<LocalGroup>
     ) : BaseAdapter() {
