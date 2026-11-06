@@ -84,6 +84,13 @@ class DspSettingsDialog(
 
     private val truePeakCeilingOptions = arrayOf("0 dBTP", "-0.5 dBTP", "-1.0 dBTP (推奨)", "-2.0 dBTP")
 
+    // ★ DSD 変換レート: 選択肢の正は AppPreferences.DSD_PCM_RATE_CHOICES。
+    //   ラベルは元の設定画面と同じ書式（"88.2kHz" 等）に揃える。
+    private val dsdRateValues = AppPreferences.DSD_PCM_RATE_CHOICES
+    private val dsdRateOptions = dsdRateValues.map {
+        String.format(java.util.Locale.US, "%.1fkHz", it / 1000.0)
+    }.toTypedArray()
+
     data class BuiltinEqPreset(val id: String, val name: String, val gains: FloatArray)
 
     private val builtinPresets = listOf(
@@ -160,6 +167,7 @@ class DspSettingsDialog(
         layoutSectionPerfMode = view.findViewById(R.id.layoutSectionPerfMode)
         val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
         val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
+        val spinnerDsdRate = view.findViewById<Spinner>(R.id.dialogSpinnerDsdRate)
         spinnerEqPreset = view.findViewById(R.id.dialogSpinnerEqPreset)
 
         imageArtwork = view.findViewById(R.id.dialogImageArtwork)
@@ -177,7 +185,7 @@ class DspSettingsDialog(
                 switchCascadeFir, switchVolLock, btnEqEdit, btnEqSave, btnEqDelete!!, btnEqFlat, btnEqPlus, btnEqMinus,
                 textEqBandFreq, textEqGainValue, spinnerBitDepth, spinnerDither, spinnerDcPhase,
                 spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!,
-                switchTruePeak, spinnerTruePeakCeiling
+                switchTruePeak, spinnerTruePeakCeiling, spinnerDsdRate
             )
         }
 
@@ -625,6 +633,27 @@ class DspSettingsDialog(
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
+        // ★ DSD 変換レート（仕様書 §5.2）: 設定画面（SettingsActivity）から
+        //   移設した項目（音に関する設定は DSP ダイアログに寄せるユーザー
+        //   判断）。実体は prefs のみで、native への即時送信は無い。効果は
+        //   LocalPlayer / LibraryRepository がデコード・プローブ時に prefs を
+        //   読むことで効き、変更後のライブラリ再読込では DSD 曲の再プローブ
+        //   判定（LibraryRepository 側）により表示レートも追いつく。
+        //   デコード側の変換形式の設定のため、ビット深度スピナーと同様に
+        //   Direct 時も無効化しない（updateDspSectionsState の対象外）。
+        val dsdRateAdapter = ArrayAdapter(activity, spinnerLayout, dsdRateOptions).apply { setDropDownViewResource(spinnerLayout) }
+        spinnerDsdRate.adapter = dsdRateAdapter
+        spinnerDsdRate.setSelection(dsdRateValues.indexOf(appPrefs.dsdPcmRateHz).coerceAtLeast(0))
+        spinnerDsdRate.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                val selectedRate = dsdRateValues[position]
+                if (selectedRate != appPrefs.dsdPcmRateHz) {
+                    appPrefs.dsdPcmRateHz = selectedRate
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
         btnPlayPause?.setOnClickListener {
             it.hapticTick(appPrefs)
             onPlayerCommand("play_pause")
@@ -778,7 +807,8 @@ class DspSettingsDialog(
         btnNext: ImageButton,
         btnPlayPause: ImageButton,
         switchTruePeak: SwitchCompat,
-        spinnerTruePeakCeiling: Spinner
+        spinnerTruePeakCeiling: Spinner,
+        spinnerDsdRate: Spinner
     ) {
         view.setBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
         view.findViewById<View>(R.id.layoutSectionDirectSource)?.setBackgroundColor(Color.parseColor("#F5F5F7"))
@@ -824,6 +854,11 @@ class DspSettingsDialog(
         view.findViewById<TextView>(R.id.textCascadeFirSub)?.setTextColor(Color.parseColor("#636366"))
         view.findViewById<TextView>(R.id.textVolLockTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
         view.findViewById<TextView>(R.id.textVolLockSub)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<TextView>(R.id.textDsdRateTitle)?.setTextColor(Color.parseColor("#1C1C1E"))
+        view.findViewById<TextView>(R.id.textDsdRateSub)?.setTextColor(Color.parseColor("#636366"))
+        view.findViewById<View>(R.id.dividerDspDsd)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
+        spinnerDsdRate.setBackgroundResource(R.drawable.bg_spinner_dap_light)
+        spinnerDsdRate.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
 
         view.findViewById<View>(R.id.dividerDsp1)?.setBackgroundColor(Color.parseColor("#E0E0E5"))
         view.findViewById<View>(R.id.dividerDsp2)?.setBackgroundColor(Color.parseColor("#E0E0E5"))

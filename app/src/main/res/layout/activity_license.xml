@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ ライセンス表記画面（仕様書 §7）: 設定画面と同じタイトルバー＋
+     スクロールテキストの構成。本文は LicenseActivity が流し込む。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/licenseRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#000000">
+
+    <LinearLayout
+        android:id="@+id/licenseTitleBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#0D0D0D"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:elevation="8dp">
+
+        <TextView
+            android:id="@+id/btnLicenseBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="‹"
+            android:textColor="#E5A93C"
+            android:textSize="26sp"
+            android:paddingStart="2dp"
+            android:paddingEnd="10dp" />
+
+        <TextView
+            android:id="@+id/textLicenseTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="ライセンス表記"
+            android:textColor="#F0F0F0"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:fontFamily="@font/font_dap_heading" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <TextView
+            android:id="@+id/textLicenseBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="16dp"
+            android:paddingBottom="24dp"
+            android:textSize="13sp"
+            android:lineSpacingMultiplier="1.3" />
+    </ScrollView>
+</LinearLayout>

@@ -236,7 +236,14 @@ class LibraryRepository(private val context: Context) {
         val seenIdentities = HashSet<String>()
         rawEntries.forEachIndexed { index, entry ->
             val key = CacheKey(entry.uri.toString(), entry.sizeBytes, entry.modifiedMs)
-            val reused = if (forceFull) null else probeCache[key]
+            val cached = if (forceFull) null else probeCache[key]
+            // ★ DSD 曲のキャッシュ済み sampleRate はプローブ時点の変換後
+            //   レート（§5.2 の設定値）なので、設定が変わっている場合は
+            //   ファイル自体に変更がなくても再プローブする。これで
+            //   DSD 変換レートを変更した直後のリフレッシュから、表示
+            //   レートが新しい設定に追いつく（再プローブ結果は probed に
+            //   載り、DB にも upsert される）。
+            val reused = cached?.takeUnless { it.isDsd && it.sampleRate != dsdRate }
             val track = reused ?: buildTrack(entry, dsdRate).also {
                 probeCache[key] = it
             }

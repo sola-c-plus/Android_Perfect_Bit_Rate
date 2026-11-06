@@ -506,6 +506,27 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
             playbackService?.updateProgress(0L, 0L, false)
             ensureLocalLibrary()
+        } else {
+            // ★ YT へ戻す際は、Local 側が書き換えたソース依存のストリーム
+            //   状態を YT の既定へ戻す。特に baseSampleRate: Local の
+            //   onCodec がファイルのレート（例 44.1kHz）に更新したままだと、
+            //   保持された Gecko ページは codec 通知を再送しない
+            //   （content.js は検出コーデック/レートが変わったときだけ
+            //   送る）ため、48kHz の YT の PCM が 44.1kHz 前提のチェーンで
+            //   処理されて再生が遅くなる。Local 開始時は LocalPlayer が
+            //   毎曲 onCodec を送るため、ここで既定へ戻しても対称性は
+            //   崩れない。あわせてステータス表示も前ソースの値を残さない。
+            baseSampleRate = 48000
+            playbackService?.updateBaseSampleRate(48000)
+            currentTitle = "YouTube Music"
+            currentArtist = ""
+            currentArtworkBitmap = null
+            currentCodec = "OPUS 160kbps (48k)"
+            currentPosition = 0L
+            currentDuration = 0L
+            playbackService?.updateCodec(currentCodec)
+            playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
+            playbackService?.updateProgress(0L, 0L, false)
         }
         updateStatus()
         updateDialogPlayerUi()
@@ -567,8 +588,16 @@ class MainActivity : AppCompatActivity() {
             ensureLocalLibrary()
             return
         }
+        // ★ 設定画面で「ライブラリの再スキャン」が予約されていたら、この
+        //   スキャンを強制フルリフレッシュとして実行し、予約を消費する
+        //   （予約の消費はスキャンを実際に開始できる場合に限る）。
+        val rescanRequested = appPrefs.localRescanRequested
+        if (rescanRequested) {
+            appPrefs.localRescanRequested = false
+        }
+        val effectiveForceFull = forceFull || rescanRequested
         localScanRunning = true
-        val foreground = forceFull || !localLibraryShown
+        val foreground = effectiveForceFull || !localLibraryShown
         if (foreground) {
             textLocalMessage.visibility = View.GONE
             localScanUpdating.visibility = View.GONE
@@ -582,7 +611,7 @@ class MainActivity : AppCompatActivity() {
             localScanUpdating.visibility = View.VISIBLE
         }
         libraryRepository.refreshLibrary(
-            forceFull = forceFull,
+            forceFull = effectiveForceFull,
             onProgress = { progress ->
                 runOnUiThread { updateLocalScanProgress(progress, foreground) }
             }
@@ -662,7 +691,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     // ★ SAF フォルダ追加: 永続化許可を取って prefs へ保存し、ライブラリを再読込する。
-    //   取得範囲の管理 UI（削除など）は設定画面の次 PR で実装する。
+    //   取得範囲の管理（追加/削除）は設定画面にも同じ導線がある（prefs を共有）。
     private val safFolderPickerLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri == null) return@registerForActivityResult
@@ -694,7 +723,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ★ 設定画面を開く直前の広告カット設定。戻ったときに差分があれば
+    //   Gecko へ反映するために保持する（settingsLauncher 参照）。
+    private var adBlockEnabledBeforeSettings: Boolean? = null
+
     private fun openSettings() {
+        adBlockEnabledBeforeSettings = appPrefs.isAdBlockEnabled
         settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
     }
 
@@ -849,18 +883,36 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    // ★ 設定画面（SettingsActivity）からの戻り: 永続化されたモードを正として
-    //   同期し（設定画面は永続化までを担当、実際の切替はここで一元化する）、
-    //   依頼があれば既存の DSP / UI 設定ダイアログを開く。
+    // ★ 設定画面（SettingsActivity）からの戻り: 永続化された値を正として
+    //   同期する（設定画面は永続化までを担当、実際の反映はここで一元化する）。
+    //   - テーマ: 変わっていれば applyThemeUi で表示へ適用する。
+    //   - 広告カット: 開く前の値と変わっていれば Gecko へ送信する（接続中
+    //     セッションへの即時反映。未接続時は次回接続時に
+    //     GeckoSessionController が prefs の現在値を送る）。
+    //   - 再生モード: 切替（再生停止＋flush＋表示切替）を実行する。
+    //   - システムモニター: 表示側（updateStatus / UI ループ）が prefs を
+    //     都度参照するため、ここでの処理は不要。
+    //   モードが変わっていない Local 表示中は、取得範囲（MediaStore
+    //   ON/OFF・SAF フォルダ）の変更を一覧へ反映するため再読込する
+    //   （仕様書 §6.1: 取得範囲を変えたら再スキャンして一覧を更新する）。
     private val settingsLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
+            val savedTheme = appPrefs.uiThemeMode
+            if (savedTheme != currentThemeMode) {
+                applyThemeUi(savedTheme)
+            }
+            val beforeAdBlock = adBlockEnabledBeforeSettings
+            if (beforeAdBlock != null && appPrefs.isAdBlockEnabled != beforeAdBlock) {
+                geckoController.sendAdBlock(appPrefs.isAdBlockEnabled)
+            }
+            adBlockEnabledBeforeSettings = null
             val savedMode = appPrefs.playbackMode
-            if (savedMode != currentPlaybackMode) {
+            val modeChanged = savedMode != currentPlaybackMode
+            if (modeChanged) {
                 switchPlaybackMode(savedMode)
             }
-            when (result.data?.getStringExtra(SettingsActivity.EXTRA_ACTION)) {
-                SettingsActivity.ACTION_OPEN_DSP -> showDspSettingsDialog()
-                SettingsActivity.ACTION_OPEN_UI -> showUiSettingsDialog()
+            if (!modeChanged && currentPlaybackMode == PlaybackMode.LOCAL) {
+                reloadLocalLibrary()
             }
         }
 
@@ -1144,13 +1196,16 @@ class MainActivity : AppCompatActivity() {
         }
         btnUiSettings.setOnClickListener {
             it.hapticTick(appPrefs)
-            showUiSettingsDialog()
+            // ★ 設定画面（リスト形式）への導線は単押しに統合する（ユーザー判断）。
+            //   UI 設定の項目は設定画面の「画面と UI」カテゴリに実項目として
+            //   統合済み（旧 UI 設定ダイアログは廃止）。
+            openSettings()
         }
         btnUiSettings.setOnLongClickListener {
-            it.hapticTick(appPrefs)
-            // ★ 新しい設定画面（リスト形式）への導線。短押しは従来の UI 設定
-            //   ダイアログのまま変えない。
-            openSettings()
+            // ★ 長押しは裏設定（開発者プリセット）専用に統一する
+            //   （DSP ボタンの長押しと同じ）。
+            Toast.makeText(this, "DEVELOPER PRESET TUNER", Toast.LENGTH_SHORT).show()
+            showDevPresetsDialog()
             true
         }
         textModeSwitch.setOnClickListener {
@@ -1327,42 +1382,6 @@ class MainActivity : AppCompatActivity() {
         activePlayerDialog = dspDialog
         activeDspDialog = dspDialog
         dspDialog.show()
-    }
-
-    private fun showUiSettingsDialog() {
-        val uiDialog = UiSettingsDialog(
-            activity = this,
-            isDarkTheme = isDarkThemeActive(),
-            topPanelHeight = topInfoPanel?.height ?: 0,
-            onThemeChanged = { newTheme ->
-                applyThemeUi(newTheme)
-                showUiSettingsDialog()
-            },
-            onAdBlockChanged = { isEnabled -> geckoController.sendAdBlock(isEnabled) },
-            onSysMonitorChanged = { isEnabled ->
-                // ★ スイッチ ON/OFF で追加項目 (CPU/RAM, BUF/LAT) を一括表示/非表示切り替え
-                textCpuRamMonitor.visibility = if (isEnabled) View.VISIBLE else View.GONE
-                textBufferLatency.visibility = if (isEnabled) View.VISIBLE else View.GONE
-                updateStatus()
-            },
-            onPlayerCommand = { cmd ->
-                val resolved = if (cmd == "play_pause") resolvePlayPauseCommand() else cmd
-                noteUserPlaybackIntent(resolved)
-                when (currentPlaybackMode) {
-                    PlaybackMode.YT_MUSIC -> geckoController.sendCommand(resolved)
-                    PlaybackMode.LOCAL -> localPlayer.handleCommand(resolved)
-                }
-            },
-            onSeekTo = { pos ->
-                when (currentPlaybackMode) {
-                    PlaybackMode.YT_MUSIC -> geckoController.sendSeek(pos)
-                    PlaybackMode.LOCAL -> localPlayer.seekTo(pos)
-                }
-            },
-            onDismiss = { activePlayerDialog = null }
-        )
-        activePlayerDialog = uiDialog
-        uiDialog.show()
     }
 
     private fun showDevPresetsDialog() {

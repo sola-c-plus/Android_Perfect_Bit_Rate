@@ -3,31 +3,46 @@ package com.example.perfectbitrate
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.DocumentsContract
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 
 // ★ 設定画面（仕様書 §7）: Sony 系アプリ（Music Center / WALKMAN 系）の作法に
 //   寄せたリスト形式の設定トップ。カテゴリ見出し（小さなキャプション）＋
 //   「タイトル／現在値 or 要約（小さく下）／右端の遷移マーク」の項目で構成する。
-//   本 PR（Local モード Phase 1 基盤）では土台と「再生モード」を実装する。
-//   既存の DSP / UI 設定はダイアログのまま MainActivity 側に残し、項目タップで
-//   設定画面を閉じて MainActivity に開かせる導線だけを用意する
-//   （リスト画面への全面移行の仕上げは Phase 2、仕様書 §9）。
+//   Local モード Phase 1 の設定項目として、再生モード /
+//   ライブラリ取得範囲（MediaStore ON/OFF、SAF フォルダの追加・削除、
+//   再スキャン予約）を実装する。スイッチ項目は右端にトグルを置く。
+//   音に関する設定（DSD 変換レートを含む）はドメインで寄せ、DSP ボタン
+//   単押しの DSP 設定ダイアログ側を正規の置き場所とする（ここには
+//   項目を置かない）。UI 設定（テーマ / 広告カット / システムモニター /
+//   触覚フィードバック / バッテリー最適化の除外）は旧 UI 設定ダイアログを
+//   廃止し、この画面の「画面と UI」カテゴリに実項目として統合した
+//   （旧ダイアログへの導線 ACTION_OPEN_UI は廃止）。
 //   モード変更はここでは永続化までを行い、実際の切替（再生停止＋flush＋
 //   表示切替）は戻った先の MainActivity が永続値を正として同期する。
+//   取得範囲の変更も同様に prefs への保存までで、戻った先の MainActivity が
+//   ライブラリを再読込して一覧へ反映する（再スキャン予約フラグの消費も
+//   MainActivity 側）。テーマと広告カットも同様に、ここでは prefs への
+//   保存までを行い、MainActivity 側の表示への適用と Gecko への送信は
+//   戻った先の MainActivity が差分を検知して行う（この画面自身の配色は
+//   テーマ変更時に recreate して即時反映する）。システムモニターは表示側が
+//   prefs を都度参照するため、保存だけで反映される。
 class SettingsActivity : AppCompatActivity() {
-
-    companion object {
-        const val EXTRA_ACTION = "extra_action"
-        const val ACTION_OPEN_DSP = "open_dsp"
-        const val ACTION_OPEN_UI = "open_ui"
-    }
 
     private val appPrefs by lazy { AppPreferences.get() }
 
@@ -35,6 +50,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private var isDark = true
     private var modeValueText: TextView? = null
+    private var themeValueText: TextView? = null
 
     // テーマ色（MainActivity.applyThemeUi と同じパレットに揃える）
     private val colorBg get() = if (isDark) "#000000" else "#FFFFFF"
@@ -77,47 +93,88 @@ class SettingsActivity : AppCompatActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun buildList() {
+        listContainer.removeAllViews()
+
         addCategory("再生")
         modeValueText = addRow(
             title = "再生モード",
             value = appPrefs.playbackMode.displayName,
             onClick = { showPlaybackModeDialog() }
         )
-        addRow(
-            title = "ライブラリ取得範囲",
-            value = "Local Music の実装時に有効になります（準備中）",
-            onClick = { showNotReadyToast() }
-        )
-        addRow(
-            title = "DSD 変換レート",
-            value = "Local Music の実装時に有効になります（準備中）",
-            onClick = { showNotReadyToast() }
-        )
 
-        addCategory("音質")
+        addCategory("ライブラリ取得範囲")
+        addSwitchRow(
+            title = "MediaStore を使う",
+            value = "端末内の曲を自動で取得します",
+            checked = appPrefs.useMediaStore,
+            onCheckedChange = { appPrefs.useMediaStore = it }
+        )
         addRow(
-            title = "DSP 設定",
-            value = "従来のダイアログで開きます",
-            onClick = { finishWithAction(ACTION_OPEN_DSP) }
+            title = "フォルダを追加",
+            value = "フォルダを選んで取得範囲に加えます（SAF）",
+            onClick = { safFolderPickerLauncher.launch(null) }
+        )
+        // 追加済みフォルダは1行ずつ並べ、タップで削除する
+        for (folderUri in appPrefs.safFolderUris.sorted()) {
+            addRow(
+                title = folderDisplayName(folderUri),
+                value = "追加済みフォルダ（タップで削除）",
+                onClick = { confirmRemoveFolder(folderUri) }
+            )
+        }
+        addRow(
+            title = "ライブラリの再スキャン",
+            value = "次に Local Music を表示したときに全曲を読み直します",
+            onClick = {
+                appPrefs.localRescanRequested = true
+                Toast.makeText(this, "再スキャンを予約しました", Toast.LENGTH_SHORT).show()
+            }
         )
 
         addCategory("画面と UI")
+        themeValueText = addRow(
+            title = "テーマ",
+            value = themeLabel(appPrefs.uiThemeMode),
+            onClick = { showThemeDialog() }
+        )
+        addSwitchRow(
+            title = "広告カット",
+            value = "YouTube Music 動画広告の自動スキップ",
+            checked = appPrefs.isAdBlockEnabled,
+            onCheckedChange = { appPrefs.isAdBlockEnabled = it }
+        )
+        addSwitchRow(
+            title = "システムモニター",
+            value = "CPU/RAM負荷・バッファ健全度・出力遅延(LAT)の表示",
+            checked = appPrefs.isSysMonitorEnabled,
+            onCheckedChange = { appPrefs.isSysMonitorEnabled = it }
+        )
+        addSwitchRow(
+            title = "触覚フィードバック",
+            value = "ボタン操作時に振動でフィードバック",
+            checked = appPrefs.isHapticFeedbackEnabled,
+            onCheckedChange = { enabled ->
+                appPrefs.isHapticFeedbackEnabled = enabled
+                // ON にした瞬間に1回鳴らしてプレビューにする（旧ダイアログと同じ）
+                if (enabled) hapticTick(appPrefs)
+            }
+        )
         addRow(
-            title = "UI 設定",
-            value = "従来のダイアログで開きます",
-            onClick = { finishWithAction(ACTION_OPEN_UI) }
+            title = "バッテリー最適化の除外",
+            value = "画面消灯時や別アプリ使用時の再生停止を防ぎます",
+            onClick = { requestIgnoreBatteryOptimizations() }
         )
 
         addCategory("システム")
         addRow(
+            title = "ライセンス表記",
+            value = "サードパーティ製ライブラリのライセンス",
+            onClick = { startActivity(Intent(this, LicenseActivity::class.java)) }
+        )
+        addRow(
             title = "バージョン情報",
             value = versionName(),
             onClick = null
-        )
-        addRow(
-            title = "ライセンス表記",
-            value = "サードパーティ製ライブラリのライセンス",
-            onClick = { showLicenseDialog() }
         )
     }
 
@@ -187,6 +244,80 @@ class SettingsActivity : AppCompatActivity() {
         return valueView
     }
 
+    // スイッチ項目行: 左に「タイトル＋要約」、右端にトグルを置く（Sony 系の
+    // 作法）。行タップでも切り替えられるようにし、状態変更はトグルの
+    // リスナー経由に一本化する（二重発火させない）。
+    private fun addSwitchRow(
+        title: String,
+        value: String?,
+        checked: Boolean,
+        onCheckedChange: (Boolean) -> Unit
+    ) {
+        val rowRoot = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val rowMain = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(10), dp(2), dp(10))
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val titleView = TextView(this).apply {
+            text = title
+            textSize = 15f
+            setTextColor(Color.parseColor(colorTitle))
+        }
+        texts.addView(titleView)
+        if (value != null) {
+            val valueView = TextView(this).apply {
+                text = value
+                textSize = 12f
+                setTextColor(Color.parseColor(colorValue))
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(valueView)
+        }
+        rowMain.addView(texts)
+        val toggle = SwitchCompat(this).apply {
+            isChecked = checked
+            // ★ トグルの見た目は DSP 設定ダイアログと共通化する: 同じ
+            //   drawable リソース（switch_track_walkman_outline /
+            //   switch_thumb_white）を割り当て、テーマ tint は DSP 側 XML の
+            //   app:thumbTint / app:trackTint="@null" と同じく無効化する。
+            //   ライト時は DSP 側コード（DspSettingsDialog のライト適用）と
+            //   同じ _light 版へ差し替える。
+            trackDrawable = ContextCompat.getDrawable(
+                this@SettingsActivity,
+                if (isDark) R.drawable.switch_track_walkman_outline
+                else R.drawable.switch_track_walkman_outline_light
+            )
+            thumbDrawable = ContextCompat.getDrawable(
+                this@SettingsActivity,
+                if (isDark) R.drawable.switch_thumb_white
+                else R.drawable.switch_thumb_light
+            )
+            trackTintList = null
+            thumbTintList = null
+            setOnCheckedChangeListener { _, isChecked -> onCheckedChange(isChecked) }
+        }
+        rowMain.addView(toggle)
+        rowRoot.setOnClickListener { toggle.isChecked = !toggle.isChecked }
+        rowRoot.addView(rowMain)
+        val divider = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+            setBackgroundColor(Color.parseColor(colorDivider))
+        }
+        rowRoot.addView(divider)
+        listContainer.addView(rowRoot)
+    }
+
     private fun showPlaybackModeDialog() {
         val modes = PlaybackMode.entries
         val labels = Array<CharSequence>(modes.size) { modes[it].displayName }
@@ -203,25 +334,121 @@ class SettingsActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun finishWithAction(action: String) {
-        setResult(RESULT_OK, Intent().putExtra(EXTRA_ACTION, action))
-        finish()
+    private fun themeLabel(mode: String): String {
+        return when (mode) {
+            "light" -> "ライト"
+            "auto" -> "端末の設定に連動"
+            else -> "ダーク"
+        }
     }
 
-    private fun showNotReadyToast() {
-        Toast.makeText(this, "準備中です", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun showLicenseDialog() {
+    // ★ テーマ変更: ここでは prefs への保存までを行い、この画面自身の配色は
+    //   recreate して即時反映する（旧 UI 設定ダイアログがテーマ変更時に
+    //   開き直していたのと同じ見え方）。MainActivity 側の表示への適用は
+    //   戻った先が差分を検知して行う。
+    private fun showThemeDialog() {
+        val values = arrayOf("dark", "light", "auto")
+        val labels = Array<CharSequence>(values.size) { themeLabel(values[it]) }
+        val currentIndex = values.indexOf(appPrefs.uiThemeMode).coerceAtLeast(0)
         AlertDialog.Builder(this)
-            .setTitle("ライセンス表記")
-            .setMessage(
-                "GeckoView\nMozilla Public License 2.0\n\n" +
-                    "その他のサードパーティ製ライブラリのライセンスは、" +
-                    "導入に合わせて順次ここに集約します。"
-            )
-            .setPositiveButton("閉じる", null)
+            .setTitle("テーマ")
+            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
+                val selected = values[which]
+                dialog.dismiss()
+                if (selected != appPrefs.uiThemeMode) {
+                    appPrefs.uiThemeMode = selected
+                    themeValueText?.text = themeLabel(selected)
+                    recreate()
+                }
+            }
+            .setNegativeButton("キャンセル", null)
             .show()
+    }
+
+    // ★ バッテリー最適化の除外リクエスト（旧 UI 設定ダイアログから移設）。
+    //   除外済みならその旨をトーストで知らせる。
+    private fun requestIgnoreBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (e2: Exception) {}
+                }
+            } else {
+                Toast.makeText(this, "バッテリー最適化は既に「無制限」に設定されています", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // ★ SAF フォルダ追加: Local 画面側の導線と同じ prefs（safFolderUris）を
+    //   共有する。永続化許可を取ってから加え、重複追加は防ぐ。追加後は
+    //   一覧（フォルダ行）を組み直す。
+    private val safFolderPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            val uriString = uri.toString()
+            if (uriString in appPrefs.safFolderUris) {
+                Toast.makeText(this, "このフォルダはすでに追加されています", Toast.LENGTH_SHORT).show()
+                return@registerForActivityResult
+            }
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                appPrefs.safFolderUris = appPrefs.safFolderUris + uriString
+                Toast.makeText(this, "フォルダを追加しました", Toast.LENGTH_SHORT).show()
+                buildList()
+            } catch (e: Exception) {
+                Toast.makeText(this, "フォルダを追加できませんでした", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+    // フォルダ行の表示名: ドキュメント名が取れればそれを、取れなければ
+    // ドキュメント ID のパス部分で代用する。
+    private fun folderDisplayName(treeUriString: String): String {
+        val uri = Uri.parse(treeUriString)
+        val name = try {
+            DocumentFile.fromTreeUri(this, uri)?.name
+        } catch (e: Exception) {
+            null
+        }
+        if (!name.isNullOrBlank()) return name
+        val docId = try {
+            DocumentsContract.getTreeDocumentId(uri)
+        } catch (e: Exception) {
+            null
+        }
+        val path = docId?.substringAfter(':')?.trim('/')
+        return path?.takeIf { it.isNotBlank() } ?: "フォルダ"
+    }
+
+    private fun confirmRemoveFolder(treeUriString: String) {
+        AlertDialog.Builder(this)
+            .setTitle("フォルダを削除")
+            .setMessage("「${folderDisplayName(treeUriString)}」を取得範囲から外しますか？")
+            .setPositiveButton("削除") { _, _ -> removeFolder(treeUriString) }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    private fun removeFolder(treeUriString: String) {
+        try {
+            contentResolver.releasePersistableUriPermission(
+                Uri.parse(treeUriString), Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            // 許可の解放に失敗しても、取得範囲からは外す
+        }
+        appPrefs.safFolderUris = appPrefs.safFolderUris - treeUriString
+        Toast.makeText(this, "フォルダを削除しました", Toast.LENGTH_SHORT).show()
+        buildList()
     }
 
     private fun versionName(): String {
