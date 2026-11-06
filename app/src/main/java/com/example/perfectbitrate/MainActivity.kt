@@ -3853,9 +3853,7 @@ class MainActivity : AppCompatActivity() {
             return root
         }
 
-        private companion object {
-            const val ROW_TAG = "localLibraryTopRow"
-        }
+        private val ROW_TAG = "localLibraryTopRow"
     }
 
     private inner class LocalGroupAdapter(
