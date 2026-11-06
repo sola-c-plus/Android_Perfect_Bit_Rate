@@ -362,6 +362,7 @@
                          ダイアログで切り替える。ブラウザ系タブでのみ
                          表示され、「再生」タブではページごと隠れる。 -->
                     <LinearLayout
+                        android:id="@+id/localSearchRow"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
@@ -661,7 +662,7 @@
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="26dp"
+                            android:layout_marginTop="36dp"
                             android:layout_marginStart="16dp"
                             android:layout_marginEnd="16dp"
                             android:orientation="horizontal"
@@ -782,20 +783,19 @@
             </FrameLayout>
 
             <!-- ★ ライブラリの下部タブバー: 左から キュー / 再生 /
-                 ライブラリ（統合） / プレイリスト の4つ。TRACKS /
-                 ALBUMS / ARTISTS は1つの統合ボタンにまとめ、ボタン
-                 を押すと3つのどれを表示するか選べる（選択ダイアログ）。
-                 統合ボタンのラベルとアイコンは、現在表示中（または
-                 最後に選んだ）ライブラリビューに合わせてコード側で
-                 切り替える。各タブはアイコン（ic_tab_*）＋ラベルの
-                 構成で、選択状態の配色（アイコンの tint とラベル色）
-                 はコード側でテーマに合わせて切り替える
-                 （updateLocalTabStyles）。「再生」は再生ページへの
-                 切替で、一覧で曲をタップして再生が始まったときも
-                 自動で切り替わる（明示タップ起点のみ。自動進行や
-                 通知からの操作では切り替わらない）。ドリルダウン
-                 中も含め Local 表示中は常に出し、タブ切替でドリル
-                 ダウンから抜けられるようにする。 -->
+                 ライブラリ の3つ。ライブラリは WALKMAN OS の
+                 ライブラリートップに相当する専用ページで、TRACKS /
+                 ALBUMS / ARTISTS / PLAYLISTS の4項目が並び、項目
+                 タップで各ビューへ入る（PLAYLISTS もここへ統合）。
+                 各タブはアイコン（ic_tab_*）＋ラベルの構成で、選択
+                 状態の配色（アイコンの tint とラベル色）はコード側で
+                 テーマに合わせて切り替える（updateLocalTabStyles）。
+                 「再生」は再生ページへの切替で、一覧で曲をタップして
+                 再生が始まったときも自動で切り替わる（明示タップ
+                 起点のみ。自動進行や通知からの操作では切り替わら
+                 ない）。ドリルダウン中も含め Local 表示中は常に
+                 出し、タブ切替でドリルダウンから抜けられるように
+                 する。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"
@@ -843,26 +843,9 @@
                     android:gravity="center"
                     android:paddingTop="6dp"
                     android:paddingBottom="6dp"
-                    android:drawableTop="@drawable/ic_tab_all"
+                    android:drawableTop="@drawable/ic_tab_library"
                     android:drawablePadding="3dp"
-                    android:text="TRACKS"
-                    android:textColor="@color/text_primary"
-                    android:textSize="11sp"
-                    android:maxLines="1"
-                    android:textStyle="bold"
-                    android:fontFamily="@font/font_dap_condensed" />
-
-                <TextView
-                    android:id="@+id/tabLocalPlaylist"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp"
-                    android:drawableTop="@drawable/ic_tab_playlist"
-                    android:drawablePadding="3dp"
-                    android:text="PLAYLISTS"
+                    android:text="LIBRARY"
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp"
                     android:maxLines="1"
