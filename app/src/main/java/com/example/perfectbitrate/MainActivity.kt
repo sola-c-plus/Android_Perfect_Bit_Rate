@@ -17,6 +17,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.Uri
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
@@ -95,7 +96,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabLocalAll: TextView
     private lateinit var tabLocalAlbum: TextView
     private lateinit var tabLocalArtist: TextView
-    private lateinit var tabLocalFolder: TextView
+    private lateinit var tabLocalPlaylist: TextView
     private lateinit var editLocalSearch: EditText
     private lateinit var btnLocalSort: TextView
     private lateinit var localGroupHeader: View
@@ -122,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnNpPlayPause: ImageButton
     private lateinit var btnNpNext: ImageButton
     private lateinit var btnNpRepeat: ImageButton
+    private lateinit var btnNpStar: ImageButton
 
     // ★ 再生画面のシークバーのドラッグ中フラグ
     //   （ドラッグ中は進捗ポーリングで表示位置を上書きしない）。
@@ -150,7 +152,7 @@ class MainActivity : AppCompatActivity() {
     //   キー（null = 全曲リスト or グループ一覧を表示中）。
     //   localDisplayedTracks: いま曲リストとして表示している並び
     //   （＝ LocalPlayer へ渡しているキューと一致させる）。
-    private enum class LocalTab { NOW_PLAYING, ALL, ALBUM, ARTIST, FOLDER }
+    private enum class LocalTab { NOW_PLAYING, ALL, ALBUM, ARTIST, PLAYLIST }
 
     private data class LocalGroup(
         val key: String,
@@ -169,7 +171,17 @@ class MainActivity : AppCompatActivity() {
 
     private val unknownAlbumLabel = "不明なアルバム"
     private val unknownArtistLabel = "不明なアーティスト"
-    private val unknownFolderLabel = "その他のフォルダ"
+
+    // ★ プレイリスト（フォルダタブを置き換え）。
+    //   playlistStore: 永続化の正（別 DB、PlaylistStore 参照）。
+    //   localPlaylistDrillId: プレイリストタブでドリルダウン中の
+    //   プレイリスト id（null = プレイリスト一覧を表示中）。
+    //   localTrackUriSet: 現在のライブラリに実在する曲の URI 集合。
+    //   プレイリスト内の「ライブラリから消えた曲」の判定と、
+    //   再生キューからの除外に使う（applyLocalTracks で更新）。
+    private val playlistStore by lazy { PlaylistStore(applicationContext) }
+    private var localPlaylistDrillId: Long? = null
+    private var localTrackUriSet: Set<String> = emptySet()
 
     // サムネイルのメモリキャッシュ（URI 文字列 → 取得済み Bitmap、約 8MB）
     private val localThumbCache = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
@@ -767,13 +779,14 @@ class MainActivity : AppCompatActivity() {
     //   リスト＝再生キューの同期）は refreshLocalBrowser に集約する。
     private fun applyLocalTracks(tracks: List<LibraryRepository.Track>) {
         localTracks = tracks
+        localTrackUriSet = tracks.mapTo(HashSet()) { it.uri.toString() }
         localLibraryShown = tracks.isNotEmpty()
         refreshLocalBrowser()
     }
 
     // ── ライブラリブラウザ（Phase 2-1） ──
     //
-    // タブ（全曲 / アルバム / アーティスト / フォルダ）× 検索フィルタ ×
+    // タブ（全曲 / アルバム / アーティスト / プレイリスト）× 検索フィルタ ×
     // ソートから表示内容を導出する単一の入口。表示が「曲リスト」の間は
     // その並びが LocalPlayer のキューになる（タップ再生・次曲送り・
     // 自動進行がすべて表示順と一致する）。表示が「グループリスト」の
@@ -825,6 +838,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
         updateLocalPageVisibility()
+        if (localTab == LocalTab.PLAYLIST) {
+            // プレイリストはライブラリ由来のグループとは導出元が
+            // 違う（DB が正）ため、専用経路で描く。
+            refreshPlaylistTab()
+            updateLocalTabStyles()
+            return
+        }
         val groupKey = localGroupKey
         if (groupKey != null && localTab != LocalTab.ALL) {
             // ドリルダウン中: 選択中グループの曲一覧（検索フィルタ適用、
@@ -833,7 +853,7 @@ class MainActivity : AppCompatActivity() {
                 .filter { localGroupKeyOf(localTab, it) == groupKey }
                 .filter { localTrackMatchesQuery(it, localSearchQuery) }
             showLocalTrackPage(sortLocalTracks(groupTracks, AppPreferences.LOCAL_SORT_TITLE))
-            textLocalGroupTitle.text = localGroupLabel(localTab, groupKey)
+            textLocalGroupTitle.text = groupKey
             localGroupHeader.visibility = View.VISIBLE
         } else {
             localGroupHeader.visibility = View.GONE
@@ -843,7 +863,7 @@ class MainActivity : AppCompatActivity() {
                         .filter { localTrackMatchesQuery(it, localSearchQuery) }
                     showLocalTrackPage(sortLocalTracks(filtered, appPrefs.localSortMode))
                 }
-                LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.FOLDER -> {
+                LocalTab.ALBUM, LocalTab.ARTIST -> {
                     val groups = localGroupsFor(localTab, localSearchQuery)
                     localDisplayedTracks = emptyList()
                     val adapter = LocalGroupAdapter(groups)
@@ -851,23 +871,103 @@ class MainActivity : AppCompatActivity() {
                     localTrackList.adapter = adapter
                     updateLocalEmptyMessage(groups.size, isTrackPage = false)
                 }
-                LocalTab.NOW_PLAYING -> {
-                    // 到達しない分岐（網羅性のため）: NOW_PLAYING は
-                    // refreshLocalBrowser の冒頭でページ出し分けのみ
-                    // 行って return しているため、ここでは何もしない。
+                LocalTab.PLAYLIST, LocalTab.NOW_PLAYING -> {
+                    // 到達しない分岐（網羅性のため）: PLAYLIST は冒頭の
+                    // 専用経路、NOW_PLAYING は関数冒頭の早期 return で
+                    // それぞれ処理済みのため、ここでは何もしない。
                 }
             }
         }
         updateLocalTabStyles()
     }
 
+    // ★ プレイリストタブの描画。ドリルダウンしていない間は
+    //   「＋ 新規作成」行＋プレイリスト一覧、ドリルダウン中は
+    //   そのプレイリストの曲一覧（追加順）を出す。曲一覧では
+    //   ライブラリから消えた曲も、追加時点のスナップショットで
+    //   行自体は残してグレー表示にする（行を消すと長押しでの
+    //   「プレイリストから削除」もできなくなるため）。再生キュー
+    //   への同期は showLocalTrackPage 側で実在する曲だけに絞る。
+    private fun refreshPlaylistTab() {
+        val drillId = localPlaylistDrillId
+        if (drillId == null) {
+            localGroupHeader.visibility = View.GONE
+            val query = localSearchQuery.trim().lowercase(Locale.ROOT)
+            val playlists = playlistStore.listPlaylists().filter {
+                query.isBlank() || it.name.lowercase(Locale.ROOT).contains(query)
+            }
+            localDisplayedTracks = emptyList()
+            localTrackList.adapter = LocalPlaylistAdapter(playlists)
+            // 一覧には常に「＋ 新規作成」行があるため、空表示
+            // メッセージは出さない。
+            textLocalMessage.visibility = View.GONE
+            return
+        }
+        val playlist = playlistStore.getPlaylist(drillId)
+        if (playlist == null) {
+            // 表示中に削除された場合は一覧へ戻る
+            localPlaylistDrillId = null
+            refreshPlaylistTab()
+            return
+        }
+        textLocalGroupTitle.text = playlist.name
+        localGroupHeader.visibility = View.VISIBLE
+        val byUri = localTracks.associateBy { it.uri.toString() }
+        val display = playlistStore.items(drillId)
+            .map { item -> byUri[item.uri] ?: missingPlaylistTrack(item) }
+            .filter { localTrackMatchesQuery(it, localSearchQuery) }
+        showLocalTrackPage(display)
+        if (display.isEmpty()) {
+            textLocalMessage.text = if (localSearchQuery.isNotBlank()) {
+                "「${localSearchQuery}」に一致する曲が見つかりません"
+            } else {
+                "このプレイリストには曲がまだありません"
+            }
+            textLocalMessage.visibility = View.VISIBLE
+        } else {
+            // 行が出ている間は、ライブラリ側の空表示メッセージ
+            // （ライブラリ未読込時の案内など）を重ねない。
+            textLocalMessage.visibility = View.GONE
+        }
+    }
+
+    // ★ ライブラリに実在しないプレイリスト項目の表示用プレース
+    //   ホルダ。追加時点のスナップショット（タイトル等）だけを持ち、
+    //   再生キューには入らない（showLocalTrackPage の絞り込みと
+    //   タップ時の判定で除外される）。行側は URI がライブラリに
+    //   無いことで判別してグレー表示にする。
+    private fun missingPlaylistTrack(item: PlaylistStore.Item): LibraryRepository.Track {
+        return LibraryRepository.Track(
+            uri = Uri.parse(item.uri),
+            displayName = item.title,
+            title = item.title.ifBlank { item.uri },
+            artist = item.artist,
+            album = item.album,
+            durationMs = 0L,
+            sizeBytes = 0L,
+            modifiedMs = 0L,
+            sampleRate = 0,
+            bitDepth = 0,
+            codecName = "",
+            isDsd = false,
+            source = LibraryRepository.Track.Source.MEDIASTORE,
+            fileKey = null
+        )
+    }
+
     // 曲リストを表示し、その並びを再生キューとして LocalPlayer へ渡す。
+    // キューには現在のライブラリに実在する曲だけを入れる（通常の
+    // タブでは表示＝全曲実在するため素通しになり、プレイリストの
+    // ドリルダウンでのみ「消えた曲」が静かに外れる）。
     private fun showLocalTrackPage(tracks: List<LibraryRepository.Track>) {
         localDisplayedTracks = tracks
         val adapter = LocalTrackAdapter(tracks)
         localTrackAdapter = adapter
         localTrackList.adapter = adapter
-        if (::localPlayer.isInitialized) localPlayer.setQueue(tracks)
+        if (::localPlayer.isInitialized) {
+            val queue = tracks.filter { it.uri.toString() in localTrackUriSet }
+            localPlayer.setQueue(if (queue.size == tracks.size) tracks else queue)
+        }
         updateLocalEmptyMessage(tracks.size, isTrackPage = true)
     }
 
@@ -895,6 +995,7 @@ class MainActivity : AppCompatActivity() {
     private fun selectLocalTab(tab: LocalTab) {
         localTab = tab
         localGroupKey = null
+        localPlaylistDrillId = null
         refreshLocalBrowser()
     }
 
@@ -903,7 +1004,19 @@ class MainActivity : AppCompatActivity() {
     private fun onLocalListItemClicked(position: Int) {
         // 再生ページ表示中は一覧が見えていないため到達しないが、保険として弾く
         if (localTab == LocalTab.NOW_PLAYING) return
-        if (localGroupKey == null && localTab != LocalTab.ALL) {
+        if (localTab == LocalTab.PLAYLIST && localPlaylistDrillId == null) {
+            // プレイリスト一覧: 先頭行は新規作成、それ以外はドリルダウン
+            if (position == 0) {
+                showCreatePlaylistDialog()
+                return
+            }
+            val playlist = (localTrackList.adapter as? LocalPlaylistAdapter)
+                ?.getItem(position) ?: return
+            localPlaylistDrillId = playlist.id
+            refreshLocalBrowser()
+            return
+        }
+        if (localGroupKey == null && (localTab == LocalTab.ALBUM || localTab == LocalTab.ARTIST)) {
             val group = (localTrackList.adapter as? LocalGroupAdapter)
                 ?.getItem(position) ?: return
             localGroupKey = group.key
@@ -912,8 +1025,18 @@ class MainActivity : AppCompatActivity() {
         }
         val tracks = localDisplayedTracks
         if (position !in tracks.indices) return
-        localPlayer.setQueue(tracks)
-        localPlayer.playAt(position)
+        val tapped = tracks[position]
+        // ★ キューは「ライブラリに実在する曲だけ」で組み直し、タップ
+        //   位置を表示リスト内ではなくキュー内の位置へ読み替える
+        //   （プレイリスト内の消えた曲が間にあっても並びがずれない）。
+        val queue = tracks.filter { it.uri.toString() in localTrackUriSet }
+        val queueIndex = queue.indexOfFirst { it.uri == tapped.uri }
+        if (queueIndex < 0) {
+            Toast.makeText(this, "この曲はライブラリに見つかりません", Toast.LENGTH_SHORT).show()
+            return
+        }
+        localPlayer.setQueue(queue)
+        localPlayer.playAt(queueIndex)
         // ★ 明示的な曲タップで再生が始まったときだけ「再生」タブへ
         //   自動で切り替える（曲終わりの自動進行や通知・ウィジェット
         //   からの操作では切り替えない。ここは一覧タップの単一の
@@ -921,6 +1044,196 @@ class MainActivity : AppCompatActivity() {
         //   タブの手動タップと同じ selectLocalTab に揃える
         //   （ドリルダウン状態も合わせてリセットされる）。
         selectLocalTab(LocalTab.NOW_PLAYING)
+    }
+
+    // 一覧の長押し振り分け: プレイリスト一覧では名前変更/削除、
+    // プレイリスト内では「プレイリストから削除」、それ以外の
+    // 曲リストではプレイリストへの追加ダイアログを開く。
+    // グループ一覧では何もしないが、長押し後の誤タップ（ドリル
+    // ダウン）を防ぐため消費だけする。
+    private fun onLocalListItemLongClicked(position: Int): Boolean {
+        if (localTab == LocalTab.NOW_PLAYING) return false
+        if (localTab == LocalTab.PLAYLIST && localPlaylistDrillId == null) {
+            if (position == 0) return true // 新規作成行は対象外
+            val playlist = (localTrackList.adapter as? LocalPlaylistAdapter)
+                ?.getItem(position) ?: return true
+            showPlaylistManageDialog(playlist)
+            return true
+        }
+        if (localGroupKey == null && (localTab == LocalTab.ALBUM || localTab == LocalTab.ARTIST)) {
+            return true
+        }
+        val track = localDisplayedTracks.getOrNull(position) ?: return true
+        val drillId = localPlaylistDrillId
+        if (localTab == LocalTab.PLAYLIST && drillId != null) {
+            showRemoveFromPlaylistDialog(drillId, track)
+        } else {
+            showAddToPlaylistDialog(track)
+        }
+        return true
+    }
+
+    // ── プレイリスト操作（ダイアログ群） ──
+
+    // ★ 曲をプレイリストへ追加する共通処理。重複は追加せず通知する。
+    private fun addTrackToPlaylist(track: LibraryRepository.Track, playlist: PlaylistStore.Playlist) {
+        if (playlistStore.addItem(playlist.id, track)) {
+            Toast.makeText(this, "「${playlist.name}」に追加しました", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "「${playlist.name}」には追加済みです", Toast.LENGTH_SHORT).show()
+        }
+        updateNpStarState()
+        if (localTab == LocalTab.PLAYLIST) refreshLocalBrowser()
+    }
+
+    // ★ 追加先の選択ダイアログ（既存プレイリスト＋新規作成）。
+    //   ★ の長押しと、曲リストの長押しで共用する。
+    private fun showAddToPlaylistDialog(track: LibraryRepository.Track) {
+        val playlists = playlistStore.listPlaylists()
+        val labels = playlists.map { it.name as CharSequence } + "＋ 新規作成"
+        AlertDialog.Builder(this)
+            .setTitle("プレイリストに追加")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which >= playlists.size) {
+                    showCreatePlaylistDialog { newId ->
+                        playlistStore.getPlaylist(newId)?.let { addTrackToPlaylist(track, it) }
+                    }
+                } else {
+                    addTrackToPlaylist(track, playlists[which])
+                }
+            }
+            .show()
+    }
+
+    // ★ 新規作成ダイアログ（名前入力、空名不可）。
+    //   作成できたら onCreated に新しい id を渡す。表示中のタブが
+    //   プレイリストなら一覧も更新する。
+    private fun showCreatePlaylistDialog(onCreated: ((Long) -> Unit)? = null) {
+        val input = EditText(this).apply {
+            hint = "プレイリスト名"
+            setSingleLine(true)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val pad = (20 * resources.displayMetrics.density).toInt()
+            setPadding(pad, 0, pad, 0)
+            addView(input, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("プレイリストを作成")
+            .setView(container)
+            .setPositiveButton("作成", null)
+            .setNegativeButton("キャンセル", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "名前を入力してください", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                val id = playlistStore.createPlaylist(name)
+                Toast.makeText(this, "「$name」を作成しました", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+                if (localTab == LocalTab.PLAYLIST) refreshLocalBrowser()
+                onCreated?.invoke(id)
+            }
+        }
+        dialog.show()
+    }
+
+    // ★ プレイリスト行の長押しメニュー（名前の変更／削除）。
+    private fun showPlaylistManageDialog(playlist: PlaylistStore.Playlist) {
+        val labels = arrayOf<CharSequence>("名前を変更", "削除")
+        AlertDialog.Builder(this)
+            .setTitle(playlist.name)
+            .setItems(labels) { _, which ->
+                when (which) {
+                    0 -> showRenamePlaylistDialog(playlist)
+                    1 -> {
+                        AlertDialog.Builder(this)
+                            .setTitle("プレイリストを削除")
+                            .setMessage("「${playlist.name}」を削除しますか？（曲のファイル自体は消えません）")
+                            .setPositiveButton("削除") { _, _ ->
+                                playlistStore.deletePlaylist(playlist.id)
+                                if (localPlaylistDrillId == playlist.id) {
+                                    localPlaylistDrillId = null
+                                }
+                                Toast.makeText(this, "削除しました", Toast.LENGTH_SHORT).show()
+                                refreshLocalBrowser()
+                            }
+                            .setNegativeButton("キャンセル", null)
+                            .show()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showRenamePlaylistDialog(playlist: PlaylistStore.Playlist) {
+        val input = EditText(this).apply {
+            setText(playlist.name)
+            setSingleLine(true)
+            setSelection(text.length)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val pad = (20 * resources.displayMetrics.density).toInt()
+            setPadding(pad, 0, pad, 0)
+            addView(input, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("名前を変更")
+            .setView(container)
+            .setPositiveButton("変更", null)
+            .setNegativeButton("キャンセル", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "名前を入力してください", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                playlistStore.renamePlaylist(playlist.id, name)
+                dialog.dismiss()
+                refreshLocalBrowser()
+            }
+        }
+        dialog.show()
+    }
+
+    // ★ プレイリスト内の曲行の長押し: そのプレイリストから外す。
+    private fun showRemoveFromPlaylistDialog(playlistId: Long, track: LibraryRepository.Track) {
+        AlertDialog.Builder(this)
+            .setTitle(track.title.ifBlank { track.displayName })
+            .setItems(arrayOf<CharSequence>("プレイリストから削除")) { _, _ ->
+                playlistStore.removeItem(playlistId, track.uri.toString())
+                Toast.makeText(this, "プレイリストから削除しました", Toast.LENGTH_SHORT).show()
+                updateNpStarState()
+                refreshLocalBrowser()
+            }
+            .show()
+    }
+
+    // ★ 再生画面の ★ の見た目を同期する。塗りつぶしになるのは
+    //   「最後に作成したプレイリスト」に現在曲が入っている場合
+    //   のみ（★ タップの追加先と表示の対象を一致させる）。
+    private fun updateNpStarState() {
+        if (!::btnNpStar.isInitialized || !::localPlayer.isInitialized) return
+        val track = localPlayer.currentTrack ?: return
+        val isDark = isDarkThemeActive()
+        val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+        val colorOff = Color.parseColor(if (isDark) "#777777" else "#9A9AA0")
+        val latest = playlistStore.latestPlaylist()
+        val isMember = latest != null &&
+            playlistStore.contains(latest.id, track.uri.toString())
+        btnNpStar.setImageResource(
+            if (isMember) R.drawable.ic_star else R.drawable.ic_star_outline
+        )
+        btnNpStar.setColorFilter(if (isMember) colorAccent else colorOff)
     }
 
     private fun updateLocalTabStyles() {
@@ -933,7 +1246,7 @@ class MainActivity : AppCompatActivity() {
             tabLocalAll to LocalTab.ALL,
             tabLocalAlbum to LocalTab.ALBUM,
             tabLocalArtist to LocalTab.ARTIST,
-            tabLocalFolder to LocalTab.FOLDER
+            tabLocalPlaylist to LocalTab.PLAYLIST
         )
         for ((view, tab) in tabs) {
             val selected = tab == localTab
@@ -959,7 +1272,7 @@ class MainActivity : AppCompatActivity() {
             LocalTab.ALL -> R.drawable.ic_tab_all
             LocalTab.ALBUM -> R.drawable.ic_tab_album
             LocalTab.ARTIST -> R.drawable.ic_tab_artist
-            LocalTab.FOLDER -> R.drawable.ic_tab_folder
+            LocalTab.PLAYLIST -> R.drawable.ic_tab_playlist
         }
     }
 
@@ -1033,7 +1346,7 @@ class MainActivity : AppCompatActivity() {
         return grouped.map { (key, tracks) ->
             LocalGroup(
                 key = key,
-                label = localGroupLabel(tab, key),
+                label = key,
                 tracks = tracks,
                 uniformArtist = tracks.map { it.artist }.distinct().singleOrNull()
                     ?.takeIf { it.isNotBlank() }
@@ -1051,31 +1364,8 @@ class MainActivity : AppCompatActivity() {
         return when (tab) {
             LocalTab.ALBUM -> track.album.ifBlank { unknownAlbumLabel }
             LocalTab.ARTIST -> track.artist.ifBlank { unknownArtistLabel }
-            LocalTab.FOLDER -> localFolderKeyOf(track)
-            LocalTab.ALL, LocalTab.NOW_PLAYING -> ""
+            LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST -> ""
         }
-    }
-
-    private fun localGroupLabel(tab: LocalTab, key: String): String {
-        return if (tab == LocalTab.FOLDER) localFolderLabel(key) else key
-    }
-
-    // フォルダの同一性キー: 実ファイルキー（"ボリューム:相対パス"）の
-    // ディレクトリ部分。fileKey が取れていない曲は「その他のフォルダ」
-    // に畳む。ボリューム直下のファイルは "ボリューム:" をキーにする。
-    private fun localFolderKeyOf(track: LibraryRepository.Track): String {
-        val fileKey = track.fileKey ?: return unknownFolderLabel
-        val volume = fileKey.substringBefore(':', "")
-        val path = fileKey.substringAfter(':', "")
-        if (volume.isBlank() || path.isBlank()) return unknownFolderLabel
-        val dir = path.substringBeforeLast('/', "")
-        return if (dir.isBlank()) "$volume:" else "$volume:$dir"
-    }
-
-    private fun localFolderLabel(key: String): String {
-        if (key == unknownFolderLabel) return unknownFolderLabel
-        val relative = key.substringAfter(':', "")
-        return relative.ifBlank { "ルート" }
     }
 
     private fun requestAudioPermission() {
@@ -1434,7 +1724,7 @@ class MainActivity : AppCompatActivity() {
         tabLocalAll = findViewById(R.id.tabLocalAll)
         tabLocalAlbum = findViewById(R.id.tabLocalAlbum)
         tabLocalArtist = findViewById(R.id.tabLocalArtist)
-        tabLocalFolder = findViewById(R.id.tabLocalFolder)
+        tabLocalPlaylist = findViewById(R.id.tabLocalPlaylist)
         editLocalSearch = findViewById(R.id.editLocalSearch)
         btnLocalSort = findViewById(R.id.btnLocalSort)
         localGroupHeader = findViewById(R.id.localGroupHeader)
@@ -1458,6 +1748,7 @@ class MainActivity : AppCompatActivity() {
         btnNpPlayPause = findViewById(R.id.btnNpPlayPause)
         btnNpNext = findViewById(R.id.btnNpNext)
         btnNpRepeat = findViewById(R.id.btnNpRepeat)
+        btnNpStar = findViewById(R.id.btnNpStar)
 
         libraryRepository = LibraryRepository(this)
         localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
@@ -1592,8 +1883,12 @@ class MainActivity : AppCompatActivity() {
                 // ★ 戻る操作の優先順位: Local のドリルダウンを戻る →
                 //   Gecko の履歴を戻る → 終了確認。
                 // ★ Local のドリルダウン中は、まずグループ一覧へ戻る
-                if (currentPlaybackMode == PlaybackMode.LOCAL && localGroupKey != null) {
+                //   （プレイリストのドリルダウンも同様）
+                if (currentPlaybackMode == PlaybackMode.LOCAL &&
+                    (localGroupKey != null || localPlaylistDrillId != null)
+                ) {
                     localGroupKey = null
+                    localPlaylistDrillId = null
                     refreshLocalBrowser()
                     return
                 }
@@ -1661,6 +1956,12 @@ class MainActivity : AppCompatActivity() {
             //   一覧ならそのグループへドリルダウン（Phase 2-1）
             onLocalListItemClicked(position)
         }
+        localTrackList.setOnItemLongClickListener { _, view, position, _ ->
+            view?.hapticTick(appPrefs)
+            // ★ 長押し: プレイリストへの追加/管理（プレイリスト
+            //   機能）。振り分けは onLocalListItemLongClicked 側。
+            onLocalListItemLongClicked(position)
+        }
         tabLocalNowPlaying.setOnClickListener {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.NOW_PLAYING)
@@ -1677,13 +1978,14 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.ARTIST)
         }
-        tabLocalFolder.setOnClickListener {
+        tabLocalPlaylist.setOnClickListener {
             it.hapticTick(appPrefs)
-            selectLocalTab(LocalTab.FOLDER)
+            selectLocalTab(LocalTab.PLAYLIST)
         }
         btnLocalBack.setOnClickListener {
             it.hapticTick(appPrefs)
             localGroupKey = null
+            localPlaylistDrillId = null
             refreshLocalBrowser()
         }
         btnLocalSort.setOnClickListener {
@@ -1740,6 +2042,28 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             localPlayer.cycleRepeatMode()
             updateNpToggleStates()
+        }
+        btnNpStar.setOnClickListener {
+            it.hapticTick(appPrefs)
+            // ★ タップ: 最後に作成したプレイリストへ現在曲を追加。
+            //   プレイリストが1つも無ければ新規作成へ誘導し、作成
+            //   したリストへそのまま追加する。
+            val track = localPlayer.currentTrack ?: return@setOnClickListener
+            val latest = playlistStore.latestPlaylist()
+            if (latest == null) {
+                showCreatePlaylistDialog { newId ->
+                    playlistStore.getPlaylist(newId)?.let { addTrackToPlaylist(track, it) }
+                }
+            } else {
+                addTrackToPlaylist(track, latest)
+            }
+        }
+        btnNpStar.setOnLongClickListener {
+            it.hapticTick(appPrefs)
+            // ★ 長押し: 追加先の選択（既存一覧＋新規作成）
+            val track = localPlayer.currentTrack ?: return@setOnLongClickListener true
+            showAddToPlaylistDialog(track)
+            true
         }
         seekNpProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -1960,6 +2284,7 @@ class MainActivity : AppCompatActivity() {
             if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
         )
         updateNpToggleStates()
+        updateNpStarState()
     }
 
     // フォーマット情報の小行: コーデック / サンプリングレート /
@@ -2109,6 +2434,11 @@ class MainActivity : AppCompatActivity() {
             val isCurrent = currentPlaybackMode == PlaybackMode.LOCAL &&
                 ::localPlayer.isInitialized &&
                 localPlayer.currentTrack?.uri == track.uri
+            // ★ プレイリストのドリルダウンで、ライブラリから消えた
+            //   曲（スナップショットのプレースホルダ行）はグレーで示す。
+            val isMissing = localTab == LocalTab.PLAYLIST &&
+                localPlaylistDrillId != null &&
+                track.uri.toString() !in localTrackUriSet
 
             val root = (convertView as? LinearLayout) ?: buildRow()
             val thumbView = root.getChildAt(0) as ImageView
@@ -2117,11 +2447,18 @@ class MainActivity : AppCompatActivity() {
             val durationView = root.getChildAt(2) as TextView
 
             titleView.text = track.title
-            titleView.setTextColor(if (isCurrent) colorAccent else colorTitle)
+            titleView.setTextColor(
+                when {
+                    isCurrent -> colorAccent
+                    isMissing -> colorValue
+                    else -> colorTitle
+                }
+            )
             val subParts = mutableListOf<String>()
             if (track.artist.isNotBlank()) subParts += track.artist
             if (track.album.isNotBlank()) subParts += track.album
             if (subParts.isEmpty()) subParts += track.displayName
+            if (isMissing) subParts += "ライブラリに見つかりません"
             if (track.codecName.isNotBlank()) {
                 subParts += if (track.sampleRate > 0) {
                     "${track.codecName.uppercase()} ${(track.sampleRate / 1000.0)}kHz"
@@ -2240,6 +2577,90 @@ class MainActivity : AppCompatActivity() {
             subView.text = subParts.joinToString(" • ")
             subView.setTextColor(colorValue)
             chevronView.setTextColor(colorValue)
+            return root
+        }
+
+        private fun buildRow(): LinearLayout {
+            val density = resources.displayMetrics.density
+            fun dp(v: Int): Int = (v * density).toInt()
+            val root = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(9), dp(4), dp(9))
+                layoutParams = android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val texts = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val nameView = TextView(this@MainActivity).apply {
+                textSize = 14.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subView = TextView(this@MainActivity).apply {
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            }
+            texts.addView(nameView)
+            texts.addView(subView)
+            val chevronView = TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 16f
+                setPadding(dp(10), 0, dp(2), 0)
+            }
+            root.addView(texts)
+            root.addView(chevronView)
+            return root
+        }
+    }
+
+    // ★ プレイリスト一覧のアダプタ。先頭行は「＋ 新規作成」の
+    //   アクション行で、それ以降がプレイリスト本体（名前＋曲数）。
+    //   行レイアウトはグループ行と同じ作りで使い回す。
+    private inner class LocalPlaylistAdapter(
+        private val playlists: List<PlaylistStore.Playlist>
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = playlists.size + 1
+
+        // position 0 は新規作成行のため null を返す
+        override fun getItem(position: Int): PlaylistStore.Playlist? =
+            if (position == 0) null else playlists.getOrNull(position - 1)
+
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val isDark = isDarkThemeActive()
+            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
+            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
+            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+
+            val root = (convertView as? LinearLayout) ?: buildRow()
+            val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
+            val subView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(1) as TextView }
+            val chevronView = root.getChildAt(1) as TextView
+
+            if (position == 0) {
+                nameView.text = "＋ 新規作成"
+                nameView.setTextColor(colorAccent)
+                subView.text = "新しいプレイリストを作る"
+                subView.setTextColor(colorValue)
+                chevronView.text = ""
+            } else {
+                val playlist = playlists[position - 1]
+                nameView.text = playlist.name
+                nameView.setTextColor(colorTitle)
+                subView.text = "${playlist.itemCount} 曲"
+                subView.setTextColor(colorValue)
+                chevronView.text = "›"
+                chevronView.setTextColor(colorValue)
+            }
             return root
         }
 
