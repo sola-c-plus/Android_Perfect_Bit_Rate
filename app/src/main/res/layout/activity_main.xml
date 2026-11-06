@@ -301,6 +301,33 @@
                     android:fontFamily="@font/font_dap_condensed" />
             </LinearLayout>
 
+            <!-- ★ 裏側の差分スキャン中に出す控えめな更新中インジケータ
+                 （キャッシュ表示中用。件数が出るので進捗も追える） -->
+            <LinearLayout
+                android:id="@+id/localScanUpdating"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:visibility="gone">
+
+                <ProgressBar
+                    android:id="@+id/progressLocalUpdating"
+                    android:layout_width="14dp"
+                    android:layout_height="14dp"
+                    android:indeterminate="true" />
+
+                <TextView
+                    android:id="@+id/textLocalUpdating"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text="ライブラリを更新中…"
+                    android:textColor="#888888"
+                    android:textSize="10sp" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/textLocalMessage"
                 android:layout_width="wrap_content"
@@ -310,6 +337,42 @@
                 android:textColor="#888888"
                 android:textSize="12sp"
                 android:gravity="center" />
+
+            <!-- ★ スキャン進捗ブロック（初回読み込み・手動の再スキャン時に表示。
+                 走査中は不定バー＋発見件数、メタデータ取得中は確定バー＋n/N 件、
+                 現在処理中の対象名も出す） -->
+            <LinearLayout
+                android:id="@+id/localScanProgress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <ProgressBar
+                    android:id="@+id/progressLocalScan"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:indeterminate="true" />
+
+                <TextView
+                    android:id="@+id/textLocalScanStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="#BBBBBB"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/textLocalScanCurrent"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#777777"
+                    android:textSize="10sp"
+                    android:maxLines="1"
+                    android:ellipsize="middle" />
+            </LinearLayout>
 
             <!-- ★ 全曲リスト（Phase 1 は全曲タブ相当のみ。タブブラウザは Phase 2） -->
             <ListView

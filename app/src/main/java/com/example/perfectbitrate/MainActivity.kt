@@ -32,6 +32,7 @@ import android.widget.BaseAdapter
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -70,6 +71,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localTrackList: ListView
     private lateinit var btnLocalAddFolder: TextView
     private lateinit var btnLocalRescan: TextView
+    private lateinit var localScanProgress: View
+    private lateinit var progressLocalScan: ProgressBar
+    private lateinit var textLocalScanStatus: TextView
+    private lateinit var textLocalScanCurrent: TextView
+    private lateinit var localScanUpdating: View
+    private lateinit var textLocalUpdating: TextView
 
     // ★ Local Music の供給係と楽曲インデックス（仕様書 §4.1 / §6）
     private lateinit var libraryRepository: LibraryRepository
@@ -77,6 +84,10 @@ class MainActivity : AppCompatActivity() {
     private var localTracks: List<LibraryRepository.Track> = emptyList()
     private var localTrackAdapter: LocalTrackAdapter? = null
     private var lastLocalProgressPushTime = 0L
+    // ★ ライブラリ表示まわり: 一覧（キャッシュ含む）を表示済みかと、
+    //   スキャンの多重実行ガード（仕様書 §6.2 の永続化キャッシュ表示用）
+    private var localLibraryShown = false
+    private var localScanRunning = false
 
     private val appPrefs by lazy { AppPreferences.get() }
     private lateinit var btCodecTracker: BluetoothCodecTracker
@@ -521,32 +532,117 @@ class MainActivity : AppCompatActivity() {
         reloadLocalLibrary()
     }
 
+    // ★ ライブラリ読み込みの入口（仕様書 §6.2 の永続化キャッシュ対応）:
+    //   永続化済みキャッシュがあればまずそれを即表示し、その裏で差分
+    //   スキャンを走らせる。一覧を既に表示している場合は差分スキャンだけ。
+    //   キャッシュが無い初回は進捗ブロックを見せながらスキャンする。
     private fun reloadLocalLibrary() {
         if (!FfmpegDecoder.isAvailable) {
             ensureLocalLibrary()
             return
         }
-        textLocalMessage.text = "ライブラリを読み込み中…"
-        textLocalMessage.visibility = View.VISIBLE
-        libraryRepository.loadTracks { tracks ->
+        if (localLibraryShown) {
+            startLocalRefresh(forceFull = false)
+            return
+        }
+        libraryRepository.loadCachedTracks { cached ->
             runOnUiThread {
                 if (currentPlaybackMode != PlaybackMode.LOCAL) return@runOnUiThread
-                localTracks = tracks
-                localPlayer.setQueue(tracks)
-                val adapter = LocalTrackAdapter(tracks)
-                localTrackAdapter = adapter
-                localTrackList.adapter = adapter
-                if (tracks.isEmpty()) {
-                    textLocalMessage.text = if (!libraryRepository.hasAudioPermission() && appPrefs.safFolderUris.isEmpty()) {
-                        "曲が見つかりませんでした。音声ファイルへのアクセスを許可するか、「フォルダ追加」からフォルダを選んでください"
-                    } else {
-                        "再生できる曲が見つかりませんでした"
-                    }
-                    textLocalMessage.visibility = View.VISIBLE
-                } else {
-                    textLocalMessage.visibility = View.GONE
+                if (cached.isNotEmpty()) {
+                    applyLocalTracks(cached)
+                }
+                startLocalRefresh(forceFull = false)
+            }
+        }
+    }
+
+    // ★ スキャンの実行（差分 or 強制フル）と進捗表示の制御。
+    //   進捗表示は2段構えにする:
+    //   - 一覧がまだ無い / 強制フル: プログレスバーの進捗ブロック
+    //     （走査中は「検索中… n 件」、取得中は「読み込み中 n/N 件」＋対象名）
+    //   - 一覧表示中の裏側差分: 小さな「更新中 n/N 件」インジケータのみ
+    private fun startLocalRefresh(forceFull: Boolean) {
+        if (localScanRunning) return
+        if (!FfmpegDecoder.isAvailable) {
+            ensureLocalLibrary()
+            return
+        }
+        localScanRunning = true
+        val foreground = forceFull || !localLibraryShown
+        if (foreground) {
+            textLocalMessage.visibility = View.GONE
+            localScanUpdating.visibility = View.GONE
+            progressLocalScan.isIndeterminate = true
+            textLocalScanStatus.text = "ライブラリを検索中…"
+            textLocalScanCurrent.text = ""
+            localScanProgress.visibility = View.VISIBLE
+        } else {
+            localScanProgress.visibility = View.GONE
+            textLocalUpdating.text = "ライブラリを更新中…"
+            localScanUpdating.visibility = View.VISIBLE
+        }
+        libraryRepository.refreshLibrary(
+            forceFull = forceFull,
+            onProgress = { progress ->
+                runOnUiThread { updateLocalScanProgress(progress, foreground) }
+            }
+        ) { tracks ->
+            runOnUiThread {
+                localScanRunning = false
+                localScanProgress.visibility = View.GONE
+                localScanUpdating.visibility = View.GONE
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return@runOnUiThread
+                applyLocalTracks(tracks)
+            }
+        }
+    }
+
+    private fun updateLocalScanProgress(
+        progress: LibraryRepository.ScanProgress,
+        foreground: Boolean
+    ) {
+        if (currentPlaybackMode != PlaybackMode.LOCAL) return
+        if (foreground) {
+            when (progress.phase) {
+                LibraryRepository.ScanProgress.Phase.SCANNING -> {
+                    progressLocalScan.isIndeterminate = true
+                    textLocalScanStatus.text = "端末内の曲を検索中… ${progress.processed} 件"
+                }
+                LibraryRepository.ScanProgress.Phase.PROBING -> {
+                    progressLocalScan.isIndeterminate = false
+                    progressLocalScan.max = progress.total
+                    progressLocalScan.progress = progress.processed
+                    textLocalScanStatus.text =
+                        "読み込み中 ${progress.processed}/${progress.total} 件"
                 }
             }
+            textLocalScanCurrent.text = progress.currentName
+        } else if (progress.phase == LibraryRepository.ScanProgress.Phase.PROBING &&
+            progress.total > 0
+        ) {
+            // 控えめ表示でも件数だけは更新し、進んでいることを示す
+            textLocalUpdating.text =
+                "ライブラリを更新中… ${progress.processed}/${progress.total} 件"
+        }
+    }
+
+    // ★ 一覧の反映（キャッシュ表示・スキャン結果で共通）。
+    private fun applyLocalTracks(tracks: List<LibraryRepository.Track>) {
+        localTracks = tracks
+        localPlayer.setQueue(tracks)
+        val adapter = LocalTrackAdapter(tracks)
+        localTrackAdapter = adapter
+        localTrackList.adapter = adapter
+        localLibraryShown = tracks.isNotEmpty()
+        if (tracks.isEmpty()) {
+            textLocalMessage.text = if (!libraryRepository.hasAudioPermission() && appPrefs.safFolderUris.isEmpty()) {
+                "曲が見つかりませんでした。音声ファイルへのアクセスを許可するか、「フォルダ追加」からフォルダを選んでください"
+            } else {
+                "再生できる曲が見つかりませんでした"
+            }
+            textLocalMessage.visibility = View.VISIBLE
+        } else {
+            textLocalMessage.visibility = View.GONE
         }
     }
 
@@ -872,6 +968,12 @@ class MainActivity : AppCompatActivity() {
         localTrackList = findViewById(R.id.localTrackList)
         btnLocalAddFolder = findViewById(R.id.btnLocalAddFolder)
         btnLocalRescan = findViewById(R.id.btnLocalRescan)
+        localScanProgress = findViewById(R.id.localScanProgress)
+        progressLocalScan = findViewById(R.id.progressLocalScan)
+        textLocalScanStatus = findViewById(R.id.textLocalScanStatus)
+        textLocalScanCurrent = findViewById(R.id.textLocalScanCurrent)
+        localScanUpdating = findViewById(R.id.localScanUpdating)
+        textLocalUpdating = findViewById(R.id.textLocalUpdating)
 
         libraryRepository = LibraryRepository(this)
         localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
@@ -1065,7 +1167,12 @@ class MainActivity : AppCompatActivity() {
         }
         btnLocalRescan.setOnClickListener {
             it.hapticTick(appPrefs)
-            reloadLocalLibrary()
+            // ★「再スキャン」は強制フルリフレッシュ（全件再プローブ＋進捗表示）
+            if (!FfmpegDecoder.isAvailable) {
+                ensureLocalLibrary()
+            } else {
+                startLocalRefresh(forceFull = true)
+            }
         }
         btnLocalAddFolder.setOnClickListener {
             it.hapticTick(appPrefs)
