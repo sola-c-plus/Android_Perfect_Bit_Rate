@@ -47,7 +47,11 @@ class FfmpegDecoder(private val context: Context) {
         val title: String,
         val artist: String,
         val album: String,
-        val track: String
+        val track: String,
+        // アルバムアーティスト（タグの album_artist 系）。無い曲は ""
+        // （呼び出し側でアーティストへ代替する）。旧い .so（戻り値が
+        // 11 要素まで）では常に "" になる。
+        val albumArtist: String = ""
     )
 
     @Volatile
@@ -116,7 +120,8 @@ class FfmpegDecoder(private val context: Context) {
             title = values[7],
             artist = values[8],
             album = values[9],
-            track = values[10]
+            track = values[10],
+            albumArtist = values.getOrNull(11) ?: ""
         )
     }
 

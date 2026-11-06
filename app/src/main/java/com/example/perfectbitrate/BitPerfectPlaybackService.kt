@@ -107,6 +107,21 @@ class BitPerfectPlaybackService : Service() {
     private val isSwitchingRate = AtomicBoolean(false)
     private var lastConfiguredMixerDevice: AudioDeviceInfo? = null
 
+    // ★ 現在の供給元が Local（LocalPlayer）かどうか（MainActivity が
+    //   モード切替時に設定する）。ストリーム構成の切替中（isSwitchingRate）
+    //   の pushPcm の扱いを供給元で分けるために使う: YT は実時間供給の
+    //   ため切替中のチャンクは破棄してよいが、Local はデコード側が
+    //   Service キュー残量で律速される前提のため、破棄するとキューが
+    //   空のままデコードだけが走り切ってしまう（awaitSwitchComplete 参照）。
+    @Volatile
+    var isLocalSourceActive = false
+
+    // ストリーム構成切替の完了待ち（Local 供給時）。切替は trackExecutor
+    // 上の AudioTrack 再初期化で、通常は短時間で終わる。上限は安全弁で、
+    // 超えた場合は従来どおり破棄に倒す（デコードを無期限には止めない）。
+    private val SWITCH_WAIT_MAX_MS = 3000L
+    private val SWITCH_WAIT_POLL_MS = 5L
+
     // ★ ポーズで閉じた AudioTrack の再生成時に、停止前のシステム音量を維持するための保留記録。
     //   ウィジェット/通知ポーズは forceCloseDacStream() で AudioTrack を破棄するため、再再生時の
     //   再生成で restoreVolumeForDevice() が走り、接続/切断時の安全策（USB は音量0から開始、
@@ -628,7 +643,19 @@ class BitPerfectPlaybackService : Service() {
         }
 
         if (isSwitchingRate.get()) {
-            return
+            // ★ Local 供給時は破棄せず、構成切替の完了を待ってから
+            //   通常経路で処理する。Local のデコードは Service キュー
+            //   残量へのフロー制御（awaitQueueRoom）で実時間に追従する
+            //   前提だが、切替中は pushPcm が素通りで破棄され、再生
+            //   ループも止まるためキュー残量が 0 のままになり、律速が
+            //   効かずデコードがファイル末尾まで走り切ってしまう。
+            //   あわせて再生し切り待ち（waitForDrainThenAdvance）も
+            //   残量 0 を読み続けて即進行するため、モード切替直後の
+            //   最初の曲だけが「爆速で終わって」次曲へ進んでいた。
+            //   YT はページ側が実時間で供給し続けるため、従来どおり
+            //   破棄で問題ない（待ちを入れると供給が詰まる）。
+            if (!isLocalSourceActive) return
+            if (!awaitSwitchComplete()) return
         }
 
         val actualInputRate = if (sampleRate > 0) sampleRate else baseSampleRate
@@ -676,6 +703,25 @@ class BitPerfectPlaybackService : Service() {
                 bufferResumeCount.incrementAndGet()
             }
         }
+    }
+
+    // ★ ストリーム構成切替（isSwitchingRate）の完了を上限付きで待つ。
+    //   Local のデコードスレッドから pushPcm 経由で呼ばれる。切替は
+    //   trackExecutor 上の AudioTrack 再初期化であり、この待ちの間も
+    //   そちらは進む（このメソッドはロックを取らない）。完了したら
+    //   true（呼び出し側は通常処理へ進む）、上限を超えたら false
+    //   （呼び出し側はそのチャンクを破棄して従来動作に倒す）。
+    private fun awaitSwitchComplete(): Boolean {
+        val deadline = System.currentTimeMillis() + SWITCH_WAIT_MAX_MS
+        while (isSwitchingRate.get()) {
+            if (System.currentTimeMillis() >= deadline) return false
+            try {
+                Thread.sleep(SWITCH_WAIT_POLL_MS)
+            } catch (e: InterruptedException) {
+                return false
+            }
+        }
+        return true
     }
 
     fun resetBuffer(reason: String = "unknown") {
@@ -1404,6 +1450,9 @@ class BitPerfectPlaybackService : Service() {
         isRunning = true
         playbackThread = Thread {
             var heartbeatCounter = 0
+            // AudioTrack 書込みエラーの連続回数。一時的なエラーと本物の
+            // 切断を切り分けるために使う（成功でリセット）。
+            var writeErrorStreak = 0
             while (isRunning) {
                 try {
                     heartbeatCounter++
@@ -1460,6 +1509,7 @@ class BitPerfectPlaybackService : Service() {
                         }
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
                         if (written > 0) {
+                            writeErrorStreak = 0
                             val bytesPerSample = when (actualBitMode) {
                                 "32bit" -> 4
                                 "24bit" -> 3
@@ -1473,7 +1523,31 @@ class BitPerfectPlaybackService : Service() {
                             //   で再生ヘッド位置のチャンクのものを取得する。
                             capturePeakSnapshot(totalWrittenFrames, chunkPeak[0], chunkPeak[1])
                         } else if (written < 0) {
-                            handleBecomingNoisyOrDisconnected()
+                            // ★ 書込みエラーを即「デバイス切断」と断定しない。
+                            //   ストリーム構成の切替（updateBaseSampleRate 等に
+                            //   よる AudioTrack 再生成）では、再生ループが掴んだ
+                            //   旧トラック参照への書込みが切替と競合してエラーに
+                            //   なることがある。従来はその1回で切断フローへ倒れ、
+                            //   「pause」コマンド経由で供給係（Local 再生中なら
+                            //   LocalPlayer）まで止まってしまい、再生中の突然の
+                            //   停止として現れていた。切替中・トラック入れ替わり
+                            //   中のエラーはこのチャンクを捨てて継続し、現在の
+                            //   トラックへの書込みエラーが連続した場合だけ
+                            //   従来どおり切断フローへ倒す（本物の切断では
+                            //   エラーが続くため検出は1チャンク分しか遅れない）。
+                            var currentTrack: AudioTrack? = null
+                            audioLock.lock()
+                            try {
+                                currentTrack = audioTrack
+                            } finally {
+                                audioLock.unlock()
+                            }
+                            if (isSwitchingRate.get() || currentTrack !== track) {
+                                writeErrorStreak = 0
+                            } else if (++writeErrorStreak >= 2) {
+                                writeErrorStreak = 0
+                                handleBecomingNoisyOrDisconnected()
+                            }
                         }
                     }
                 } catch (e: InterruptedException) {

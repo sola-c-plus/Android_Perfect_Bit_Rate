@@ -10,7 +10,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="WIDGET THEME SETTING"
-        android:textColor="#E5A93C"
+        android:textColor="@color/accent"
         android:textSize="13sp"
         android:textStyle="bold"
         android:fontFamily="sans-serif-black"
@@ -21,7 +21,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="ウィジェットの外観カラーを選択してください。"
-        android:textColor="#888888"
+        android:textColor="@color/text_secondary"
         android:textSize="11sp"
         android:layout_marginBottom="16dp" />
 
@@ -36,7 +36,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Dark (ダーク / 黒基調)"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="12sp"
             android:layout_marginBottom="8dp" />
 
@@ -45,7 +45,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Light (ライト / 白基調)"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="12sp"
             android:layout_marginBottom="8dp" />
 
@@ -54,7 +54,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="System Auto (端末設定に連動)"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="12sp" />
     </RadioGroup>
 
@@ -63,8 +63,8 @@
         android:layout_width="match_parent"
         android:layout_height="40dp"
         android:text="設定を保存して適用"
-        android:textColor="#000000"
+        android:textColor="@color/black"
         android:textSize="12sp"
         android:textStyle="bold"
-        android:backgroundTint="#E5A93C" />
+        android:backgroundTint="@color/accent" />
 </LinearLayout>

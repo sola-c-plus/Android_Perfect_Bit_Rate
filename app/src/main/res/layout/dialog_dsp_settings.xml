@@ -30,7 +30,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="DSP AUDIO SETTINGS"
-            android:textColor="#E5A93C"
+            android:textColor="@color/accent"
             android:textSize="13.5sp"
             android:textStyle="bold"
             android:fontFamily="@font/font_dap_condensed"
@@ -67,7 +67,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:background="#161616"
+                android:background="@color/main_background"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
                 android:paddingTop="8dp"
@@ -85,7 +85,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="DIRECT SOURCE"
-                        android:textColor="#E5A93C"
+                        android:textColor="@color/accent"
                         android:textSize="12sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_condensed" />
@@ -95,7 +95,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="全DSPを無効化しダイレクト送信します"
-                        android:textColor="#888888"
+                        android:textColor="@color/text_secondary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -116,7 +116,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:background="#080808"
+                android:background="@color/main_background"
                 android:paddingTop="8dp"
                 android:paddingBottom="10dp"
                 android:paddingStart="6dp"
@@ -143,7 +143,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="10-BAND EQUALIZER"
-                            android:textColor="#FFFFFF"
+                            android:textColor="@color/white"
                             android:textSize="11.5sp"
                             android:textStyle="bold"
                             android:fontFamily="@font/font_dap_heading" />
@@ -153,7 +153,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="64bit IIR + Realtime Spectrum"
-                            android:textColor="#777777"
+                            android:textColor="@color/text_tertiary"
                             android:textSize="9sp" />
                     </LinearLayout>
 
@@ -175,7 +175,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="EQ"
-                                android:textColor="#CCCCCC"
+                                android:textColor="@color/label_gray"
                                 android:textSize="9.5sp"
                                 android:textStyle="bold"
                                 android:fontFamily="@font/font_dap_condensed"
@@ -203,7 +203,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="SPEC"
-                                android:textColor="#E5A93C"
+                                android:textColor="@color/accent"
                                 android:textSize="9.5sp"
                                 android:textStyle="bold"
                                 android:fontFamily="@font/font_dap_condensed"
@@ -226,7 +226,7 @@
                             android:layout_height="26dp"
                             android:layout_marginTop="4dp"
                             android:background="@drawable/bg_spinner_dap"
-                            android:popupBackground="#1A1A1A" />
+                            android:popupBackground="@color/surface_input" />
                     </LinearLayout>
                 </LinearLayout>
 
@@ -256,7 +256,7 @@
                             android:layout_width="58dp"
                             android:layout_height="26dp"
                             android:text="調整"
-                            android:textColor="#FFFFFF"
+                            android:textColor="@color/white"
                             android:textSize="9.5sp"
                             android:textStyle="bold"
                             android:background="@drawable/bg_btn_dap_outline"
@@ -268,7 +268,7 @@
                             android:layout_width="58dp"
                             android:layout_height="26dp"
                             android:text="保存"
-                            android:textColor="#FFFFFF"
+                            android:textColor="@color/white"
                             android:textSize="9.5sp"
                             android:textStyle="bold"
                             android:background="@drawable/bg_btn_dap_outline"
@@ -280,7 +280,7 @@
                             android:layout_width="58dp"
                             android:layout_height="26dp"
                             android:text="削除"
-                            android:textColor="#FF6B6B"
+                            android:textColor="@color/danger"
                             android:textSize="9.5sp"
                             android:textStyle="bold"
                             android:background="@drawable/bg_btn_dap_outline"
@@ -292,7 +292,7 @@
                             android:layout_width="58dp"
                             android:layout_height="26dp"
                             android:text="FLAT"
-                            android:textColor="#888888"
+                            android:textColor="@color/text_secondary"
                             android:textSize="9sp"
                             android:textStyle="bold"
                             android:fontFamily="@font/font_dap_condensed"
@@ -313,7 +313,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="4K Hz"
-                                android:textColor="#CCCCCC"
+                                android:textColor="@color/label_gray"
                                 android:textSize="10.5sp"
                                 android:textStyle="bold"
                                 android:fontFamily="@font/font_dap_condensed" />
@@ -323,7 +323,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="+0.0 dB"
-                                android:textColor="#FFFFFF"
+                                android:textColor="@color/white"
                                 android:textSize="11.5sp"
                                 android:textStyle="bold"
                                 android:fontFamily="@font/font_dap_condensed"
@@ -378,7 +378,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="BIT DEPTH FORMAT"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -388,7 +388,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="DACへ伝送するPCMビット深度"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -397,14 +397,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <View
                 android:id="@+id/dividerDsp1"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- DITHERING -->
@@ -427,7 +427,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="DITHERING ALGORITHM"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -437,7 +437,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="量子化ノイズ分散・SBMシェービング"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -446,14 +446,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <View
                 android:id="@+id/dividerDsp2"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- TRUE PEAK GUARD -->
@@ -481,7 +481,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="TRUE PEAK GUARD (サンプル間ピーク保護)"
-                            android:textColor="#FFFFFF"
+                            android:textColor="@color/white"
                             android:textSize="11.5sp"
                             android:textStyle="bold"
                             android:fontFamily="@font/font_dap_heading" />
@@ -491,7 +491,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="補間で生じるピーク超過を先読みで抑制 (Direct時は無効)"
-                            android:textColor="#777777"
+                            android:textColor="@color/text_tertiary"
                             android:textSize="9.5sp" />
                     </LinearLayout>
 
@@ -519,7 +519,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="天井 (CEILING)"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
 
                     <Spinner
@@ -527,7 +527,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="30dp"
                         android:background="@drawable/bg_spinner_dap"
-                        android:popupBackground="#1A1A1A" />
+                        android:popupBackground="@color/surface_input" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -535,7 +535,7 @@
                 android:id="@+id/dividerDspTruePeak"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- DC PHASE -->
@@ -558,7 +558,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="DC PHASE LINEARIZER"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -568,7 +568,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="アナログアンプ低域位相 (A/B Curve 2/4/8Hz)"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -577,14 +577,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <View
                 android:id="@+id/dividerDsp3"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- FREQ ENGINE -->
@@ -607,7 +607,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="FREQ ENGINE (倍音復元)"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -617,7 +617,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="直交多項式による20k〜40kHz+超高域倍音補完"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -626,7 +626,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <!-- PERFORMANCE PROFILE -->
@@ -649,7 +649,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="PERFORMANCE PROFILE (動作モード)"
-                        android:textColor="#E5A93C"
+                        android:textColor="@color/accent"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -659,7 +659,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Eco (省電力) / 普通 (標準) / 超高音質 (フルスペック倍音)"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -668,14 +668,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <View
                 android:id="@+id/dividerDspPerf"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- RICH HARMONICS -->
@@ -698,7 +698,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="RICH HARMONICS (ふくよか倍音)"
-                        android:textColor="#E5A93C"
+                        android:textColor="@color/accent"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -708,7 +708,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="16kHz〜へ温かみのある偶数次倍音をブレンドし音に厚みを付加"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -727,7 +727,7 @@
                 android:id="@+id/dividerDspRich"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- ULTRA HQ UPSAMPLING -->
@@ -750,7 +750,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="ULTRA HQ UPSAMPLING"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -760,7 +760,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="ARM NEON 多段ポリフェーズFIR (96k/192k/384k)"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -769,7 +769,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <!-- CASCADE FIR -->
@@ -792,7 +792,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="MULTISTAGE CASCADE FIR"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -802,7 +802,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="3段2x接続 (255→63→39 taps) 超低ノイズ補間"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -821,7 +821,7 @@
                 android:id="@+id/dividerDsp5"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- DSD CONVERSION RATE (Local 再生専用: デコード側の設定) -->
@@ -844,7 +844,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="DSD CONVERSION RATE"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -854,7 +854,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="Local再生時 DSD→PCM 変換レート"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -863,14 +863,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="30dp"
                     android:background="@drawable/bg_spinner_dap"
-                    android:popupBackground="#1A1A1A" />
+                    android:popupBackground="@color/surface_input" />
             </LinearLayout>
 
             <View
                 android:id="@+id/dividerDspDsd"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:background="#1C1C1C"
+                android:background="@color/divider"
                 android:layout_marginBottom="12dp" />
 
             <!-- 0dB VOLUME LOCK -->
@@ -892,7 +892,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="0dB VOLUME LOCK"
-                        android:textColor="#FFFFFF"
+                        android:textColor="@color/white"
                         android:textSize="11.5sp"
                         android:textStyle="bold"
                         android:fontFamily="@font/font_dap_heading" />
@@ -902,7 +902,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="最大音量固定 / 音量UP:次へ / DOWN:前へ"
-                        android:textColor="#777777"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="9.5sp" />
                 </LinearLayout>
 
@@ -925,7 +925,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:background="#161616"
+        android:background="@color/main_background"
         android:elevation="12dp">
 
         <View
@@ -973,7 +973,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="YouTube Music"
-                    android:textColor="#FFFFFF"
+                    android:textColor="@color/white"
                     android:textSize="14sp"
                     android:textStyle="bold"
                     android:ellipsize="end"
@@ -1003,7 +1003,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="0:00"
-                        android:textColor="#888888"
+                        android:textColor="@color/text_secondary"
                         android:textSize="10.5sp"
                         android:fontFamily="@font/font_dap_mono" />
 
@@ -1014,8 +1014,8 @@
                         android:layout_weight="1"
                         android:max="1000"
                         android:progress="0"
-                        android:progressTint="#E5A93C"
-                        android:thumbTint="#FFFFFF"
+                        android:progressTint="@color/accent"
+                        android:thumbTint="@color/white"
                         android:paddingStart="6dp"
                         android:paddingEnd="6dp" />
 
@@ -1024,7 +1024,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="0:00"
-                        android:textColor="#888888"
+                        android:textColor="@color/text_secondary"
                         android:textSize="10.5sp"
                         android:fontFamily="@font/font_dap_mono" />
                 </LinearLayout>

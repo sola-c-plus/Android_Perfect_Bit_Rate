@@ -14,7 +14,7 @@
         android:layout_width="36dp"
         android:layout_height="4dp"
         android:layout_gravity="center_horizontal"
-        android:background="#E5A93C"
+        android:background="@color/accent"
         android:layout_marginBottom="10dp" />
 
     <LinearLayout
@@ -29,7 +29,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="DEVELOPER PRESET TUNER"
-            android:textColor="#E5A93C"
+            android:textColor="@color/accent"
             android:textSize="13sp"
             android:textStyle="bold"
             android:fontFamily="sans-serif-black"
@@ -40,7 +40,7 @@
             android:layout_width="28dp"
             android:layout_height="28dp"
             android:text="✕"
-            android:textColor="#AAAAAA"
+            android:textColor="@color/text_muted"
             android:textSize="12sp"
             android:background="@drawable/bg_btn_icon"
             android:padding="0dp" />
@@ -51,7 +51,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#161616"
+        android:background="@color/surface_raised"
         android:padding="10dp"
         android:layout_marginBottom="12dp">
 
@@ -65,7 +65,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="TARGET PRESET (調律対象)"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/white"
                 android:textSize="11.5sp"
                 android:textStyle="bold" />
 
@@ -73,7 +73,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="内部設定を紐付けるDSEEプリセット"
-                android:textColor="#888888"
+                android:textColor="@color/text_secondary"
                 android:textSize="9.5sp" />
         </LinearLayout>
 
@@ -82,7 +82,7 @@
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
+            android:popupBackground="@color/surface_input" />
     </LinearLayout>
 
     <LinearLayout
@@ -97,7 +97,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="FIR Filter Character"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="11sp" />
 
         <Spinner
@@ -105,7 +105,7 @@
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
+            android:popupBackground="@color/surface_input" />
     </LinearLayout>
 
     <LinearLayout
@@ -120,7 +120,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Transient Recovery Mode"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="11sp" />
 
         <Spinner
@@ -128,7 +128,7 @@
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
+            android:popupBackground="@color/surface_input" />
     </LinearLayout>
 
     <LinearLayout
@@ -143,7 +143,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="LPC Spectral Algorithm"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="11sp" />
 
         <Spinner
@@ -151,7 +151,7 @@
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
+            android:popupBackground="@color/surface_input" />
     </LinearLayout>
 
     <LinearLayout
@@ -165,7 +165,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Gain / Freq"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:textSize="11sp"
             android:layout_marginEnd="6dp" />
 
@@ -175,7 +175,7 @@
             android:layout_weight="1"
             android:layout_height="28dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A"
+            android:popupBackground="@color/surface_input"
             android:layout_marginEnd="6dp" />
 
         <Spinner
@@ -184,7 +184,7 @@
             android:layout_weight="1"
             android:layout_height="28dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
+            android:popupBackground="@color/surface_input" />
     </LinearLayout>
 
     <View
@@ -205,7 +205,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="QMF サブバンド Noise-to-Tone 分離"
-            android:textColor="#CCCCCC"
+            android:textColor="@color/label_gray"
             android:textSize="10.5sp" />
 
         <androidx.appcompat.widget.SwitchCompat
@@ -230,7 +230,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="QMF クロスオーバー"
-            android:textColor="#CCCCCC"
+            android:textColor="@color/label_gray"
             android:textSize="10.5sp" />
 
         <Spinner
@@ -238,7 +238,7 @@
             android:layout_width="wrap_content"
             android:layout_height="28dp"
             android:background="@drawable/bg_spinner_dap"
-            android:popupBackground="#1A1A1A" />
+            android:popupBackground="@color/surface_input" />
     </LinearLayout>
 
     <LinearLayout
@@ -253,7 +253,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="トランジェント群遅延補正 (Group Delay)"
-            android:textColor="#CCCCCC"
+            android:textColor="@color/label_gray"
             android:textSize="10.5sp" />
 
         <androidx.appcompat.widget.SwitchCompat
@@ -278,7 +278,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="格子型適応過渡予測 (Lattice PARCOR)"
-            android:textColor="#CCCCCC"
+            android:textColor="@color/label_gray"
             android:textSize="10.5sp" />
 
         <androidx.appcompat.widget.SwitchCompat
@@ -303,7 +303,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="LR 独立シード ディザリング (空間拡散)"
-            android:textColor="#E5A93C"
+            android:textColor="@color/accent"
             android:textSize="10.5sp"
             android:textStyle="bold" />
 
@@ -336,7 +336,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="M/S 空間・残響超解像 (Spatial Ambience)"
-                android:textColor="#E5A93C"
+                android:textColor="@color/accent"
                 android:textSize="10.5sp"
                 android:textStyle="bold" />
 
@@ -344,7 +344,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Sideステレオ残響超解像 ＆ 超高域空間拡散"
-                android:textColor="#888888"
+                android:textColor="@color/text_secondary"
                 android:textSize="9sp" />
         </LinearLayout>
 
@@ -377,7 +377,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="動的カットオフ検知 ＆ SBR (Spectral Replication)"
-                android:textColor="#E5A93C"
+                android:textColor="@color/accent"
                 android:textSize="10.5sp"
                 android:textStyle="bold" />
 
@@ -385,7 +385,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="AAC/Opus遮断帯域の倍音複製 (※ふくよかSW ON時のみ動作)"
-                android:textColor="#888888"
+                android:textColor="@color/text_secondary"
                 android:textSize="9sp" />
         </LinearLayout>
 
@@ -405,10 +405,10 @@
         android:layout_width="match_parent"
         android:layout_height="36dp"
         android:text="📋 全プリセット設定コードをコピー (製品初期値用)"
-        android:textColor="#000000"
+        android:textColor="@color/black"
         android:textSize="11sp"
         android:textStyle="bold"
-        android:backgroundTint="#E5A93C"
+        android:backgroundTint="@color/accent"
         android:layout_marginBottom="8dp" />
 
     <Button
@@ -416,7 +416,7 @@
         android:layout_width="match_parent"
         android:layout_height="32dp"
         android:text="初期値にリセット"
-        android:textColor="#888888"
+        android:textColor="@color/text_secondary"
         android:textSize="10sp"
         android:background="@drawable/bg_btn_dap_outline" />
 
