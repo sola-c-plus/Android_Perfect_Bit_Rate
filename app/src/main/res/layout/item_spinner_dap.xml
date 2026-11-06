@@ -2,7 +2,7 @@
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:textColor="#FFFFFF"
+    android:textColor="@color/white"
     android:textSize="9.5sp"
     android:textStyle="bold"
     android:fontFamily="@font/font_dap_heading"
@@ -11,4 +11,4 @@
     android:paddingTop="4dp"
     android:paddingBottom="4dp"
     android:gravity="center_vertical"
-    android:background="#1A1A1A" />
+    android:background="@color/surface_input" />

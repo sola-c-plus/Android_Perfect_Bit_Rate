@@ -31,7 +31,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Perfect Bit Rate"
-            android:textColor="#1C1C1E"
+            android:textColor="@color/text_primary_light"
             android:textSize="13sp"
             android:textStyle="bold"
             android:ellipsize="end"
@@ -43,7 +43,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="YouTube Music"
-            android:textColor="#636366"
+            android:textColor="@color/text_secondary_light"
             android:textSize="11sp"
             android:ellipsize="end"
             android:maxLines="1" />
@@ -60,7 +60,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="0:00"
-                android:textColor="#8E8E93"
+                android:textColor="@color/label_gray_light"
                 android:textSize="9.5sp"
                 android:fontFamily="@font/font_dap_mono" />
 
@@ -81,7 +81,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="0:00"
-                android:textColor="#8E8E93"
+                android:textColor="@color/label_gray_light"
                 android:textSize="9.5sp"
                 android:fontFamily="@font/font_dap_mono" />
         </LinearLayout>
@@ -98,7 +98,7 @@
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:src="@drawable/ic_skip_previous"
-            android:tint="#1C1C1E"
+            android:tint="@color/text_primary_light"
             android:scaleType="centerInside"
             android:background="@drawable/bg_btn_walkman_circle_small_light"
             android:padding="5dp"
@@ -109,7 +109,7 @@
             android:layout_width="38dp"
             android:layout_height="38dp"
             android:src="@drawable/ic_play"
-            android:tint="#1C1C1E"
+            android:tint="@color/text_primary_light"
             android:scaleType="centerInside"
             android:background="@drawable/bg_btn_walkman_circle_large_light"
             android:padding="6dp"
@@ -120,7 +120,7 @@
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:src="@drawable/ic_skip_next"
-            android:tint="#1C1C1E"
+            android:tint="@color/text_primary_light"
             android:scaleType="centerInside"
             android:background="@drawable/bg_btn_walkman_circle_small_light"
             android:padding="5dp" />

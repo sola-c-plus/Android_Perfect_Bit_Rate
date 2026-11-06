@@ -2,11 +2,11 @@ package com.example.perfectbitrate
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import kotlin.math.max
 
@@ -49,12 +49,12 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
     }
 
     private val segPeakPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E5A93C")
+        color = ContextCompat.getColor(context, R.color.accent)
         style = Paint.Style.FILL
     }
 
     private val segClipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FF4444")
+        color = ContextCompat.getColor(context, R.color.danger_meter)
         style = Paint.Style.FILL
     }
 
@@ -118,21 +118,21 @@ class WalkmanLevelMeterView @JvmOverloads constructor(
 
     private fun updatePaintsForTheme() {
         if (isLightMode) {
-            segActivePaint.color = Color.parseColor("#1C1C1E")
-            segInactivePaint.color = Color.parseColor("#E5E5EA")
-            segPeakPaint.color = Color.parseColor("#D49B28")
-            labelPaint.color = Color.parseColor("#1C1C1E")
-            textPaint.color = Color.parseColor("#636366")
-            infinityPaint.color = Color.parseColor("#636366")
-            scaleLinePaint.color = Color.parseColor("#C7C7CC")
+            segActivePaint.color = ContextCompat.getColor(context, R.color.text_primary_light)
+            segInactivePaint.color = ContextCompat.getColor(context, R.color.component_inactive_light)
+            segPeakPaint.color = ContextCompat.getColor(context, R.color.accent_light)
+            labelPaint.color = ContextCompat.getColor(context, R.color.text_primary_light)
+            textPaint.color = ContextCompat.getColor(context, R.color.text_secondary_light)
+            infinityPaint.color = ContextCompat.getColor(context, R.color.text_secondary_light)
+            scaleLinePaint.color = ContextCompat.getColor(context, R.color.component_line_light)
         } else {
-            segActivePaint.color = Color.parseColor("#FFFFFF")
-            segInactivePaint.color = Color.parseColor("#161616")
-            segPeakPaint.color = Color.parseColor("#E5A93C")
-            labelPaint.color = Color.parseColor("#CCCCCC")
-            textPaint.color = Color.parseColor("#888888")
-            infinityPaint.color = Color.parseColor("#888888")
-            scaleLinePaint.color = Color.parseColor("#2E2E2E")
+            segActivePaint.color = ContextCompat.getColor(context, R.color.white)
+            segInactivePaint.color = ContextCompat.getColor(context, R.color.surface_raised)
+            segPeakPaint.color = ContextCompat.getColor(context, R.color.accent)
+            labelPaint.color = ContextCompat.getColor(context, R.color.label_gray)
+            textPaint.color = ContextCompat.getColor(context, R.color.text_secondary)
+            infinityPaint.color = ContextCompat.getColor(context, R.color.text_secondary)
+            scaleLinePaint.color = ContextCompat.getColor(context, R.color.grid_border)
         }
     }
 

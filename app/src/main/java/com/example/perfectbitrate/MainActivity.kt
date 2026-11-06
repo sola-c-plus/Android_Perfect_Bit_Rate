@@ -2107,8 +2107,8 @@ class MainActivity : AppCompatActivity() {
         if (!::btnNpStar.isInitialized || !::localPlayer.isInitialized) return
         val track = localPlayer.currentTrack ?: return
         val isDark = isDarkThemeActive()
-        val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
-        val colorOff = Color.parseColor(if (isDark) "#777777" else "#9A9AA0")
+        val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+        val colorOff = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light)
         val latest = playlistStore.latestPlaylist()
         val isMember = latest != null &&
             playlistStore.contains(latest.id, track.uri.toString())
@@ -2121,8 +2121,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateLocalTabStyles() {
         if (!::tabLocalAll.isInitialized) return
         val isDark = isDarkThemeActive()
-        val colorSelected = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
-        val colorNormal = Color.parseColor(if (isDark) "#888888" else "#636366")
+        val colorSelected = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+        val colorNormal = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
         val tabs = listOf(
             tabLocalQueue to LocalTab.QUEUE,
             tabLocalNowPlaying to LocalTab.NOW_PLAYING,
@@ -3172,46 +3172,46 @@ class MainActivity : AppCompatActivity() {
         if (isDark) {
             mainRootLayout.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
             topInfoPanel?.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
-            panelDividerLine?.setBackgroundColor(Color.parseColor("#1C1C1C"))
-            textDacName.setTextColor(Color.parseColor("#F0F0F0"))
+            panelDividerLine?.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.divider))
+            textDacName.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
             textRateBits.setTextColor(Color.WHITE)
-            textCodec.setTextColor(Color.parseColor("#A0A0A0"))
-            textTransfer.setTextColor(Color.parseColor("#666666"))
-            textPeak.setTextColor(Color.parseColor("#B0B0B0"))
-            textBufferLatency.setTextColor(Color.parseColor("#888888"))
-            textCpuRamMonitor.setTextColor(Color.parseColor("#888888"))
+            textCodec.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_status_codec))
+            textTransfer.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_status_transfer))
+            textPeak.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_status_peak))
+            textBufferLatency.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textCpuRamMonitor.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon)
-            textModeSwitch.setTextColor(Color.parseColor("#E5A93C"))
+            textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             localPlaceholder.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
-            textLocalTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            textLocalMessage.setTextColor(Color.parseColor("#888888"))
+            textLocalTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalAddFolder.setTextColor(Color.parseColor("#E5A93C"))
+            btnLocalAddFolder.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalRescan.setTextColor(Color.parseColor("#E5A93C"))
-            localTrackList.divider = ColorDrawable(Color.parseColor("#1C1C1C"))
+            btnLocalRescan.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider))
             editLocalSearch.setBackgroundResource(R.drawable.bg_local_search)
-            editLocalSearch.setTextColor(Color.parseColor("#F0F0F0"))
-            editLocalSearch.setHintTextColor(Color.parseColor("#777777"))
+            editLocalSearch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            editLocalSearch.setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_tertiary))
             btnLocalSort.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalSort.setTextColor(Color.parseColor("#E5A93C"))
+            btnLocalSort.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon)
-            btnLocalBack.setTextColor(Color.parseColor("#E5A93C"))
-            textLocalGroupTitle.setTextColor(Color.parseColor("#F0F0F0"))
+            btnLocalBack.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            textLocalGroupTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
             localNowPlaying.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
-            textNpEmpty.setTextColor(Color.parseColor("#888888"))
-            textNpQueuePosition.setTextColor(Color.parseColor("#888888"))
-            textNpTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            textNpArtist.setTextColor(Color.parseColor("#BBBBBB"))
-            textNpAlbum.setTextColor(Color.parseColor("#888888"))
-            textNpFormat.setTextColor(Color.parseColor("#888888"))
-            textNpCurrentTime.setTextColor(Color.parseColor("#888888"))
-            textNpTotalTime.setTextColor(Color.parseColor("#888888"))
+            textNpEmpty.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpQueuePosition.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            textNpArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_np_artist))
+            textNpAlbum.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpFormat.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpCurrentTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textNpTotalTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             seekNpProgress.progressTintList =
-                ColorStateList.valueOf(Color.parseColor("#E5A93C"))
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.accent))
             seekNpProgress.thumbTintList = ColorStateList.valueOf(Color.WHITE)
             btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
             btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
@@ -3225,68 +3225,68 @@ class MainActivity : AppCompatActivity() {
             updateLocalTabStyles()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
-            btnReload.setColorFilter(Color.parseColor("#CCCCCC"))
-            btnDspSettings.setColorFilter(Color.parseColor("#E5A93C"))
-            btnUiSettings.setColorFilter(Color.parseColor("#E5A93C"))
+            btnReload.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.label_gray))
+            btnDspSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            btnUiSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent))
         } else {
-            mainRootLayout.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            topInfoPanel?.setBackgroundColor(Color.parseColor("#F5F5F7"))
-            panelDividerLine?.setBackgroundColor(Color.parseColor("#E0E0E5"))
-            textDacName.setTextColor(Color.parseColor("#1C1C1E"))
-            textRateBits.setTextColor(Color.parseColor("#1C1C1E"))
-            textCodec.setTextColor(Color.parseColor("#636366"))
-            textTransfer.setTextColor(Color.parseColor("#636366"))
-            textPeak.setTextColor(Color.parseColor("#48484A"))
-            textBufferLatency.setTextColor(Color.parseColor("#636366"))
-            textCpuRamMonitor.setTextColor(Color.parseColor("#636366"))
+            mainRootLayout.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            topInfoPanel?.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.surface_panel_light))
+            panelDividerLine?.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
+            textDacName.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textRateBits.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textCodec.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textTransfer.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textPeak.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_strong_light))
+            textBufferLatency.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textCpuRamMonitor.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            textModeSwitch.setTextColor(Color.parseColor("#D49B28"))
-            localPlaceholder.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            textLocalTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            textLocalMessage.setTextColor(Color.parseColor("#636366"))
+            textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            localPlaceholder.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            textLocalTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalAddFolder.setTextColor(Color.parseColor("#D49B28"))
+            btnLocalAddFolder.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             btnLocalRescan.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalRescan.setTextColor(Color.parseColor("#D49B28"))
-            localTrackList.divider = ColorDrawable(Color.parseColor("#E0E0E5"))
+            btnLocalRescan.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
             editLocalSearch.setBackgroundResource(R.drawable.bg_local_search_light)
-            editLocalSearch.setTextColor(Color.parseColor("#1C1C1E"))
-            editLocalSearch.setHintTextColor(Color.parseColor("#9A9AA0"))
+            editLocalSearch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            editLocalSearch.setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_tertiary_light))
             btnLocalSort.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalSort.setTextColor(Color.parseColor("#D49B28"))
+            btnLocalSort.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            btnLocalBack.setTextColor(Color.parseColor("#D49B28"))
-            textLocalGroupTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            localNowPlaying.setBackgroundColor(Color.parseColor("#FFFFFF"))
-            textNpEmpty.setTextColor(Color.parseColor("#636366"))
-            textNpQueuePosition.setTextColor(Color.parseColor("#636366"))
-            textNpTitle.setTextColor(Color.parseColor("#1C1C1E"))
-            textNpArtist.setTextColor(Color.parseColor("#48484A"))
-            textNpAlbum.setTextColor(Color.parseColor("#636366"))
-            textNpFormat.setTextColor(Color.parseColor("#636366"))
-            textNpCurrentTime.setTextColor(Color.parseColor("#636366"))
-            textNpTotalTime.setTextColor(Color.parseColor("#636366"))
+            btnLocalBack.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            textLocalGroupTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            localNowPlaying.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            textNpEmpty.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpQueuePosition.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textNpArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_strong_light))
+            textNpAlbum.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpFormat.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpCurrentTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textNpTotalTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             seekNpProgress.progressTintList =
-                ColorStateList.valueOf(Color.parseColor("#D49B28"))
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
             seekNpProgress.thumbTintList =
-                ColorStateList.valueOf(Color.parseColor("#1C1C1E"))
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
             // ★ シャッフル / リピートは円で囲わない（ダーク側と同じ）
             btnNpPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
-            btnNpPrev.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnNpNext.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnNpPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnNpPrev.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnNpNext.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnNpPlayPause.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             updateNpToggleStates()
             updateLocalTabStyles()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
-            btnReload.setColorFilter(Color.parseColor("#1C1C1E"))
-            btnDspSettings.setColorFilter(Color.parseColor("#D49B28"))
-            btnUiSettings.setColorFilter(Color.parseColor("#D49B28"))
+            btnReload.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnDspSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            btnUiSettings.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
         }
     }
 
@@ -3383,8 +3383,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateNpToggleStates() {
         if (!::btnNpShuffle.isInitialized || !::localPlayer.isInitialized) return
         val isDark = isDarkThemeActive()
-        val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
-        val colorOff = Color.parseColor(if (isDark) "#777777" else "#9A9AA0")
+        val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
+        val colorOff = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light)
         btnNpShuffle.setColorFilter(
             if (localPlayer.shuffleEnabled) colorAccent else colorOff
         )
@@ -3496,9 +3496,9 @@ class MainActivity : AppCompatActivity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val track = tracks[position]
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
-            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
             // ★ 再生中ハイライトは位置ではなく曲そのもの（URI）で判定する。
             //   表示リストとキューの並びが一致しない瞬間（再スキャン直後等）
             //   でも別の曲を光らせないため。
@@ -3552,7 +3552,7 @@ class MainActivity : AppCompatActivity() {
         //   ImageView の tag に URI を持たせ、一致したときだけ差し替える。
         private fun bindThumbnail(thumbView: ImageView, track: LibraryRepository.Track, isDark: Boolean) {
             val cacheKey = track.uri.toString()
-            thumbView.setBackgroundColor(Color.parseColor(if (isDark) "#1C1C1C" else "#E9E9EC"))
+            thumbView.setBackgroundColor(ContextCompat.getColor(this@MainActivity, if (isDark) R.color.surface_thumbnail else R.color.surface_thumbnail_light))
             thumbView.tag = cacheKey
             val cached = localThumbCache.get(cacheKey)
             if (cached != null) {
@@ -3629,8 +3629,8 @@ class MainActivity : AppCompatActivity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val group = groups[position]
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
 
             val root = (convertView as? LinearLayout) ?: buildRow()
             val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
@@ -3711,9 +3711,9 @@ class MainActivity : AppCompatActivity() {
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
-            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
 
             val root = (convertView as? LinearLayout) ?: buildRow()
             val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
@@ -3796,9 +3796,9 @@ class MainActivity : AppCompatActivity() {
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val isDark = isDarkThemeActive()
-            val colorTitle = Color.parseColor(if (isDark) "#F0F0F0" else "#1C1C1E")
-            val colorValue = Color.parseColor(if (isDark) "#888888" else "#636366")
-            val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+            val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
+            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorAccent = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.accent else R.color.accent_light)
 
             val root = (convertView as? LinearLayout) ?: buildRow()
             val nameView = root.getChildAt(0).let { (it as LinearLayout).getChildAt(0) as TextView }
@@ -4107,7 +4107,7 @@ class MainActivity : AppCompatActivity() {
             val tpCurrent = svc?.truePeakCurrentReductionDb ?: 0f
             val tpStr = if (svc != null && !svc.isDirectSource && appPrefs.isTruePeakGuardEnabled) String.format(java.util.Locale.US, "-%.1f", tpCurrent) else "-"
             textBufferLatency.text = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMs}ms) TP:${tpStr}dB"
-            textBufferLatency.setTextColor(if (isDarkThemeActive()) Color.parseColor("#888888") else Color.parseColor("#636366"))
+            textBufferLatency.setTextColor(if (isDarkThemeActive()) ContextCompat.getColor(this@MainActivity, R.color.text_secondary) else ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
         } else {
             textCpuRamMonitor.visibility = View.GONE
             textBufferLatency.visibility = View.GONE
@@ -4120,7 +4120,7 @@ class MainActivity : AppCompatActivity() {
         val maxBits = if (displayBitMode == "32bit") 32 else (if (displayBitMode == "24bit") 24 else 16)
         val activeBits = if (!isPlayingState || (peakDbL <= -50f && peakDbR <= -50f)) 0 else Integer.bitCount(bitActivityMask).coerceIn(0, maxBits)
         textBitDepth.text = "BIT: $activeBits/$maxBits ACTIVE"
-        textBitDepth.setTextColor(Color.parseColor("#E5A93C"))
+        textBitDepth.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
 
         val now = System.currentTimeMillis()
         if (now - lastBitResetTime > 250L) {

@@ -6,7 +6,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#000000">
+    android:background="@color/main_background">
 
     <LinearLayout
         android:id="@+id/licenseTitleBar"
@@ -14,7 +14,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#0D0D0D"
+        android:background="@color/surface_panel"
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
         android:paddingTop="10dp"
@@ -26,7 +26,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="‹"
-            android:textColor="#E5A93C"
+            android:textColor="@color/accent"
             android:textSize="26sp"
             android:paddingStart="2dp"
             android:paddingEnd="10dp" />
@@ -36,7 +36,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="ライセンス表記"
-            android:textColor="#F0F0F0"
+            android:textColor="@color/text_primary"
             android:textSize="17sp"
             android:textStyle="bold"
             android:fontFamily="@font/font_dap_heading" />

@@ -2,7 +2,6 @@ package com.example.perfectbitrate
 
 import android.content.Intent
 import android.content.res.Configuration
-import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -54,12 +53,12 @@ class SettingsActivity : AppCompatActivity() {
     private var artistGroupingValueText: TextView? = null
 
     // テーマ色（MainActivity.applyThemeUi と同じパレットに揃える）
-    private val colorBg get() = if (isDark) "#000000" else "#FFFFFF"
-    private val colorPanel get() = if (isDark) "#0D0D0D" else "#F5F5F7"
-    private val colorTitle get() = if (isDark) "#F0F0F0" else "#1C1C1E"
-    private val colorValue get() = if (isDark) "#888888" else "#636366"
-    private val colorAccent get() = if (isDark) "#E5A93C" else "#D49B28"
-    private val colorDivider get() = if (isDark) "#1C1C1C" else "#E0E0E5"
+    private val colorBg get() = if (isDark) R.color.main_background else R.color.main_background_light
+    private val colorPanel get() = if (isDark) R.color.surface_panel else R.color.surface_panel_light
+    private val colorTitle get() = if (isDark) R.color.text_primary else R.color.text_primary_light
+    private val colorValue get() = if (isDark) R.color.text_secondary else R.color.text_secondary_light
+    private val colorAccent get() = if (isDark) R.color.accent else R.color.accent_light
+    private val colorDivider get() = if (isDark) R.color.divider else R.color.divider_light
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,10 +73,10 @@ class SettingsActivity : AppCompatActivity() {
         val btnBack = findViewById<TextView>(R.id.btnSettingsBack)
         listContainer = findViewById(R.id.settingsList)
 
-        rootLayout.setBackgroundColor(Color.parseColor(colorBg))
-        titleBar.setBackgroundColor(Color.parseColor(colorPanel))
-        textTitle.setTextColor(Color.parseColor(colorTitle))
-        btnBack.setTextColor(Color.parseColor(colorAccent))
+        rootLayout.setBackgroundColor(ContextCompat.getColor(this@SettingsActivity, colorBg))
+        titleBar.setBackgroundColor(ContextCompat.getColor(this@SettingsActivity, colorPanel))
+        textTitle.setTextColor(ContextCompat.getColor(this@SettingsActivity, colorTitle))
+        btnBack.setTextColor(ContextCompat.getColor(this@SettingsActivity, colorAccent))
         btnBack.setOnClickListener { finish() }
 
         buildList()
@@ -188,7 +187,7 @@ class SettingsActivity : AppCompatActivity() {
         val caption = TextView(this).apply {
             text = title
             textSize = 12f
-            setTextColor(Color.parseColor(colorAccent))
+            setTextColor(ContextCompat.getColor(this@SettingsActivity, colorAccent))
             setPadding(dp(2), dp(18), dp(2), dp(4))
         }
         listContainer.addView(caption)
@@ -216,7 +215,7 @@ class SettingsActivity : AppCompatActivity() {
         val titleView = TextView(this).apply {
             text = title
             textSize = 15f
-            setTextColor(Color.parseColor(colorTitle))
+            setTextColor(ContextCompat.getColor(this@SettingsActivity, colorTitle))
         }
         texts.addView(titleView)
         var valueView: TextView? = null
@@ -224,7 +223,7 @@ class SettingsActivity : AppCompatActivity() {
             valueView = TextView(this).apply {
                 text = value
                 textSize = 12f
-                setTextColor(Color.parseColor(colorValue))
+                setTextColor(ContextCompat.getColor(this@SettingsActivity, colorValue))
                 setPadding(0, dp(2), 0, 0)
             }
             texts.addView(valueView)
@@ -234,7 +233,7 @@ class SettingsActivity : AppCompatActivity() {
             val chevron = TextView(this).apply {
                 text = "›"
                 textSize = 20f
-                setTextColor(Color.parseColor(colorValue))
+                setTextColor(ContextCompat.getColor(this@SettingsActivity, colorValue))
             }
             rowMain.addView(chevron)
             val handler: () -> Unit = onClick
@@ -243,7 +242,7 @@ class SettingsActivity : AppCompatActivity() {
         rowRoot.addView(rowMain)
         val divider = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-            setBackgroundColor(Color.parseColor(colorDivider))
+            setBackgroundColor(ContextCompat.getColor(this@SettingsActivity, colorDivider))
         }
         rowRoot.addView(divider)
         listContainer.addView(rowRoot)
@@ -278,14 +277,14 @@ class SettingsActivity : AppCompatActivity() {
         val titleView = TextView(this).apply {
             text = title
             textSize = 15f
-            setTextColor(Color.parseColor(colorTitle))
+            setTextColor(ContextCompat.getColor(this@SettingsActivity, colorTitle))
         }
         texts.addView(titleView)
         if (value != null) {
             val valueView = TextView(this).apply {
                 text = value
                 textSize = 12f
-                setTextColor(Color.parseColor(colorValue))
+                setTextColor(ContextCompat.getColor(this@SettingsActivity, colorValue))
                 setPadding(0, dp(2), 0, 0)
             }
             texts.addView(valueView)
@@ -318,7 +317,7 @@ class SettingsActivity : AppCompatActivity() {
         rowRoot.addView(rowMain)
         val divider = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-            setBackgroundColor(Color.parseColor(colorDivider))
+            setBackgroundColor(ContextCompat.getColor(this@SettingsActivity, colorDivider))
         }
         rowRoot.addView(divider)
         listContainer.addView(rowRoot)

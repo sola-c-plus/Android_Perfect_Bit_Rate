@@ -1,11 +1,11 @@
 package com.example.perfectbitrate
 
 import android.content.res.Configuration
-import android.graphics.Color
 import android.os.Bundle
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 
 // ★ ライセンス表記画面（仕様書 §7 の「システム」カテゴリ）。
 //   同梱するサードパーティ製ライブラリのライセンスを一覧表示する、
@@ -21,11 +21,11 @@ class LicenseActivity : AppCompatActivity() {
     private var isDark = true
 
     // テーマ色（SettingsActivity と同じパレットに揃える）
-    private val colorBg get() = if (isDark) "#000000" else "#FFFFFF"
-    private val colorPanel get() = if (isDark) "#0D0D0D" else "#F5F5F7"
-    private val colorTitle get() = if (isDark) "#F0F0F0" else "#1C1C1E"
-    private val colorBody get() = if (isDark) "#C8C8C8" else "#3A3A3C"
-    private val colorAccent get() = if (isDark) "#E5A93C" else "#D49B28"
+    private val colorBg get() = if (isDark) R.color.main_background else R.color.main_background_light
+    private val colorPanel get() = if (isDark) R.color.surface_panel else R.color.surface_panel_light
+    private val colorTitle get() = if (isDark) R.color.text_primary else R.color.text_primary_light
+    private val colorBody get() = if (isDark) R.color.text_body else R.color.text_body_light
+    private val colorAccent get() = if (isDark) R.color.accent else R.color.accent_light
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,13 +40,13 @@ class LicenseActivity : AppCompatActivity() {
         val btnBack = findViewById<TextView>(R.id.btnLicenseBack)
         val textBody = findViewById<TextView>(R.id.textLicenseBody)
 
-        rootLayout.setBackgroundColor(Color.parseColor(colorBg))
-        titleBar.setBackgroundColor(Color.parseColor(colorPanel))
-        textTitle.setTextColor(Color.parseColor(colorTitle))
-        btnBack.setTextColor(Color.parseColor(colorAccent))
+        rootLayout.setBackgroundColor(ContextCompat.getColor(this@LicenseActivity, colorBg))
+        titleBar.setBackgroundColor(ContextCompat.getColor(this@LicenseActivity, colorPanel))
+        textTitle.setTextColor(ContextCompat.getColor(this@LicenseActivity, colorTitle))
+        btnBack.setTextColor(ContextCompat.getColor(this@LicenseActivity, colorAccent))
         btnBack.setOnClickListener { finish() }
 
-        textBody.setTextColor(Color.parseColor(colorBody))
+        textBody.setTextColor(ContextCompat.getColor(this@LicenseActivity, colorBody))
         textBody.text = licenseText()
     }
 
