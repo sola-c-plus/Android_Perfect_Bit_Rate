@@ -43,6 +43,14 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_LOCAL_SHUFFLE_ENABLED = "localShuffleEnabled"
         private const val KEY_LOCAL_REPEAT_MODE = "localRepeatMode"
         private const val KEY_LOCAL_ARTIST_GROUPING = "localArtistGrouping"
+        private const val KEY_SLEEP_TIMER_MINUTES = "sleepTimerMinutes"
+        private const val KEY_SLEEP_TIMER_END_AT_MS = "sleepTimerEndAtMs"
+
+        // ★ スリープタイマーの選択肢（分）。0 は OFF。期限は
+        //   sleepTimerEndAtMs（UNIX ミリ秒、0 = 未設定）を正とし、
+        //   MainActivity の UI ループが期限到来でポーズさせる。
+        const val SLEEP_TIMER_OFF = 0
+        val SLEEP_TIMER_CHOICES_MINUTES = intArrayOf(15, 30, 60)
 
         // ★ Local ライブラリ「全曲」タブのソート種別（Phase 2-1）。
         const val LOCAL_SORT_TITLE = 0
@@ -223,6 +231,28 @@ class AppPreferences private constructor(context: Context) {
             }
         }
         set(value) = prefs.edit { putInt(KEY_LOCAL_ARTIST_GROUPING, value) }
+
+    // ★ スリープタイマーの選択（分、0 = OFF）。選択肢外の値は OFF へ
+    //   倒す（他の選択系と同じ流儀）。発火期限は sleepTimerEndAtMs が
+    //   正で、こちらは設定画面での表示（何分を選んだか）に使う。
+    var sleepTimerMinutes: Int
+        get() {
+            val stored = prefs.getInt(KEY_SLEEP_TIMER_MINUTES, SLEEP_TIMER_OFF)
+            return if (stored == SLEEP_TIMER_OFF || stored in SLEEP_TIMER_CHOICES_MINUTES) {
+                stored
+            } else {
+                SLEEP_TIMER_OFF
+            }
+        }
+        set(value) = prefs.edit { putInt(KEY_SLEEP_TIMER_MINUTES, value) }
+
+    // ★ スリープタイマーの発火期限（UNIX ミリ秒、0 = 未設定）。
+    //   設定時に「現在時刻＋選択分」で書き、期限到来で発火した側
+    //   （MainActivity）が 0 へ戻す。期限を過ぎた値が残っていたら
+    //   未設定として扱う（読み手側の判定に使う）。
+    var sleepTimerEndAtMs: Long
+        get() = prefs.getLong(KEY_SLEEP_TIMER_END_AT_MS, 0L)
+        set(value) = prefs.edit { putLong(KEY_SLEEP_TIMER_END_AT_MS, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)

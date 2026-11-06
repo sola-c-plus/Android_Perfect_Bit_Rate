@@ -49,6 +49,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private var isDark = true
     private var modeValueText: TextView? = null
+    private var sleepTimerValueText: TextView? = null
     private var themeValueText: TextView? = null
     private var artistGroupingValueText: TextView? = null
 
@@ -100,6 +101,11 @@ class SettingsActivity : AppCompatActivity() {
             title = "再生モード",
             value = appPrefs.playbackMode.displayName,
             onClick = { showPlaybackModeDialog() }
+        )
+        sleepTimerValueText = addRow(
+            title = "スリープタイマー",
+            value = sleepTimerLabel(),
+            onClick = { showSleepTimerDialog() }
         )
 
         addCategory("ライブラリ取得範囲")
@@ -333,6 +339,54 @@ class SettingsActivity : AppCompatActivity() {
                 val selected = modes[which]
                 appPrefs.playbackMode = selected
                 modeValueText?.text = selected.displayName
+                dialog.dismiss()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // ★ スリープタイマーの現在値表示。未設定なら「オフ」、設定中なら
+    //   選択分数＋残り時間（切り上げ分）を示す。期限を過ぎた値は
+    //   MainActivity 側が発火して消費するが、ここでも過ぎていれば
+    //   オフとして見せる（表示と実状態をずらさない）。
+    private fun sleepTimerLabel(): String {
+        val minutes = appPrefs.sleepTimerMinutes
+        val endAt = appPrefs.sleepTimerEndAtMs
+        if (minutes == AppPreferences.SLEEP_TIMER_OFF || endAt <= 0L) return "オフ"
+        val remainingMs = endAt - System.currentTimeMillis()
+        if (remainingMs <= 0L) return "オフ"
+        val remainingMin = (remainingMs + 59_999L) / 60_000L
+        return "${minutes}分（あと約${remainingMin}分）"
+    }
+
+    // ★ スリープタイマーの選択。ここでは prefs への保存までを行い、
+    //   期限の監視と発火（ポーズ）は MainActivity の UI ループが担う
+    //   （再生モード等と同じ「保存は設定画面、反映は MainActivity」の分担）。
+    private fun showSleepTimerDialog() {
+        val values = intArrayOf(
+            AppPreferences.SLEEP_TIMER_OFF,
+            *AppPreferences.SLEEP_TIMER_CHOICES_MINUTES
+        )
+        val labels = Array<CharSequence>(values.size) { i ->
+            if (values[i] == AppPreferences.SLEEP_TIMER_OFF) "オフ" else "${values[i]}分"
+        }
+        val currentIndex = values.indexOf(appPrefs.sleepTimerMinutes).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("スリープタイマー")
+            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
+                val selected = values[which]
+                appPrefs.sleepTimerMinutes = selected
+                appPrefs.sleepTimerEndAtMs = if (selected == AppPreferences.SLEEP_TIMER_OFF) {
+                    0L
+                } else {
+                    System.currentTimeMillis() + selected * 60_000L
+                }
+                sleepTimerValueText?.text = sleepTimerLabel()
+                if (selected != AppPreferences.SLEEP_TIMER_OFF) {
+                    Toast.makeText(
+                        this, "${selected}分後に再生を停止します", Toast.LENGTH_SHORT
+                    ).show()
+                }
                 dialog.dismiss()
             }
             .setNegativeButton("キャンセル", null)
