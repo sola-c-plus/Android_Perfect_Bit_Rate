@@ -309,7 +309,8 @@ class GeckoSessionController(
                 }
             }
             "codec" -> {
-                val codec = msg.optString("codec", "OPUS 160kbps (48k)")
+                // ★ codec フィールド欠落時の既定も未検出「—」（実コーデック名で偽らない）
+                val codec = msg.optString("codec", "—")
                 val rate = msg.optInt("sampleRate", 0)
                 listener.onCodec(codec, rate)
             }
