@@ -13,6 +13,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioMixerAttributes
@@ -350,6 +351,105 @@ class BitPerfectPlaybackService : Service() {
     private lateinit var mediaSession: MediaSessionCompat
     var onCommandListener: ((String) -> Unit)? = null
     var onSeekListener: ((Long) -> Unit)? = null
+
+    // ★ オーディオフォーカス: アラーム等の割り込みを「PCM 途絶からの推測」では
+    //   なく一級の信号として扱うための実装。要求/解放は再生状態の伝播
+    //   （updatePlaybackState）に合わせ、再生していない間は握り続けない。
+    //   属性は AudioTrack と同じ USAGE_MEDIA / CONTENT_TYPE_MUSIC。
+    //   minSdk 33 のため AudioFocusRequest（API 26+）を分岐なしで使える。
+    //   - LOSS_TRANSIENT / CAN_DUCK: 「割り込み中」として記録するだけ。再生は
+    //     こちらからは止めない（ページ側が強制ポーズされる型では PCM が止まるが、
+    //     ウォッチドッグが isAudioFocusInterrupted を見て復旧ステップを消費
+    //     しない）。ダッキング（音量を下げる）は音に影響するため行わない。
+    //   - GAIN: 割り込み前に再生中だった場合のみ onAudioFocusGainedListener を
+    //     呼ぶ。再開するかどうか（ユーザーの再生意思の確認）は MainActivity が決める。
+    //   - LOSS（永続喪失）: 通常のポーズとして扱い、自動再開はしない。
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var hasAudioFocus = false
+    private var lastFocusRequestDeniedTime = 0L
+
+    @Volatile
+    var isAudioFocusInterrupted = false
+        private set
+    private var wasPlayingBeforeFocusInterrupt = false
+
+    // ★ フォーカス回復（GAIN）時の再開フック。MainActivity が設定する。
+    var onAudioFocusGainedListener: (() -> Unit)? = null
+
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                if (!isAudioFocusInterrupted) {
+                    wasPlayingBeforeFocusInterrupt = isCurrentlyPlaying
+                }
+                isAudioFocusInterrupted = true
+                Log.i("BitPerfect", "★ Audio focus interrupted (transient), wasPlaying=$wasPlayingBeforeFocusInterrupt")
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                val shouldNotifyResume = isAudioFocusInterrupted && wasPlayingBeforeFocusInterrupt
+                isAudioFocusInterrupted = false
+                wasPlayingBeforeFocusInterrupt = false
+                Log.i("BitPerfect", "★ Audio focus gained, notifyResume=$shouldNotifyResume")
+                if (shouldNotifyResume) {
+                    onAudioFocusGainedListener?.invoke()
+                }
+            }
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                isAudioFocusInterrupted = false
+                wasPlayingBeforeFocusInterrupt = false
+                hasAudioFocus = false
+                Log.i("BitPerfect", "★ Audio focus lost (permanent), pausing")
+                onCommandListener?.invoke("pause")
+            }
+        }
+    }
+
+    private fun requestAudioFocusIfNeeded() {
+        if (hasAudioFocus) return
+        // ★ 否認された直後は再要求を間引く（再生状態の伝播は高頻度で来るため）。
+        //   否認は通話中など要求が通らない状況で起き、失敗した要求は他のアプリの
+        //   フォーカスに影響しない。
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFocusRequestDeniedTime < 5000L) return
+        try {
+            val request = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .build()
+                .also { audioFocusRequest = it }
+            val result = audioManager.requestAudioFocus(request)
+            hasAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            if (!hasAudioFocus) {
+                lastFocusRequestDeniedTime = SystemClock.elapsedRealtime()
+                Log.w("BitPerfect", "Audio focus request not granted: result=$result")
+            }
+        } catch (e: Exception) {
+            Log.e("BitPerfect", "Audio focus request error", e)
+        }
+    }
+
+    private fun abandonAudioFocusIfHeld() {
+        // ★ 割り込み中は解放しない: ページ側の強制ポーズで再生状態が false に
+        //   倒れても、フォーカス回復（GAIN）を受け取るために要求を保持する。
+        //   解放は割り込みが解けてからの状態伝播で行われる。
+        if (isAudioFocusInterrupted) return
+        if (hasAudioFocus) {
+            try {
+                audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            } catch (e: Exception) {
+                Log.e("BitPerfect", "Audio focus abandon error", e)
+            }
+            hasAudioFocus = false
+        }
+        lastFocusRequestDeniedTime = 0L
+        wasPlayingBeforeFocusInterrupt = false
+    }
 
     private var currentTitle = "Perfect Bit Rate"
     private var currentArtist = "YouTube Music"
@@ -1133,6 +1233,11 @@ class BitPerfectPlaybackService : Service() {
 
     fun updatePlaybackState(isPlaying: Boolean, position: Long = currentPosition) {
         isCurrentlyPlaying = isPlaying
+        // ★ オーディオフォーカスの要求/解放は再生状態の伝播に合わせる。
+        //   メディアセッション経由では isCurrentlyPlaying が直接書き換わる経路も
+        //   あるため、遷移検出ではなく毎回呼ぶ（保持済み・否認直後は内部で間引く。
+        //   割り込み中の解放抑止は abandonAudioFocusIfHeld 側で行う）。
+        if (isPlaying) requestAudioFocusIfNeeded() else abandonAudioFocusIfHeld()
         val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
         val actions = PlaybackStateCompat.ACTION_PLAY or
                 PlaybackStateCompat.ACTION_PAUSE or
@@ -1913,6 +2018,14 @@ class BitPerfectPlaybackService : Service() {
     private fun stopServiceCleanly() {
         isRunning = false
         playbackThread?.interrupt()
+
+        // ★ サービス終了時は割り込み状態によらずフォーカスを解放する
+        isAudioFocusInterrupted = false
+        hasAudioFocus = false
+        try {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        } catch (e: Exception) {}
+        audioFocusRequest = null
 
         try {
             unregisterReceiver(volumeReceiver)

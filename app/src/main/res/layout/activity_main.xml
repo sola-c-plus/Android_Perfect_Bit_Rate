@@ -223,14 +223,18 @@
                 android:maxLines="1" />
 
             <!-- ★ バッファ健全度 & 真のDAC出力遅延 LAT (SW連動で一括表示/非表示) -->
+            <!-- ★ 幅は textPeak と同じ 0dp+weight+ellipsize にし、BUF 文字列の増長
+                 （DROP 累計の桁増し等）で行全体が画面幅を超えてはみ出さないようにする -->
             <TextView
                 android:id="@+id/textBufferLatency"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
                 android:text="BUF:100% LAT:0ms"
                 android:textColor="@color/text_secondary"
                 android:textSize="9sp"
                 android:fontFamily="@font/font_dap_mono"
+                android:ellipsize="end"
                 android:maxLines="1"
                 android:layout_marginEnd="8dp"
                 android:visibility="gone" />
