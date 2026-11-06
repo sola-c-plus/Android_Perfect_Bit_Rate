@@ -350,7 +350,15 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (isPlayingState && appPrefs.isSpectrumEnabled) {
-                NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
+                // ★ スペクトラムは Service 側で「今鳴っている位置」に整列した
+                //   スナップショットから取得する（Local のバースト処理でも
+                //   表示が再生ペースで連続的に流れるように）。スナップ
+                //   ショットがまだ無い場合（再生開始直後など）は、従来どおり
+                //   native の最新値を直接読む。
+                val service = playbackService
+                if (service == null || !service.getSpectrumAlignedToPlayback(uiSpectrumBands)) {
+                    NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
+                }
                 activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
             }
 

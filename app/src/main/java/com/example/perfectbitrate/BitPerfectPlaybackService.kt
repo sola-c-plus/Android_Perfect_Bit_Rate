@@ -165,6 +165,30 @@ class BitPerfectPlaybackService : Service() {
     @Volatile var truePeakCapHitCount: Long = 0L
     private val truePeakStatsBuffer = FloatArray(4)
 
+    // ★ スペクトラム表示の「再生時刻整列」用スナップショット保持。
+    //   native のスペクトラムは DSP 処理時点の音（リングバッファ末尾）から
+    //   算出されるため、Local のように処理が再生より数秒先行する供給では、
+    //   表示側が最新値をそのまま読むと「バースト時に一括算出 → 次のバースト
+    //   まで完全静止」の凍結→ジャンプになる。そこで pushPcm がチャンクを
+    //   処理するたびに、その時点のバンドレベルを「処理済み累積フレーム位置
+    //   （出力フレーム単位）」と組にして保持し、表示側は
+    //   getSpectrumAlignedToPlayback() で「今鳴っている位置」に最も近い
+    //   スナップショットを受け取る。保持は先行分（キュー最大 64 チャンク＋
+    //   ハードウェアバッファ）を賄う 128 件で十分なため、コストは
+    //   チャンク毎の小さなコピーと取得時の線形走査だけに抑える。
+    private val SPECTRUM_BAND_COUNT = 32
+    private val SPECTRUM_RING_CAPACITY = 128
+    private val spectrumSnapshotLock = Any()
+    private val spectrumSnapshotPositions = LongArray(SPECTRUM_RING_CAPACITY)
+    private val spectrumSnapshotLevels =
+        Array(SPECTRUM_RING_CAPACITY) { FloatArray(SPECTRUM_BAND_COUNT) { -60f } }
+    private var spectrumSnapshotWriteIndex = 0
+    private var spectrumSnapshotCount = 0
+    // 処理済み累積フレーム数（出力フレーム単位）。totalWrittenFrames と同じ
+    // 時刻軸で数え、リセットも totalWrittenFrames = 0 の箇所と同期させる。
+    @Volatile private var spectrumProcessedFrames = 0L
+    private val spectrumCaptureBuffer = FloatArray(SPECTRUM_BAND_COUNT)
+
     @Volatile private var isRunning = false
     private var playbackThread: Thread? = null
 
@@ -431,6 +455,7 @@ class BitPerfectPlaybackService : Service() {
         isBuffering.set(true)
         NativeAudioEngine.nativeResetUpsampler()
         totalWrittenFrames = 0L
+        resetSpectrumTimeline()
         onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
 
         forceResetSpeakerVolume()
@@ -585,6 +610,10 @@ class BitPerfectPlaybackService : Service() {
             pcmBytes, pcmBytes.size, inBitMode, actualBitMode, negotiatedFactor
         ) ?: pcmBytes
 
+        // ★ このチャンクのスペクトラムを処理済み累積位置と組で保持する
+        //   （表示の再生時刻整列用。音声・DSP 処理自体は無変更）。
+        captureSpectrumSnapshot(processedBytes)
+
         if (!pcmQueue.offer(processedBytes)) {
             val dropped = pcmQueue.poll()
             pcmQueue.offer(processedBytes)
@@ -626,7 +655,95 @@ class BitPerfectPlaybackService : Service() {
         }
         NativeAudioEngine.nativeResetUpsampler()
         totalWrittenFrames = 0L
+        resetSpectrumTimeline()
         onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
+    }
+
+    // ★ pushPcm の処理直後に呼ばれる。このチャンクのバンドレベル
+    //   （native リングバッファ末尾＝ちょうど処理した音の末尾）を、
+    //   処理済み累積フレーム位置（このチャンクの終端）と組で保持する。
+    //   位置の加算はスペクトラム無効時も常時行い（時刻軸の一貫性のため）、
+    //   FFT の取得だけを従来の表示ポーリング側ゲートと同条件
+    //   （isSpectrumEnabled）で間引く。無効の間はスナップショット自体を
+    //   作らないため、保持コストも発生しない。
+    private fun captureSpectrumSnapshot(processedBytes: ByteArray) {
+        val bytesPerFrame = when (actualBitMode) { "32bit" -> 8; "24bit" -> 6; else -> 4 }
+        val frames = (processedBytes.size / bytesPerFrame).toLong()
+        if (frames <= 0L) return
+        synchronized(spectrumSnapshotLock) {
+            spectrumProcessedFrames += frames
+        }
+        val spectrumEnabled = try {
+            AppPreferences.get().isSpectrumEnabled
+        } catch (e: Exception) {
+            false
+        }
+        if (!spectrumEnabled) return
+        NativeAudioEngine.nativeGetSpectrum(spectrumCaptureBuffer)
+        synchronized(spectrumSnapshotLock) {
+            val idx = spectrumSnapshotWriteIndex
+            spectrumSnapshotPositions[idx] = spectrumProcessedFrames
+            spectrumCaptureBuffer.copyInto(spectrumSnapshotLevels[idx])
+            spectrumSnapshotWriteIndex = (idx + 1) % SPECTRUM_RING_CAPACITY
+            if (spectrumSnapshotCount < SPECTRUM_RING_CAPACITY) spectrumSnapshotCount++
+        }
+    }
+
+    // ★ 表示用: 「今鳴っている位置」に整列したスペクトラムを outBands へ
+    //   コピーし、スナップショットがあれば true を返す。
+    //   今鳴っている位置（出力フレーム単位）は、処理済み累積から未再生分
+    //   （Service キュー滞留分＋ AudioTrack へ書いたが再生ヘッドがまだ
+    //   到達していない分）を差し引いたもの。後者は analyzeAndDispatchPeak
+    //   の遅延推定と同じ根拠（totalWrittenFrames − playbackHeadPosition）。
+    //   選択は「その位置を最初に越えるスナップショット」＝今鳴っている
+    //   チャンクのもの。キュー満杯で最古チャンクが破棄された場合は滞留分
+    //   が実キューから算出されるため、位置が破棄分を飛び越えて自動的に
+    //   追随する（破棄された音は聞こえないので、それで正しい）。
+    fun getSpectrumAlignedToPlayback(outBands: FloatArray): Boolean {
+        if (outBands.size < SPECTRUM_BAND_COUNT) return false
+        val bytesPerFrame = when (actualBitMode) { "32bit" -> 8; "24bit" -> 6; else -> 4 }
+        var queuedBytes = 0L
+        for (chunk in pcmQueue) queuedBytes += chunk.size
+        val queuedFrames = queuedBytes / bytesPerFrame
+        val playedFrames = (audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xFFFFFFFFL
+        val hardwareBufferedFrames = (totalWrittenFrames - playedFrames).coerceAtLeast(0L)
+        synchronized(spectrumSnapshotLock) {
+            if (spectrumSnapshotCount == 0) return false
+            val nowPos = (spectrumProcessedFrames - queuedFrames - hardwareBufferedFrames)
+                .coerceIn(0L, spectrumProcessedFrames)
+            var bestIdx = -1
+            var bestPos = Long.MAX_VALUE
+            var latestIdx = -1
+            var latestPos = Long.MIN_VALUE
+            for (n in 0 until spectrumSnapshotCount) {
+                val idx = (spectrumSnapshotWriteIndex - spectrumSnapshotCount + n +
+                    SPECTRUM_RING_CAPACITY) % SPECTRUM_RING_CAPACITY
+                val pos = spectrumSnapshotPositions[idx]
+                if (pos > latestPos) {
+                    latestPos = pos
+                    latestIdx = idx
+                }
+                if (pos > nowPos && pos < bestPos) {
+                    bestPos = pos
+                    bestIdx = idx
+                }
+            }
+            val chosen = if (bestIdx >= 0) bestIdx else latestIdx
+            if (chosen < 0) return false
+            spectrumSnapshotLevels[chosen].copyInto(outBands)
+            return true
+        }
+    }
+
+    // ★ スペクトラムの時刻軸をリセットする。totalWrittenFrames = 0L と
+    //   同じ箇所（resetBuffer / AudioTrack 再生成 / ポーズでの破棄 /
+    //   切断フロー）から呼び、処理済み累積と再生ヘッドの基準を揃える。
+    private fun resetSpectrumTimeline() {
+        synchronized(spectrumSnapshotLock) {
+            spectrumProcessedFrames = 0L
+            spectrumSnapshotWriteIndex = 0
+            spectrumSnapshotCount = 0
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -718,6 +835,7 @@ class BitPerfectPlaybackService : Service() {
         pcmQueue.clear()
         NativeAudioEngine.nativeResetUpsampler()
         totalWrittenFrames = 0L
+        resetSpectrumTimeline()
         onPeakListener?.invoke(-60f, -60f, 0, 0, 0)
 
         try {
@@ -1161,6 +1279,7 @@ class BitPerfectPlaybackService : Service() {
 
                 audioTrack = createdTrack
                 totalWrittenFrames = 0L
+                resetSpectrumTimeline()
 
                 val actualModeStr = when (finalEncoding) {
                     AudioFormat.ENCODING_PCM_32BIT -> "32bit"
