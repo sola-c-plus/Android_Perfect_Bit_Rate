@@ -506,6 +506,27 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
             playbackService?.updateProgress(0L, 0L, false)
             ensureLocalLibrary()
+        } else {
+            // ★ YT へ戻す際は、Local 側が書き換えたソース依存のストリーム
+            //   状態を YT の既定へ戻す。特に baseSampleRate: Local の
+            //   onCodec がファイルのレート（例 44.1kHz）に更新したままだと、
+            //   保持された Gecko ページは codec 通知を再送しない
+            //   （content.js は検出コーデック/レートが変わったときだけ
+            //   送る）ため、48kHz の YT の PCM が 44.1kHz 前提のチェーンで
+            //   処理されて再生が遅くなる。Local 開始時は LocalPlayer が
+            //   毎曲 onCodec を送るため、ここで既定へ戻しても対称性は
+            //   崩れない。あわせてステータス表示も前ソースの値を残さない。
+            baseSampleRate = 48000
+            playbackService?.updateBaseSampleRate(48000)
+            currentTitle = "YouTube Music"
+            currentArtist = ""
+            currentArtworkBitmap = null
+            currentCodec = "OPUS 160kbps (48k)"
+            currentPosition = 0L
+            currentDuration = 0L
+            playbackService?.updateCodec(currentCodec)
+            playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
+            playbackService?.updateProgress(0L, 0L, false)
         }
         updateStatus()
         updateDialogPlayerUi()

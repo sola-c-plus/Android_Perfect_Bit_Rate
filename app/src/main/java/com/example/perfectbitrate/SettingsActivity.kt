@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 
 // ★ 設定画面（仕様書 §7）: Sony 系アプリ（Music Center / WALKMAN 系）の作法に
@@ -286,6 +287,24 @@ class SettingsActivity : AppCompatActivity() {
         rowMain.addView(texts)
         val toggle = SwitchCompat(this).apply {
             isChecked = checked
+            // ★ トグルの見た目は DSP 設定ダイアログと共通化する: 同じ
+            //   drawable リソース（switch_track_walkman_outline /
+            //   switch_thumb_white）を割り当て、テーマ tint は DSP 側 XML の
+            //   app:thumbTint / app:trackTint="@null" と同じく無効化する。
+            //   ライト時は DSP 側コード（DspSettingsDialog のライト適用）と
+            //   同じ _light 版へ差し替える。
+            trackDrawable = ContextCompat.getDrawable(
+                this@SettingsActivity,
+                if (isDark) R.drawable.switch_track_walkman_outline
+                else R.drawable.switch_track_walkman_outline_light
+            )
+            thumbDrawable = ContextCompat.getDrawable(
+                this@SettingsActivity,
+                if (isDark) R.drawable.switch_thumb_white
+                else R.drawable.switch_thumb_light
+            )
+            trackTintList = null
+            thumbTintList = null
             setOnCheckedChangeListener { _, isChecked -> onCheckedChange(isChecked) }
         }
         rowMain.addView(toggle)
