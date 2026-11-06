@@ -536,8 +536,17 @@
                              アルバムをいずれも中央寄せで静かに並べる。
                              「NOW PLAYING」ラベルは置かず、キュー位置は
                              シークバーの上に小さく中央表示する。
-                             アートワークは固定高とし、残りの縦スペースは
-                             下側に余らせる（全体が下に寄らないように）。 -->
+                             縦位置は、アートワークの上下に置いた
+                             スペーサ（重み 2:3）で余白を配分し、全体が
+                             上にも下にも寄りすぎず、中央〜やや上に
+                             落ち着くバランスにする。 -->
+
+                        <!-- ★ 上側スペーサ（下側との重み配分で縦位置を調整） -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="2" />
+
                         <ImageView
                             android:id="@+id/imgNpArtwork"
                             android:layout_width="match_parent"
@@ -649,22 +658,27 @@
                                 android:fontFamily="@font/font_dap_mono" />
                         </LinearLayout>
 
-                        <!-- ★ 操作行は WALKMAN 式: 左端にリピート、
-                             右端にシャッフル、中央に 前へ/再生・
-                             一時停止（大きめ）/次へ。両端のトグルは
-                             円で囲わずアイコンのみ（状態は色で示す） -->
+                        <!-- ★ 操作行: 左端にシャッフル、右端に
+                             リピート（ユーザー指定の並び）、中央に
+                             前へ/再生・一時停止（大きめ）/次へ。
+                             行に左右マージンを付けて両端のトグルを
+                             画面端から内側へ寄せ、中央3ボタン間の
+                             間隔も広めに取る。両端のトグルは円で
+                             囲わずアイコンのみ（状態は色で示す） -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="14dp"
+                            android:layout_marginStart="16dp"
+                            android:layout_marginEnd="16dp"
                             android:orientation="horizontal"
                             android:gravity="center_vertical">
 
                             <ImageButton
-                                android:id="@+id/btnNpRepeat"
+                                android:id="@+id/btnNpShuffle"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"
-                                android:src="@drawable/ic_repeat"
+                                android:src="@drawable/ic_shuffle"
                                 android:scaleType="centerInside"
                                 android:background="@null"
                                 android:padding="9dp" />
@@ -682,7 +696,7 @@
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_small"
                                 android:padding="10dp"
-                                android:layout_marginEnd="10dp" />
+                                android:layout_marginEnd="18dp" />
 
                             <ImageButton
                                 android:id="@+id/btnNpPlayPause"
@@ -692,7 +706,7 @@
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_large"
                                 android:padding="15dp"
-                                android:layout_marginEnd="10dp" />
+                                android:layout_marginEnd="18dp" />
 
                             <ImageButton
                                 android:id="@+id/btnNpNext"
@@ -709,14 +723,21 @@
                                 android:layout_weight="1" />
 
                             <ImageButton
-                                android:id="@+id/btnNpShuffle"
+                                android:id="@+id/btnNpRepeat"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"
-                                android:src="@drawable/ic_shuffle"
+                                android:src="@drawable/ic_repeat"
                                 android:scaleType="centerInside"
                                 android:background="@null"
                                 android:padding="9dp" />
                         </LinearLayout>
+
+                        <!-- ★ 下側スペーサ（上側との重み配分 2:3 で
+                             コンテンツ全体を中央〜やや上に置く） -->
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="3" />
                     </LinearLayout>
 
                     <!-- ★ 空状態: 再生中の曲が無いときの表示 -->
