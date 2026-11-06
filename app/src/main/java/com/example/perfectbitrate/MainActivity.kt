@@ -823,6 +823,11 @@ class MainActivity : AppCompatActivity() {
                     localTrackList.adapter = adapter
                     updateLocalEmptyMessage(groups.size, isTrackPage = false)
                 }
+                LocalTab.NOW_PLAYING -> {
+                    // 到達しない分岐（網羅性のため）: NOW_PLAYING は
+                    // refreshLocalBrowser の冒頭でページ出し分けのみ
+                    // 行って return しているため、ここでは何もしない。
+                }
             }
         }
         updateLocalTabStyles()
