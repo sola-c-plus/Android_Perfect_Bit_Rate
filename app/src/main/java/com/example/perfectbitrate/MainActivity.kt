@@ -79,8 +79,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var geckoView: GeckoView
     private lateinit var localPlaceholder: View
     private lateinit var textLocalMessage: TextView
-    private lateinit var textModeSwitch: TextView
+    // ★ モード切替のピル型トグル（[ YT MUSIC | LOCAL ] の2セグメント）。
+    //   配色（選択中セグメントの塗り）は updateModeSwitchUi が担う。
+    private lateinit var modeSwitchGroup: LinearLayout
+    private lateinit var textModeYt: TextView
+    private lateinit var textModeLocal: TextView
     private lateinit var localTrackList: ListView
+    // ★ TRACKS（タイトル順）の右端に出す A-Z インデックスバー。
+    //   中身は表示中リストのグループ構成から updateAzIndexBar が組み立てる。
+    private lateinit var localAzIndexBar: LinearLayout
+    // A-Z バーのグループ構成（グループキー → 表示リスト内の先頭位置）。
+    private var localAzGroups: List<Pair<String, Int>> = emptyList()
     private lateinit var localScanProgress: View
     private lateinit var progressLocalScan: ProgressBar
     private lateinit var textLocalScanStatus: TextView
@@ -163,7 +172,7 @@ class MainActivity : AppCompatActivity() {
     //   表示している並び（＝ LocalPlayer へ渡しているキューと
     //   一致させる。キューページは LocalPlayer 側の順序表から
     //   直接描くため、ここには入れない）。
-    private enum class LocalTab { QUEUE, NOW_PLAYING, LIBRARY_TOP, ALL, ALBUM, ARTIST, PLAYLIST }
+    private enum class LocalTab { QUEUE, NOW_PLAYING, LIBRARY_TOP, ALL, RECENT, ALBUM, ARTIST, PLAYLIST }
 
     private data class LocalGroup(
         val key: String,
@@ -362,6 +371,7 @@ class MainActivity : AppCompatActivity() {
 
             checkPlaybackStall(now)
             checkRecreateFollowUp(now)
+            checkSleepTimer(now)
 
             // ★ Local モードの進捗ポーリング（仕様書 §4.3: 250ms 周期で通知）。
             //   デコード位置は LocalPlayer が保持し、ここで Service / ダイアログへ流す。
@@ -407,6 +417,37 @@ class MainActivity : AppCompatActivity() {
     //   PCM が途絶）は pause ではなく play を送り、復旧を試みる。
     private fun isPcmFlowing(): Boolean =
         lastPcmTime != 0L && System.currentTimeMillis() - lastPcmTime <= STALL_THRESHOLD_MS
+
+    // ★ スリープタイマー: 設定画面で保存された期限（sleepTimerEndAtMs）を
+    //   UI ループ（30ms 周期）で監視し、到来したら現在モードの供給係へ
+    //   ポーズを送る。Local / YT 両モードで効く。発火時は prefs を
+    //   OFF へ戻して二重発火を防ぎ、理由を Toast で見せる。
+    //   YT では再生意思（userWantsPlayback）も落とし、ウォッチドッグが
+    //   勝手に再生を再開しないようにする（モード切替時のポーズと同じ作法）。
+    private fun checkSleepTimer(now: Long) {
+        val endAt = appPrefs.sleepTimerEndAtMs
+        if (endAt == 0L || now < endAt) return
+        appPrefs.sleepTimerEndAtMs = 0L
+        appPrefs.sleepTimerMinutes = AppPreferences.SLEEP_TIMER_OFF
+        when (currentPlaybackMode) {
+            PlaybackMode.LOCAL -> {
+                if (::localPlayer.isInitialized) {
+                    localPlayer.handleCommand("pause")
+                }
+            }
+            PlaybackMode.YT_MUSIC -> {
+                if (::geckoController.isInitialized) {
+                    userWantsPlayback = false
+                    geckoController.sendCommand("pause")
+                }
+            }
+        }
+        Toast.makeText(
+            this@MainActivity,
+            "スリープタイマーで再生を停止しました",
+            Toast.LENGTH_LONG
+        ).show()
+    }
 
     private fun resolvePlayPauseCommand(): String {
         // ★ Local モードでは供給係（LocalPlayer）自身の状態を正とする。
@@ -947,6 +988,7 @@ class MainActivity : AppCompatActivity() {
         if (localTab == LocalTab.NOW_PLAYING) {
             updateLocalPageVisibility()
             updateLocalTabStyles()
+            updateAzIndexBar()
             return
         }
         updateLocalPageVisibility()
@@ -961,6 +1003,7 @@ class MainActivity : AppCompatActivity() {
             // 違う（DB が正）ため、専用経路で描く。
             refreshPlaylistTab()
             updateLocalTabStyles()
+            updateAzIndexBar()
             return
         }
         if (localTab == LocalTab.QUEUE) {
@@ -968,12 +1011,14 @@ class MainActivity : AppCompatActivity() {
             // 経路で描く（表示＝キューのため setQueue はしない）。
             refreshQueueTab()
             updateLocalTabStyles()
+            updateAzIndexBar()
             return
         }
         if (localTab == LocalTab.LIBRARY_TOP) {
             // ライブラリトップは入口一覧を出す専用経路で描く。
             refreshLibraryTop()
             updateLocalTabStyles()
+            updateAzIndexBar()
             return
         }
         val groupKey = localGroupKey
@@ -1020,6 +1065,14 @@ class MainActivity : AppCompatActivity() {
                         .filter { localTrackMatchesQuery(it, localSearchQuery) }
                     showLocalTrackPage(sortLocalTracks(filtered, appPrefs.localSortMode))
                 }
+                LocalTab.RECENT -> {
+                    // ★ 最近追加した曲: ファイル更新日時
+                    //   （modifiedMs、DB に保持済み）の新しい順で
+                    //   固定する（ソート設定の対象外）。
+                    val filtered = localTracks
+                        .filter { localTrackMatchesQuery(it, localSearchQuery) }
+                    showLocalTrackPage(filtered.sortedByDescending { it.modifiedMs })
+                }
                 LocalTab.ALBUM, LocalTab.ARTIST -> {
                     val groups = localGroupsFor(localTab, localSearchQuery)
                     localDisplayedTracks = emptyList()
@@ -1038,6 +1091,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         updateLocalTabStyles()
+        updateAzIndexBar()
     }
 
     // ★ プレイリストタブの描画。ドリルダウンしていない間は
@@ -1126,6 +1180,7 @@ class MainActivity : AppCompatActivity() {
     private fun localLibraryChildTitle(tab: LocalTab): String {
         return when (tab) {
             LocalTab.ALL -> "全曲"
+            LocalTab.RECENT -> "最近追加した曲"
             LocalTab.ALBUM -> "アルバム"
             LocalTab.ARTIST -> "アーティスト"
             LocalTab.PLAYLIST -> "プレイリスト"
@@ -1154,6 +1209,10 @@ class MainActivity : AppCompatActivity() {
             LocalLibraryEntry(
                 LocalTab.ALL, "TRACKS", "${localTracks.size} 曲",
                 R.drawable.ic_tab_all
+            ),
+            LocalLibraryEntry(
+                LocalTab.RECENT, "RECENT", "${localTracks.size} 曲",
+                R.drawable.ic_tab_recent
             ),
             LocalLibraryEntry(
                 LocalTab.ALBUM, "ALBUMS",
@@ -1220,6 +1279,111 @@ class MainActivity : AppCompatActivity() {
         updateLocalEmptyMessage(tracks.size, isTrackPage = true)
     }
 
+    // ── A-Z インデックス（TRACKS のタイトル順専用） ──
+    //
+    // 表示中リストの先頭文字でグループを作り、右端のバーから
+    // 該当グループの先頭へジャンプする。グループキーの規則:
+    // 英字は大文字、数字とその他（漢字・記号など）は「#」、
+    // ひらがな/カタカナは行頭（あ・か・さ・た・な・は・ま・や・
+    // ら・わ）。バーには表示中リストに実在するグループだけを、
+    // リスト内の出現順（＝タイトル順の並び順）で並べる。
+
+    private fun azGroupKeyOf(track: LibraryRepository.Track): String {
+        val title = track.title.ifBlank { track.displayName }
+        val first = title.firstOrNull() ?: return "#"
+        return when {
+            first in 'a'..'z' -> first.uppercaseChar().toString()
+            first in 'A'..'Z' -> first.toString()
+            first in 'ぁ'..'ゖ' -> kanaRowHead(first)
+            first in 'ァ'..'ヶ' -> kanaRowHead((first.code - 0x60).toChar())
+            else -> "#"
+        }
+    }
+
+    // ひらがな1文字を行頭（清音の行の先頭文字）へ寄せる。
+    private fun kanaRowHead(ch: Char): String {
+        return when (ch) {
+            in 'ぁ'..'お' -> "あ"
+            in 'か'..'ご' -> "か"
+            in 'さ'..'ぞ' -> "さ"
+            in 'た'..'ど' -> "た"
+            in 'な'..'の' -> "な"
+            in 'は'..'ぽ' -> "は"
+            in 'ま'..'も' -> "ま"
+            in 'ゃ'..'よ' -> "や"
+            in 'ら'..'ろ' -> "ら"
+            else -> "わ"
+        }
+    }
+
+    // ★ A-Z バーの表示と中身を現在の表示状態へ同期する。
+    //   出すのは TRACKS（全曲）×タイトル順のときだけ（他の
+    //   ソートでは並びと文字が対応しないため）。refreshLocalBrowser
+    //   の全経路とテーマ適用から呼ばれる。
+    private fun updateAzIndexBar() {
+        if (!::localAzIndexBar.isInitialized) return
+        val show = localTab == LocalTab.ALL &&
+            appPrefs.localSortMode == AppPreferences.LOCAL_SORT_TITLE &&
+            localDisplayedTracks.isNotEmpty()
+        if (!show) {
+            localAzGroups = emptyList()
+            localAzIndexBar.visibility = View.GONE
+            if (::localTrackList.isInitialized) {
+                localTrackList.setPadding(0, 0, 0, 0)
+            }
+            return
+        }
+        val groups = mutableListOf<Pair<String, Int>>()
+        localDisplayedTracks.forEachIndexed { index, track ->
+            val key = azGroupKeyOf(track)
+            if (groups.lastOrNull()?.first != key) {
+                groups += key to index
+            }
+        }
+        localAzGroups = groups
+        val isDark = isDarkThemeActive()
+        val colorKey = ContextCompat.getColor(
+            this@MainActivity,
+            if (isDark) R.color.text_tertiary else R.color.text_tertiary_light
+        )
+        localAzIndexBar.removeAllViews()
+        for ((key, _) in groups) {
+            val item = TextView(this@MainActivity).apply {
+                text = key
+                textSize = 9.5f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(colorKey)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            }
+            localAzIndexBar.addView(item)
+        }
+        localAzIndexBar.visibility = View.VISIBLE
+        // バーと重なる右端の時刻表示が隠れないよう、一覧側に
+        // バー幅ぶんの余白を空ける。
+        val barWidthPx = (20 * resources.displayMetrics.density).toInt()
+        localTrackList.setPadding(0, 0, barWidthPx, 0)
+        localTrackList.clipToPadding = false
+    }
+
+    // ★ A-Z バーのタッチ処理: 触れた高さのグループの先頭へ
+    //   スクロールする。タップでもなぞり（ドラッグ）でも効く。
+    private fun onAzIndexTouch(event: MotionEvent): Boolean {
+        if (localAzGroups.isEmpty() || localAzIndexBar.height <= 0) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                val ratio = (event.y / localAzIndexBar.height).coerceIn(0f, 0.999f)
+                val groupIndex = (ratio * localAzGroups.size).toInt()
+                val target = localAzGroups[groupIndex].second
+                localTrackList.setSelection(target)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> Unit
+            else -> return false
+        }
+        return true
+    }
+
     private fun updateLocalEmptyMessage(displayedCount: Int, isTrackPage: Boolean) {
         if (localTracks.isEmpty()) {
             textLocalMessage.text = if (!libraryRepository.hasAudioPermission() && appPrefs.safFolderUris.isEmpty()) {
@@ -1257,6 +1421,30 @@ class MainActivity : AppCompatActivity() {
         refreshLocalBrowser()
     }
 
+    // ★ 再生画面（Now Playing）から現在曲のアルバムビューへ
+    //   ジャンプする。selectLocalTab でドリル状態をリセットして
+    //   からキーだけ差し込み、refreshLocalBrowser でドリルイン
+    //   表示にする。再生中の LocalPlayer には一切触らない。
+    private fun jumpToLocalAlbumOfCurrentTrack() {
+        if (currentPlaybackMode != PlaybackMode.LOCAL) return
+        if (!::localPlayer.isInitialized) return
+        val track = localPlayer.currentTrack ?: return
+        selectLocalTab(LocalTab.ALBUM)
+        localGroupKey = albumKeyOf(track)
+        refreshLocalBrowser()
+    }
+
+    // ★ 再生画面から現在曲のアーティストビューへジャンプする
+    //   （アルバムジャンプと同じ作法、アーティストキーを使う）。
+    private fun jumpToLocalArtistOfCurrentTrack() {
+        if (currentPlaybackMode != PlaybackMode.LOCAL) return
+        if (!::localPlayer.isInitialized) return
+        val track = localPlayer.currentTrack ?: return
+        selectLocalTab(LocalTab.ARTIST)
+        localGroupKey = artistGroupKeyOf(track)
+        refreshLocalBrowser()
+    }
+
     // ★ ドリルダウンを1段戻る。戻れたら true。アーティストの
     //   2段目（アルバム内）からはアルバム一覧へ、グループ／
     //   プレイリストのドリルダウンからは一覧へ戻り、ライブラリ
@@ -1286,8 +1474,8 @@ class MainActivity : AppCompatActivity() {
     //   自身と、その配下の全ビュー）。
     private fun isLocalLibraryTab(tab: LocalTab): Boolean =
         tab == LocalTab.LIBRARY_TOP || tab == LocalTab.ALL ||
-            tab == LocalTab.ALBUM || tab == LocalTab.ARTIST ||
-            tab == LocalTab.PLAYLIST
+            tab == LocalTab.RECENT || tab == LocalTab.ALBUM ||
+            tab == LocalTab.ARTIST || tab == LocalTab.PLAYLIST
 
     // ★ 下部タブバーのスロット（左→右）: キュー / 再生 /
     //   ライブラリ の3つ。スワイプでの隣接移動は LocalTab 単位
@@ -1297,7 +1485,7 @@ class MainActivity : AppCompatActivity() {
     private fun localTabSlot(tab: LocalTab): Int = when (tab) {
         LocalTab.QUEUE -> 0
         LocalTab.NOW_PLAYING -> 1
-        LocalTab.LIBRARY_TOP, LocalTab.ALL, LocalTab.ALBUM,
+        LocalTab.LIBRARY_TOP, LocalTab.ALL, LocalTab.RECENT, LocalTab.ALBUM,
         LocalTab.ARTIST, LocalTab.PLAYLIST -> 2
     }
 
@@ -1381,7 +1569,7 @@ class MainActivity : AppCompatActivity() {
     private fun localPageForTab(tab: LocalTab): View = when (tab) {
         LocalTab.QUEUE -> localQueuePage
         LocalTab.NOW_PLAYING -> localNowPlaying
-        LocalTab.LIBRARY_TOP, LocalTab.ALL, LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST ->
+        LocalTab.LIBRARY_TOP, LocalTab.ALL, LocalTab.RECENT, LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST ->
             localBrowserPage
     }
 
@@ -2364,6 +2552,7 @@ class MainActivity : AppCompatActivity() {
             LocalTab.NOW_PLAYING -> R.drawable.ic_tab_now_playing
             LocalTab.LIBRARY_TOP -> R.drawable.ic_tab_library
             LocalTab.ALL -> R.drawable.ic_tab_all
+            LocalTab.RECENT -> R.drawable.ic_tab_recent
             LocalTab.ALBUM -> R.drawable.ic_tab_album
             LocalTab.ARTIST -> R.drawable.ic_tab_artist
             LocalTab.PLAYLIST -> R.drawable.ic_tab_playlist
@@ -2458,7 +2647,7 @@ class MainActivity : AppCompatActivity() {
         return when (tab) {
             LocalTab.ALBUM -> albumKeyOf(track)
             LocalTab.ARTIST -> artistGroupKeyOf(track)
-            LocalTab.ALL, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE,
+            LocalTab.ALL, LocalTab.RECENT, LocalTab.NOW_PLAYING, LocalTab.PLAYLIST, LocalTab.QUEUE,
             LocalTab.LIBRARY_TOP -> ""
         }
     }
@@ -2525,10 +2714,37 @@ class MainActivity : AppCompatActivity() {
         localPlaceholder.visibility = if (isLocal) View.VISIBLE else View.GONE
     }
 
+    // ★ モード切替トグルの配色を現在モードとテーマへ同期する。
+    //   選択中セグメントはアクセント色で塗り文字は黒、非選択は
+    //   塗りなしで地（外枠の面）に馴染ませ、文字は補助色にする。
+    //   外枠 drawable もテーマで切り替える。
     private fun updateModeSwitchUi() {
-        textModeSwitch.text = when (currentPlaybackMode) {
-            PlaybackMode.YT_MUSIC -> "YT MUSIC"
-            PlaybackMode.LOCAL -> "LOCAL"
+        if (!::modeSwitchGroup.isInitialized) return
+        val isDark = isDarkThemeActive()
+        val colorIdle = ContextCompat.getColor(
+            this@MainActivity,
+            if (isDark) R.color.text_secondary else R.color.text_secondary_light
+        )
+        modeSwitchGroup.setBackgroundResource(
+            if (isDark) R.drawable.bg_mode_switch else R.drawable.bg_mode_switch_light
+        )
+        val selectedBg = if (isDark) {
+            R.drawable.bg_mode_segment_selected
+        } else {
+            R.drawable.bg_mode_segment_selected_light
+        }
+        val segments = listOf(
+            textModeYt to (currentPlaybackMode == PlaybackMode.YT_MUSIC),
+            textModeLocal to (currentPlaybackMode == PlaybackMode.LOCAL)
+        )
+        for ((view, selected) in segments) {
+            if (selected) {
+                view.setBackgroundResource(selectedBg)
+                view.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            } else {
+                view.background = null
+                view.setTextColor(colorIdle)
+            }
         }
     }
 
@@ -2899,8 +3115,11 @@ class MainActivity : AppCompatActivity() {
         geckoView = findViewById(R.id.geckoview)
         localPlaceholder = findViewById(R.id.localPlaceholder)
         textLocalMessage = findViewById(R.id.textLocalMessage)
-        textModeSwitch = findViewById(R.id.textModeSwitch)
+        modeSwitchGroup = findViewById(R.id.modeSwitchGroup)
+        textModeYt = findViewById(R.id.textModeYt)
+        textModeLocal = findViewById(R.id.textModeLocal)
         localTrackList = findViewById(R.id.localTrackList)
+        localAzIndexBar = findViewById(R.id.localAzIndexBar)
         localScanProgress = findViewById(R.id.localScanProgress)
         progressLocalScan = findViewById(R.id.progressLocalScan)
         textLocalScanStatus = findViewById(R.id.textLocalScanStatus)
@@ -3161,13 +3380,18 @@ class MainActivity : AppCompatActivity() {
             showDevPresetsDialog()
             true
         }
-        textModeSwitch.setOnClickListener {
+        // ★ モード切替はセグメント単位のタップで即切替（仕様書 §7.2）。
+        //   現在のモード側をタップした場合は switchPlaybackMode が
+        //   no-op になる。確認ダイアログは出さない。
+        textModeYt.setOnClickListener {
             it.hapticTick(appPrefs)
-            // ★ 1 タップ即切替（仕様書 §7.2）。確認ダイアログは出さない。
-            switchPlaybackMode(
-                if (currentPlaybackMode == PlaybackMode.YT_MUSIC) PlaybackMode.LOCAL else PlaybackMode.YT_MUSIC
-            )
+            switchPlaybackMode(PlaybackMode.YT_MUSIC)
         }
+        textModeLocal.setOnClickListener {
+            it.hapticTick(appPrefs)
+            switchPlaybackMode(PlaybackMode.LOCAL)
+        }
+        localAzIndexBar.setOnTouchListener { _, event -> onAzIndexTouch(event) }
         localTrackList.setOnItemClickListener { _, view, position, _ ->
             view?.hapticTick(appPrefs)
             // ★ 曲リストなら表示中リスト順のキューで即再生、グループ
@@ -3293,6 +3517,22 @@ class MainActivity : AppCompatActivity() {
             showAddToPlaylistDialog(track)
             true
         }
+        // ★ 再生画面からのジャンプ（Local モードのみ）:
+        //   アートワーク／アルバム名 → その曲のアルバムビュー、
+        //   アーティスト名 → アーティストビューへドリルインする。
+        //   再生は止めず、表示だけライブラリ側へ移る。
+        imgNpArtwork.setOnClickListener {
+            it.hapticTick(appPrefs)
+            jumpToLocalAlbumOfCurrentTrack()
+        }
+        textNpAlbum.setOnClickListener {
+            it.hapticTick(appPrefs)
+            jumpToLocalAlbumOfCurrentTrack()
+        }
+        textNpArtist.setOnClickListener {
+            it.hapticTick(appPrefs)
+            jumpToLocalArtistOfCurrentTrack()
+        }
         seekNpProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 // ドラッグ中は経過時刻の表示だけ追従させる（シーク自体は
@@ -3347,8 +3587,7 @@ class MainActivity : AppCompatActivity() {
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
-            textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon)
-            textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            updateModeSwitchUi()
             localPlaceholder.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
             textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider))
@@ -3382,6 +3621,7 @@ class MainActivity : AppCompatActivity() {
             btnNpPlayPause.clearColorFilter()
             updateNpToggleStates()
             updateLocalTabStyles()
+            updateAzIndexBar()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
             btnReload.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.label_gray))
@@ -3401,8 +3641,7 @@ class MainActivity : AppCompatActivity() {
             btnReload.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnDspSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon_light)
-            textModeSwitch.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            updateModeSwitchUi()
             localPlaceholder.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
             textLocalMessage.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             localTrackList.divider = ColorDrawable(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
@@ -3436,6 +3675,7 @@ class MainActivity : AppCompatActivity() {
             btnNpPlayPause.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             updateNpToggleStates()
             updateLocalTabStyles()
+            updateAzIndexBar()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
             btnReload.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
@@ -3787,23 +4027,24 @@ class MainActivity : AppCompatActivity() {
             val entry = entries[position]
             val isDark = isDarkThemeActive()
             val colorTitle = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_primary else R.color.text_primary_light)
-            val colorValue = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
+            val colorCount = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light)
+            val colorChevron = ContextCompat.getColor(this@MainActivity, if (isDark) R.color.text_secondary else R.color.text_secondary_light)
 
             val root = (convertView as? LinearLayout)?.takeIf { it.tag == ROW_TAG }
                 ?: buildRow()
             val iconView = root.getChildAt(0) as android.widget.ImageView
-            val nameView = root.getChildAt(1).let { (it as LinearLayout).getChildAt(0) as TextView }
-            val subView = root.getChildAt(1).let { (it as LinearLayout).getChildAt(1) as TextView }
-            val chevronView = root.getChildAt(2) as TextView
+            val nameView = root.getChildAt(1) as TextView
+            val countView = root.getChildAt(2) as TextView
+            val chevronView = root.getChildAt(3) as TextView
 
             val icon = ContextCompat.getDrawable(this@MainActivity, entry.iconRes)?.mutate()
             icon?.setTint(colorTitle)
             iconView.setImageDrawable(icon)
             nameView.text = entry.label
             nameView.setTextColor(colorTitle)
-            subView.text = entry.subLabel
-            subView.setTextColor(colorValue)
-            chevronView.setTextColor(colorValue)
+            countView.text = entry.subLabel
+            countView.setTextColor(colorCount)
+            chevronView.setTextColor(colorChevron)
             return root
         }
 
@@ -3813,7 +4054,7 @@ class MainActivity : AppCompatActivity() {
             val root = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(dp(4), dp(11), dp(4), dp(11))
+                setPadding(dp(6), dp(15), dp(6), dp(15))
                 layoutParams = android.widget.AbsListView.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -3821,34 +4062,29 @@ class MainActivity : AppCompatActivity() {
                 tag = ROW_TAG
             }
             val iconView = android.widget.ImageView(this@MainActivity).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-                    marginEnd = dp(12)
+                layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+                    marginEnd = dp(14)
                 }
             }
-            val texts = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
+            val nameView = TextView(this@MainActivity).apply {
+                textSize = 16f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
-            val nameView = TextView(this@MainActivity).apply {
-                textSize = 14.5f
+            val countView = TextView(this@MainActivity).apply {
+                textSize = 12.5f
                 maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
+                gravity = android.view.Gravity.END
             }
-            val subView = TextView(this@MainActivity).apply {
-                textSize = 11.5f
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(0, dp(2), 0, 0)
-            }
-            texts.addView(nameView)
-            texts.addView(subView)
             val chevronView = TextView(this@MainActivity).apply {
                 text = "›"
-                textSize = 16f
-                setPadding(dp(10), 0, dp(2), 0)
+                textSize = 18f
+                setPadding(dp(8), 0, dp(2), 0)
             }
             root.addView(iconView)
-            root.addView(texts)
+            root.addView(nameView)
+            root.addView(countView)
             root.addView(chevronView)
             return root
         }

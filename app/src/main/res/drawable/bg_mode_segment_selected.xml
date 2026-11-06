@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ モード切替セグメントの選択中塗り（ダーク）。
+     外枠（bg_mode_switch）より少し小さい角丸で、内側に収まる
+     ピルとして描く。色はアクセント（金）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/accent" />
+    <corners android:radius="9dp" />
+</shape>
