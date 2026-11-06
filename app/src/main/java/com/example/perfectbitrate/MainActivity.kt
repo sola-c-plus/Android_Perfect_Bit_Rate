@@ -1192,6 +1192,12 @@ class MainActivity : AppCompatActivity() {
     private val LOCAL_TAB_SWIPE_MIN_DISTANCE_DP = 48f
     private val LOCAL_TAB_SWIPE_MIN_VELOCITY = 120f
     private val LOCAL_TAB_SWIPE_AXIS_RATIO = 2.0f
+    // ドラッグ追従を開始する距離、確定に必要な移動割合と速度。
+    // 開始までは通常のタップ／縦スクロールとして扱い、開始した
+    // 時点からだけページを指の移動量へ追従させる。
+    private val LOCAL_TAB_DRAG_START_DISTANCE_DP = 24f
+    private val LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO = 0.27f
+    private val LOCAL_TAB_DRAG_COMMIT_VELOCITY = 500f
 
     // ★ スワイプでのタブ移動（指の動きに内容が付いてくる向き）:
     //   左スワイプ → 右隣のタブ、右スワイプ → 左隣のタブ（例:
@@ -1222,8 +1228,18 @@ class MainActivity : AppCompatActivity() {
             .firstOrNull { it.visibility == View.VISIBLE }
     }
 
-    // スワイプ切替時のスライド時間（ms）。指への完全追従はせず、
-    // 切替の瞬間に旧ページが退場し新ページが入場する見え方にする。
+    private fun localPageForTab(tab: LocalTab): View = when (tab) {
+        LocalTab.QUEUE -> localQueuePage
+        LocalTab.NOW_PLAYING -> localNowPlaying
+        LocalTab.ALL, LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST ->
+            localBrowserPage
+    }
+
+    private fun isLocalBrowserTab(tab: LocalTab): Boolean =
+        localPageForTab(tab) === localBrowserPage
+
+    // スワイプ切替時のスライド時間（ms）。ドラッグ確定／復帰の
+    // 残り区間のアニメーションにも使い、距離に応じて短縮する。
     private val LOCAL_TAB_SLIDE_DURATION_MS = 280L
 
     // 進行中のスライドアニメーション。新しい切替や通常の再描画
@@ -1231,26 +1247,42 @@ class MainActivity : AppCompatActivity() {
     // 確定させる。
     private val localSlideAnimators = mutableListOf<ViewPropertyAnimator>()
 
-    // ★ 進行中のスライドを即座に確定させる。ViewPropertyAnimator
-    //   の cancel() は withEndAction を同期的に実行するため、
-    //   ここを抜けた時点で旧ページは GONE・全ページの
-    //   translationX は 0 に戻っている。
+    // ★ 進行中のスライド／ドラッグプレビューを即座に確定させる。
+    //   ViewPropertyAnimator の cancel() は withEndAction を同期的に
+    //   実行する作法に合わせ、抜けた時点では表示ページは現在の
+    //   localTab どおりに戻り、全ページの translationX は 0 になる。
     private fun finishLocalPageSlide() {
-        if (localSlideAnimators.isEmpty()) return
-        val running = localSlideAnimators.toList()
-        localSlideAnimators.clear()
-        running.forEach { it.cancel() }
+        if (localSwipeDragActive) {
+            cancelLocalTabDragPreview()
+        }
+        if (localSlideAnimators.isNotEmpty()) {
+            val running = localSlideAnimators.toList()
+            localSlideAnimators.clear()
+            running.forEach { it.cancel() }
+        }
+        if (pendingLocalDragRestoreState != null) {
+            applyPendingLocalDragRestore()
+        }
         if (::localPageContainer.isInitialized) {
             listOf(localNowPlaying, localQueuePage, localBrowserPage)
                 .forEach { it.translationX = 0f }
+            updateLocalPageVisibility()
         }
     }
 
     // ★ スワイプ切替のスライド: 次へ（右隣）なら新ページが右から
     //   入り旧ページが左へ出る、逆なら鏡像。旧ページと新ページが
     //   同じ View（ブラウザ系タブ同士）の場合は入場のみで表現する
-    //   （内容は selectLocalTab で差し替わり済み）。
-    private fun animateLocalPageSlide(oldPage: View?, newPage: View?, toNext: Boolean) {
+    //   （内容は selectLocalTab で差し替わり済み）。startOffset は
+    //   ドラッグで指に追従していた現在位置で、確定アニメーションを
+    //   その位置から滑らかにつなぐために使う。
+    private fun animateLocalPageSlide(
+        oldPage: View?,
+        newPage: View?,
+        toNext: Boolean,
+        startOffset: Float = 0f,
+        durationMs: Long = LOCAL_TAB_SLIDE_DURATION_MS
+    ) {
         if (newPage == null) return
         val width = localPageContainer.width
         if (width <= 0) return
@@ -1258,11 +1290,11 @@ class MainActivity : AppCompatActivity() {
         val interpolator = android.view.animation.DecelerateInterpolator()
         if (oldPage != null && oldPage !== newPage) {
             oldPage.visibility = View.VISIBLE
-            oldPage.translationX = 0f
+            oldPage.translationX = startOffset
             lateinit var outAnimator: ViewPropertyAnimator
             outAnimator = oldPage.animate()
                 .translationX(-enterFrom)
-                .setDuration(LOCAL_TAB_SLIDE_DURATION_MS)
+                .setDuration(durationMs)
                 .setInterpolator(interpolator)
                 .withEndAction {
                     oldPage.visibility = View.GONE
@@ -1272,11 +1304,11 @@ class MainActivity : AppCompatActivity() {
             localSlideAnimators.add(outAnimator)
             outAnimator.start()
         }
-        newPage.translationX = enterFrom
+        newPage.translationX = enterFrom + startOffset
         lateinit var inAnimator: ViewPropertyAnimator
         inAnimator = newPage.animate()
             .translationX(0f)
-            .setDuration(LOCAL_TAB_SLIDE_DURATION_MS)
+            .setDuration(durationMs)
             .setInterpolator(interpolator)
             .withEndAction {
                 newPage.translationX = 0f
@@ -1286,6 +1318,345 @@ class MainActivity : AppCompatActivity() {
         inAnimator.start()
     }
 
+    private data class LocalBrowserUiState(
+        val tab: LocalTab,
+        val groupKey: String?,
+        val artistAlbumKey: String?,
+        val playlistDrillId: Long?
+    )
+
+    private fun captureLocalBrowserUiState(): LocalBrowserUiState = LocalBrowserUiState(
+        tab = localTab,
+        groupKey = localGroupKey,
+        artistAlbumKey = localArtistAlbumKey,
+        playlistDrillId = localPlaylistDrillId
+    )
+
+    private fun restoreLocalBrowserUiState(state: LocalBrowserUiState) {
+        localTab = state.tab
+        localGroupKey = state.groupKey
+        localArtistAlbumKey = state.artistAlbumKey
+        localPlaylistDrillId = state.playlistDrillId
+    }
+
+    private fun applyPendingLocalDragRestore() {
+        val state = pendingLocalDragRestoreState ?: return
+        pendingLocalDragRestoreState = null
+        restoreLocalBrowserUiState(state)
+        refreshLocalBrowser()
+        if (::localPageContainer.isInitialized) {
+            listOf(localNowPlaying, localQueuePage, localBrowserPage)
+                .forEach { it.translationX = 0f }
+        }
+    }
+
+    private fun prepareLocalTabDragTarget(targetTab: LocalTab, toNext: Boolean): Boolean {
+        val sourceTab = localSwipeDragSourceTab ?: return false
+        val sourcePage = localSwipeDragSourcePage ?: return false
+        val targetPage = localPageForTab(targetTab)
+
+        if (isLocalBrowserTab(targetTab) && !isLocalBrowserTab(sourceTab)) {
+            // 別ページからブラウザ系タブを覗く場合だけ、対象タブの
+            // 内容を一時的に描く。戻す場合は保存した元のブラウザ
+            // 状態を復元し、確定する場合は selectLocalTab 側の正規
+            // 状態としてそのまま引き継ぐ。
+            if (localSwipeDragSavedState == null) {
+                localSwipeDragSavedState = captureLocalBrowserUiState()
+            }
+            localTab = targetTab
+            localGroupKey = null
+            localArtistAlbumKey = null
+            localPlaylistDrillId = null
+            refreshLocalBrowser()
+        } else if (targetTab == LocalTab.QUEUE) {
+            refreshQueueTab()
+        } else if (targetTab == LocalTab.NOW_PLAYING && ::localPlayer.isInitialized) {
+            updateLocalNowPlaying(localPlayer.currentTrack)
+            updateLocalNowPlayingProgress()
+        }
+
+        localSwipeDragTargetTab = targetTab
+        localSwipeDragTargetPage = targetPage
+        localSwipeDragToNext = toNext
+        sourcePage.visibility = View.VISIBLE
+        targetPage.visibility = View.VISIBLE
+        return true
+    }
+
+    private fun clearLocalTabDragTarget() {
+        val savedState = localSwipeDragSavedState
+        val targetPage = localSwipeDragTargetPage
+        val sourcePage = localSwipeDragSourcePage
+        localSwipeDragTargetTab = null
+        localSwipeDragTargetPage = null
+        localSwipeDragSavedState = null
+        if (savedState != null) {
+            restoreLocalBrowserUiState(savedState)
+            refreshLocalBrowser()
+        } else if (::localPageContainer.isInitialized) {
+            updateLocalPageVisibility()
+        }
+        if (targetPage != null && targetPage !== sourcePage) {
+            targetPage.translationX = 0f
+        }
+    }
+
+    private fun ensureLocalTabDragTarget(dx: Float): Boolean {
+        val sourceTab = localSwipeDragSourceTab ?: return false
+        if (dx == 0f) return localSwipeDragTargetTab != null
+        val toNext = dx < 0f
+        val sourceIndex = localTabOrder.indexOf(sourceTab)
+        if (sourceIndex < 0) return false
+        val targetIndex = if (toNext) sourceIndex + 1 else sourceIndex - 1
+        if (targetIndex !in localTabOrder.indices) {
+            if (localSwipeDragTargetTab != null) {
+                clearLocalTabDragTarget()
+            }
+            localSwipeDragSourcePage?.translationX = 0f
+            localSwipeDragLastDx = dx
+            return false
+        }
+        val targetTab = localTabOrder[targetIndex]
+        if (localSwipeDragTargetTab == targetTab) {
+            localSwipeDragToNext = toNext
+            return true
+        }
+        if (localSwipeDragTargetTab != null) {
+            clearLocalTabDragTarget()
+        }
+        return prepareLocalTabDragTarget(targetTab, toNext)
+    }
+
+    private fun applyLocalTabDragOffset(dx: Float) {
+        localSwipeDragLastDx = dx
+        val sourcePage = localSwipeDragSourcePage ?: return
+        val targetPage = localSwipeDragTargetPage
+        if (targetPage == null) {
+            sourcePage.translationX = 0f
+            return
+        }
+        if (targetPage === sourcePage) {
+            sourcePage.translationX = dx
+            return
+        }
+        val width = localPageContainer.width
+        if (width <= 0) return
+        val sideOffset = if (localSwipeDragToNext) width.toFloat() else -width.toFloat()
+        sourcePage.translationX = dx
+        targetPage.translationX = dx + sideOffset
+    }
+
+    private fun updateLocalTabDrag(ev: MotionEvent): Boolean {
+        val dx = ev.rawX - localSwipeStartX
+        val dy = ev.rawY - localSwipeStartY
+        val startDistance = LOCAL_TAB_DRAG_START_DISTANCE_DP *
+            resources.displayMetrics.density
+        if (!localSwipeDragActive) {
+            // 縦方向が先に明確になったジェスチャはスクロールとして
+            // 確定させ、このタッチでは横ドラッグへ移行しない。
+            if (abs(dy) > startDistance &&
+                abs(dy) > abs(dx) * LOCAL_TAB_SWIPE_AXIS_RATIO
+            ) {
+                localSwipeTracking = false
+                return false
+            }
+            if (abs(dx) < startDistance ||
+                abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO
+            ) {
+                return false
+            }
+            if (localPageContainer.width <= 0) return false
+            localSwipeDragSourceTab = localTab
+            localSwipeDragSourcePage = currentVisibleLocalPage() ?: return false
+            if (!ensureLocalTabDragTarget(dx)) {
+                localSwipeDragSourceTab = null
+                localSwipeDragSourcePage = null
+                return false
+            }
+            localSwipeDragActive = true
+        } else {
+            ensureLocalTabDragTarget(dx)
+            if (localSwipeDragTargetTab == null) {
+                localSwipeDragLastDx = dx
+                return true
+            }
+        }
+        applyLocalTabDragOffset(dx)
+        return true
+    }
+
+    private fun cancelLocalTabDragPreview() {
+        if (!localSwipeDragActive) return
+        if (localSwipeDragTargetTab != null) {
+            clearLocalTabDragTarget()
+        }
+        localSwipeDragActive = false
+        localSwipeDragSourcePage?.translationX = 0f
+        localSwipeDragSourceTab = null
+        localSwipeDragSourcePage = null
+        localSwipeDragLastDx = 0f
+    }
+
+    private fun rollbackLocalTabDrag() {
+        val sourcePage = localSwipeDragSourcePage
+        val targetPage = localSwipeDragTargetPage
+        val targetTab = localSwipeDragTargetTab
+        val toNext = localSwipeDragToNext
+        val dx = localSwipeDragLastDx
+        val savedState = localSwipeDragSavedState
+        localSwipeDragActive = false
+        localSwipeDragTargetTab = null
+        localSwipeDragTargetPage = null
+        localSwipeDragSavedState = null
+        localSwipeDragSourceTab = null
+        localSwipeDragSourcePage = null
+
+        if (sourcePage == null || targetPage == null || targetTab == null) {
+            sourcePage?.translationX = 0f
+            if (savedState != null) {
+                pendingLocalDragRestoreState = savedState
+                applyPendingLocalDragRestore()
+            }
+            return
+        }
+        val width = localPageContainer.width
+        if (width <= 0) {
+            sourcePage.translationX = 0f
+            targetPage.translationX = 0f
+            if (savedState != null) {
+                pendingLocalDragRestoreState = savedState
+                applyPendingLocalDragRestore()
+            } else {
+                updateLocalPageVisibility()
+            }
+            return
+        }
+
+        pendingLocalDragRestoreState = savedState
+        val duration = (abs(dx) / width * LOCAL_TAB_SLIDE_DURATION_MS)
+            .toLong()
+            .coerceIn(100L, LOCAL_TAB_SLIDE_DURATION_MS)
+        val interpolator = android.view.animation.DecelerateInterpolator()
+        if (targetPage === sourcePage) {
+            lateinit var animator: ViewPropertyAnimator
+            animator = sourcePage.animate()
+                .translationX(0f)
+                .setDuration(duration)
+                .setInterpolator(interpolator)
+                .withEndAction {
+                    sourcePage.translationX = 0f
+                    localSlideAnimators.remove(animator)
+                }
+            localSlideAnimators.add(animator)
+            animator.start()
+            return
+        }
+
+        val sideOffset = if (toNext) width.toFloat() else -width.toFloat()
+        lateinit var sourceAnimator: ViewPropertyAnimator
+        sourceAnimator = sourcePage.animate()
+            .translationX(0f)
+            .setDuration(duration)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                sourcePage.translationX = 0f
+                localSlideAnimators.remove(sourceAnimator)
+            }
+        localSlideAnimators.add(sourceAnimator)
+        sourceAnimator.start()
+
+        lateinit var targetAnimator: ViewPropertyAnimator
+        targetAnimator = targetPage.animate()
+            .translationX(sideOffset)
+            .setDuration(duration)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                targetPage.visibility = View.GONE
+                targetPage.translationX = 0f
+                localSlideAnimators.remove(targetAnimator)
+                applyPendingLocalDragRestore()
+            }
+        localSlideAnimators.add(targetAnimator)
+        targetAnimator.start()
+    }
+
+    private fun commitLocalTabDrag() {
+        val sourcePage = localSwipeDragSourcePage
+        val targetPage = localSwipeDragTargetPage
+        val targetTab = localSwipeDragTargetTab
+        val toNext = localSwipeDragToNext
+        val dx = localSwipeDragLastDx
+        localSwipeDragActive = false
+        localSwipeDragTargetTab = null
+        localSwipeDragTargetPage = null
+        // 別ページからブラウザを覗いていた場合も、確定時は対象
+        // タブを正規の選択状態として引き継ぐため復元しない。
+        localSwipeDragSavedState = null
+        localSwipeDragSourceTab = null
+        localSwipeDragSourcePage = null
+        if (sourcePage == null || targetPage == null || targetTab == null) return
+
+        selectLocalTab(targetTab)
+        val newPage = currentVisibleLocalPage() ?: return
+        val width = localPageContainer.width
+        if (width <= 0) {
+            sourcePage.translationX = 0f
+            newPage.translationX = 0f
+            return
+        }
+        val remaining = (width - abs(dx).toInt()).coerceIn(0, width)
+        val duration = (remaining.toFloat() / width * LOCAL_TAB_SLIDE_DURATION_MS)
+            .toLong()
+            .coerceIn(100L, LOCAL_TAB_SLIDE_DURATION_MS)
+        animateLocalPageSlide(
+            oldPage = sourcePage,
+            newPage = newPage,
+            toNext = toNext,
+            startOffset = dx,
+            durationMs = duration
+        )
+    }
+
+    private fun settleLocalTabDrag(velocityX: Float) {
+        val targetTab = localSwipeDragTargetTab
+        if (targetTab == null) {
+            localSwipeDragActive = false
+            localSwipeDragSourcePage?.translationX = 0f
+            localSwipeDragSourceTab = null
+            localSwipeDragSourcePage = null
+            return
+        }
+        val width = localPageContainer.width
+        val dx = localSwipeDragLastDx
+        val commitByDistance = width > 0 && if (localSwipeDragToNext) {
+            dx <= -width * LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO
+        } else {
+            dx >= width * LOCAL_TAB_DRAG_COMMIT_DISTANCE_RATIO
+        }
+        val commitByVelocity = if (localSwipeDragToNext) {
+            velocityX <= -LOCAL_TAB_DRAG_COMMIT_VELOCITY
+        } else {
+            velocityX >= LOCAL_TAB_DRAG_COMMIT_VELOCITY
+        }
+        if (commitByDistance || commitByVelocity) {
+            commitLocalTabDrag()
+        } else {
+            rollbackLocalTabDrag()
+        }
+    }
+
+    private fun recycleLocalSwipeVelocityTracker() {
+        localSwipeVelocityTracker?.recycle()
+        localSwipeVelocityTracker = null
+    }
+
+    private fun dispatchCancelToLocalChildren(ev: MotionEvent) {
+        val cancelEvent = MotionEvent.obtain(ev)
+        cancelEvent.action = MotionEvent.ACTION_CANCEL
+        super.dispatchTouchEvent(cancelEvent)
+        cancelEvent.recycle()
+    }
+
     // ★ スワイプ検出の追跡状態（dispatchTouchEvent で傍受する）。
     //   前実装（GestureDetector＋各ページへの非消費 OnTouchListener）は
     //   実機で全く反応しなかった: SimpleOnGestureListener は onDown が
@@ -1293,62 +1664,132 @@ class MainActivity : AppCompatActivity() {
     //   onFling が一度も呼ばれなかったのが主因（加えてリスト行などの
     //   子 View がタッチを掴むとページ側リスナへの配送も不安定）。
     //   そのため検出はアクティビティのタッチ配送の入り口で自前
-    //   追跡する。傍受のみでイベントは一切消費せず、通常のタッチ
-    //   処理（縦スクロール・クリック・長押し・シーク）は無影響。
+    //   追跡する。水平ドラッグが成立するまではイベントを一切
+    //   消費せず、通常のタッチ処理（縦スクロール・クリック・
+    //   長押し・シーク）は無影響。成立後はページを指へ追従させ、
+    //   以後の MOVE／UP を消費して行クリック等と競合させない。
     private var localSwipeTracking = false
     private var localSwipeStartX = 0f
     private var localSwipeStartY = 0f
     private var localSwipeStartTimeMs = 0L
+    // ★ ドラッグ追従の状態。成立前は localSwipeTracking のみで
+    //   観察し、成立した瞬間からページを指へ追従させる。source は
+    //   ドラッグ開始時点のタブ／ページで、途中で localTab が
+    //   プレビュー用に切り替わっても開始位置の基準を失わない。
+    private var localSwipeDragActive = false
+    private var localSwipeDragSourceTab: LocalTab? = null
+    private var localSwipeDragSourcePage: View? = null
+    private var localSwipeDragTargetTab: LocalTab? = null
+    private var localSwipeDragTargetPage: View? = null
+    private var localSwipeDragToNext = true
+    private var localSwipeDragLastDx = 0f
+    private var localSwipeDragSavedState: LocalBrowserUiState? = null
+    private var pendingLocalDragRestoreState: LocalBrowserUiState? = null
+    private var localSwipeVelocityTracker: android.view.VelocityTracker? = null
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        trackLocalTabSwipe(ev)
-        return super.dispatchTouchEvent(ev)
+        return if (trackLocalTabSwipe(ev)) {
+            true
+        } else {
+            super.dispatchTouchEvent(ev)
+        }
     }
 
-    private fun trackLocalTabSwipe(ev: MotionEvent) {
+    private fun trackLocalTabSwipe(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                recycleLocalSwipeVelocityTracker()
                 localSwipeTracking = false
-                if (currentPlaybackMode != PlaybackMode.LOCAL) return
-                if (isNpSeeking) return
-                if (!::localPageContainer.isInitialized) return
-                if (localPageContainer.visibility != View.VISIBLE) return
+                if (currentPlaybackMode != PlaybackMode.LOCAL) return false
+                if (isNpSeeking) return false
+                if (!::localPageContainer.isInitialized) return false
+                if (localPageContainer.visibility != View.VISIBLE) return false
+                // 前のスライド／戻りアニメーションが残っていれば、
+                // 新しいタッチの前に確定させてから次へ進む。
+                finishLocalPageSlide()
                 val rect = android.graphics.Rect()
-                if (!localPageContainer.getGlobalVisibleRect(rect)) return
+                if (!localPageContainer.getGlobalVisibleRect(rect)) return false
                 val x = ev.rawX.toInt()
                 val y = ev.rawY.toInt()
-                if (!rect.contains(x, y)) return
+                if (!rect.contains(x, y)) return false
                 // シークバーと検索欄の上から始まるタッチは対象外
                 // （ドラッグや文字入力と誤認しないため）。
-                if (::seekNpProgress.isInitialized && isTouchInside(seekNpProgress, x, y)) return
-                if (::editLocalSearch.isInitialized && isTouchInside(editLocalSearch, x, y)) return
+                if (::seekNpProgress.isInitialized && isTouchInside(seekNpProgress, x, y)) return false
+                if (::editLocalSearch.isInitialized && isTouchInside(editLocalSearch, x, y)) return false
                 localSwipeTracking = true
                 localSwipeStartX = ev.rawX
                 localSwipeStartY = ev.rawY
                 localSwipeStartTimeMs = android.os.SystemClock.uptimeMillis()
+                localSwipeVelocityTracker = android.view.VelocityTracker.obtain()
+                localSwipeVelocityTracker?.addMovement(ev)
+                return false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!localSwipeTracking) return localSwipeDragActive
+                localSwipeVelocityTracker?.addMovement(ev)
+                if (currentPlaybackMode != PlaybackMode.LOCAL || isNpSeeking) {
+                    val wasActive = localSwipeDragActive
+                    localSwipeTracking = false
+                    recycleLocalSwipeVelocityTracker()
+                    if (wasActive) rollbackLocalTabDrag()
+                    return wasActive
+                }
+                val wasActive = localSwipeDragActive
+                val activeNow = updateLocalTabDrag(ev)
+                if (!localSwipeTracking && !wasActive) {
+                    recycleLocalSwipeVelocityTracker()
+                    return false
+                }
+                return activeNow
             }
             MotionEvent.ACTION_UP -> {
-                if (!localSwipeTracking) return
+                if (!localSwipeTracking && !localSwipeDragActive) return false
+                val wasTracking = localSwipeTracking
                 localSwipeTracking = false
-                if (currentPlaybackMode != PlaybackMode.LOCAL) return
-                if (isNpSeeking) return
+                localSwipeVelocityTracker?.addMovement(ev)
+                localSwipeVelocityTracker?.computeCurrentVelocity(1000)
+                val velocityX = localSwipeVelocityTracker?.xVelocity ?: 0f
+                recycleLocalSwipeVelocityTracker()
+                if (!wasTracking && !localSwipeDragActive) return false
+                if (currentPlaybackMode != PlaybackMode.LOCAL || isNpSeeking) {
+                    val wasActive = localSwipeDragActive
+                    if (wasActive) rollbackLocalTabDrag()
+                    return wasActive
+                }
+
+                // MOVE がほとんど配送されなかった短いフリックでも、
+                // 最終位置でドラッグ成立を判定できるようにする。
+                updateLocalTabDrag(ev)
+                if (localSwipeDragActive) {
+                    dispatchCancelToLocalChildren(ev)
+                    settleLocalTabDrag(velocityX)
+                    return true
+                }
+
                 val dx = ev.rawX - localSwipeStartX
                 val dy = ev.rawY - localSwipeStartY
                 val dtMs = android.os.SystemClock.uptimeMillis() - localSwipeStartTimeMs
-                if (dtMs <= 0L) return
+                if (dtMs <= 0L) return false
                 val minDistance = LOCAL_TAB_SWIPE_MIN_DISTANCE_DP *
                     resources.displayMetrics.density
-                if (abs(dx) < minDistance) return
-                if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return
-                val velocityX = abs(dx) / dtMs * 1000f
-                if (velocityX < LOCAL_TAB_SWIPE_MIN_VELOCITY) return
+                if (abs(dx) < minDistance) return false
+                if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return false
+                val averageVelocityX = abs(dx) / dtMs * 1000f
+                if (averageVelocityX < LOCAL_TAB_SWIPE_MIN_VELOCITY) return false
+                dispatchCancelToLocalChildren(ev)
                 // 左スワイプ（指が左へ, dx < 0）→ 右隣のタブ
                 switchLocalTabBySwipe(toNext = dx < 0)
+                return true
             }
             MotionEvent.ACTION_CANCEL -> {
+                val wasActive = localSwipeDragActive
                 localSwipeTracking = false
+                recycleLocalSwipeVelocityTracker()
+                if (wasActive) rollbackLocalTabDrag()
+                return false
             }
         }
+        return false
     }
 
     private fun isTouchInside(view: View, rawX: Int, rawY: Int): Boolean {
@@ -2671,8 +3112,8 @@ class MainActivity : AppCompatActivity() {
         geckoController.sendWebTheme(isDark)
 
         if (isDark) {
-            mainRootLayout.setBackgroundColor(Color.parseColor("#000000"))
-            topInfoPanel?.setBackgroundColor(Color.parseColor("#0D0D0D"))
+            mainRootLayout.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
+            topInfoPanel?.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
             panelDividerLine?.setBackgroundColor(Color.parseColor("#1C1C1C"))
             textDacName.setTextColor(Color.parseColor("#F0F0F0"))
             textRateBits.setTextColor(Color.WHITE)
@@ -2686,7 +3127,7 @@ class MainActivity : AppCompatActivity() {
             btnUiSettings.setBackgroundResource(R.drawable.bg_btn_icon)
             textModeSwitch.setBackgroundResource(R.drawable.bg_btn_icon)
             textModeSwitch.setTextColor(Color.parseColor("#E5A93C"))
-            localPlaceholder.setBackgroundColor(Color.parseColor("#000000"))
+            localPlaceholder.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
             textLocalTitle.setTextColor(Color.parseColor("#F0F0F0"))
             textLocalMessage.setTextColor(Color.parseColor("#888888"))
             btnLocalAddFolder.setBackgroundResource(R.drawable.bg_btn_icon)
@@ -2702,7 +3143,7 @@ class MainActivity : AppCompatActivity() {
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon)
             btnLocalBack.setTextColor(Color.parseColor("#E5A93C"))
             textLocalGroupTitle.setTextColor(Color.parseColor("#F0F0F0"))
-            localNowPlaying.setBackgroundColor(Color.parseColor("#000000"))
+            localNowPlaying.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
             textNpEmpty.setTextColor(Color.parseColor("#888888"))
             textNpQueuePosition.setTextColor(Color.parseColor("#888888"))
             textNpTitle.setTextColor(Color.parseColor("#F0F0F0"))
