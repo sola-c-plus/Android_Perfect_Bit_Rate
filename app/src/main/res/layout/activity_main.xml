@@ -258,8 +258,10 @@
 
             <!-- ★ Local ライブラリのヘッダー: タイトル＋最小限の操作
                  （再スキャン / SAF フォルダ追加）。取得範囲の本格的な設定 UI は
-                 設定画面側の次 PR で実装する。 -->
+                 設定画面側の次 PR で実装する。ブラウザ側のクロームのため、
+                 「再生」タブ表示中はコード側で隠す（updateLocalChromeVisibility）。 -->
             <LinearLayout
+                android:id="@+id/localHeaderRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
@@ -503,15 +505,14 @@
                         android:listSelector="@android:color/transparent" />
                 </LinearLayout>
 
-                <!-- ★ 再生ページ（「再生」タブ）: YT Music の再生画面
-                     の文法（大きなアートワーク → 曲名 → アーティスト
-                     → シークバー → 主要操作）に寄せた Now Playing。
+                <!-- ★ 再生ページ（「再生」タブ）: WALKMAN の再生画面
+                     を手本にした、余白を広く取った中央寄せの
+                     Now Playing（詳細は localNpContent 内のコメント）。
                      全画面オーバーレイにはせず Local コンテンツ領域内
                      のページとして表示するため、上部ステータス
-                     ヘッダーは隠れない。フォーマット情報の小行は
-                     このアプリの性格に合わせた独自要素。色はテーマに
-                     合わせてコード側で切り替える（applyThemeUi）。
-                     現在曲が無いときは空状態（textNpEmpty）を出す。 -->
+                     ヘッダーは隠れない。色はテーマに合わせてコード側で
+                     切り替える（applyThemeUi）。現在曲が無いときは
+                     空状態（textNpEmpty）を出す。 -->
                 <FrameLayout
                     android:id="@+id/localNowPlaying"
                     android:layout_width="match_parent"
@@ -526,49 +527,44 @@
                         android:orientation="vertical"
                         android:paddingStart="8dp"
                         android:paddingEnd="8dp"
-                        android:paddingTop="2dp"
+                        android:paddingTop="14dp"
                         android:paddingBottom="10dp">
 
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:gravity="center_vertical">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="NOW PLAYING"
-                                android:textColor="#888888"
-                                android:textSize="10.5sp"
-                                android:textStyle="bold"
-                                android:fontFamily="@font/font_dap_condensed"
-                                android:letterSpacing="0.08" />
-
-                            <TextView
-                                android:id="@+id/textNpQueuePosition"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:textColor="#888888"
-                                android:textSize="10.5sp"
-                                android:fontFamily="@font/font_dap_mono" />
-                        </LinearLayout>
-
+                        <!-- ★ WALKMAN の再生画面に寄せた中央寄せレイアウト:
+                             アートワークは左右に余白を残して中央に置き、
+                             その下にフォーマット、タイトル/アーティスト/
+                             アルバムをいずれも中央寄せで静かに並べる。
+                             「NOW PLAYING」ラベルは置かず、キュー位置は
+                             シークバーの上に小さく中央表示する。 -->
                         <ImageView
                             android:id="@+id/imgNpArtwork"
                             android:layout_width="match_parent"
                             android:layout_height="0dp"
                             android:layout_weight="1"
-                            android:layout_marginTop="18dp"
+                            android:layout_marginStart="30dp"
+                            android:layout_marginEnd="30dp"
+                            android:layout_marginTop="4dp"
                             android:scaleType="fitCenter"
                             android:src="@drawable/ic_local_artwork_placeholder" />
+
+                        <TextView
+                            android:id="@+id/textNpFormat"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:gravity="center"
+                            android:textColor="#888888"
+                            android:textSize="10.5sp"
+                            android:fontFamily="@font/font_dap_mono"
+                            android:ellipsize="end"
+                            android:maxLines="1" />
 
                         <TextView
                             android:id="@+id/textNpTitle"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="18dp"
+                            android:layout_marginTop="8dp"
+                            android:gravity="center"
                             android:textColor="#F0F0F0"
                             android:textSize="20sp"
                             android:textStyle="bold"
@@ -581,6 +577,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
+                            android:gravity="center"
                             android:textColor="#BBBBBB"
                             android:textSize="14sp"
                             android:ellipsize="end"
@@ -591,26 +588,28 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
+                            android:gravity="center"
                             android:textColor="#888888"
                             android:textSize="12sp"
                             android:ellipsize="end"
                             android:maxLines="1" />
 
+                        <!-- ★ キュー位置（n / N）はシークバーの上に
+                             小さく中央表示（WALKMAN の 56/307 形式） -->
                         <TextView
-                            android:id="@+id/textNpFormat"
+                            android:id="@+id/textNpQueuePosition"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
+                            android:layout_marginTop="18dp"
+                            android:gravity="center"
                             android:textColor="#888888"
                             android:textSize="10.5sp"
-                            android:fontFamily="@font/font_dap_mono"
-                            android:ellipsize="end"
-                            android:maxLines="1" />
+                            android:fontFamily="@font/font_dap_mono" />
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="16dp"
+                            android:layout_marginTop="4dp"
                             android:orientation="horizontal"
                             android:gravity="center_vertical">
 
@@ -645,22 +644,29 @@
                                 android:fontFamily="@font/font_dap_mono" />
                         </LinearLayout>
 
+                        <!-- ★ 操作行は WALKMAN 式: 左端にリピート、
+                             右端にシャッフル、中央に 前へ/再生・
+                             一時停止（大きめ）/次へ -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="14dp"
                             android:orientation="horizontal"
-                            android:gravity="center">
+                            android:gravity="center_vertical">
 
                             <ImageButton
-                                android:id="@+id/btnNpShuffle"
+                                android:id="@+id/btnNpRepeat"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"
-                                android:src="@drawable/ic_shuffle"
+                                android:src="@drawable/ic_repeat"
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_small"
-                                android:padding="9dp"
-                                android:layout_marginEnd="10dp" />
+                                android:padding="9dp" />
+
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1" />
 
                             <ImageButton
                                 android:id="@+id/btnNpPrev"
@@ -689,14 +695,18 @@
                                 android:src="@drawable/ic_skip_next"
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_small"
-                                android:padding="9dp"
-                                android:layout_marginEnd="10dp" />
+                                android:padding="9dp" />
+
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1" />
 
                             <ImageButton
-                                android:id="@+id/btnNpRepeat"
+                                android:id="@+id/btnNpShuffle"
                                 android:layout_width="40dp"
                                 android:layout_height="40dp"
-                                android:src="@drawable/ic_repeat"
+                                android:src="@drawable/ic_shuffle"
                                 android:scaleType="centerInside"
                                 android:background="@drawable/bg_btn_walkman_circle_small"
                                 android:padding="9dp" />
@@ -718,11 +728,13 @@
 
             <!-- ★ ライブラリの下部タブバー: 左から 再生 / 全曲 /
                  アルバム / アーティスト / フォルダ。「再生」は再生
-                 ページへの切替で、再生が始まっても自動では切り替わ
-                 らない。選択状態の配色はコード側でテーマに合わせて
-                 切り替える（updateLocalTabStyles）。ドリルダウン中
-                 も含め Local 表示中は常に出し、タブ切替でドリル
-                 ダウンから抜けられるようにする。 -->
+                 ページへの切替で、一覧で曲をタップして再生が始まった
+                 ときも自動で切り替わる（明示タップ起点のみ。自動進行
+                 や通知からの操作では切り替わらない）。選択状態の配色は
+                 コード側でテーマに合わせて切り替える
+                 （updateLocalTabStyles）。ドリルダウン中も含め Local
+                 表示中は常に出し、タブ切替でドリルダウンから抜けられる
+                 ようにする。 -->
             <LinearLayout
                 android:id="@+id/localTabBar"
                 android:layout_width="match_parent"

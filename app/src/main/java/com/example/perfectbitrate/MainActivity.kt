@@ -74,6 +74,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var geckoView: GeckoView
     private lateinit var localPlaceholder: View
+    // ★ Local 見出し行（LOCAL MUSIC＋フォルダ追加/再スキャン）。
+    //   ブラウザ側のクロームなので「再生」タブでは隠す。
+    private lateinit var localHeaderRow: View
     private lateinit var textLocalTitle: TextView
     private lateinit var textLocalMessage: TextView
     private lateinit var textModeSwitch: TextView
@@ -134,6 +137,12 @@ class MainActivity : AppCompatActivity() {
     //   スキャンの多重実行ガード（仕様書 §6.2 の永続化キャッシュ表示用）
     private var localLibraryShown = false
     private var localScanRunning = false
+    // ★ スキャン進捗クロームの「表示したいか」。実際の visibility は
+    //   選択中タブとの組み合わせで updateLocalChromeVisibility が決める
+    //   （「再生」タブ表示中は進捗表示を出さないため、スキャン側は
+    //   visibility を直接触らず wanted だけを更新する）。
+    private var localScanProgressWanted = false
+    private var localScanUpdatingWanted = false
 
     // ★ ライブラリブラウザの状態（Phase 2-1、下部タブバー）。
     //   localTab: 表示中のタブ（NOW_PLAYING = 再生ページ、それ以外は
@@ -696,16 +705,17 @@ class MainActivity : AppCompatActivity() {
         val foreground = effectiveForceFull || !localLibraryShown
         if (foreground) {
             textLocalMessage.visibility = View.GONE
-            localScanUpdating.visibility = View.GONE
+            localScanUpdatingWanted = false
             progressLocalScan.isIndeterminate = true
             textLocalScanStatus.text = "ライブラリを検索中…"
             textLocalScanCurrent.text = ""
-            localScanProgress.visibility = View.VISIBLE
+            localScanProgressWanted = true
         } else {
-            localScanProgress.visibility = View.GONE
+            localScanProgressWanted = false
             textLocalUpdating.text = "ライブラリを更新中…"
-            localScanUpdating.visibility = View.VISIBLE
+            localScanUpdatingWanted = true
         }
+        updateLocalChromeVisibility()
         libraryRepository.refreshLibrary(
             forceFull = effectiveForceFull,
             onProgress = { progress ->
@@ -714,8 +724,9 @@ class MainActivity : AppCompatActivity() {
         ) { tracks ->
             runOnUiThread {
                 localScanRunning = false
-                localScanProgress.visibility = View.GONE
-                localScanUpdating.visibility = View.GONE
+                localScanProgressWanted = false
+                localScanUpdatingWanted = false
+                updateLocalChromeVisibility()
                 if (currentPlaybackMode != PlaybackMode.LOCAL) return@runOnUiThread
                 applyLocalTracks(tracks)
             }
@@ -785,6 +796,23 @@ class MainActivity : AppCompatActivity() {
             // ブラウザ側の空表示メッセージは再生ページでは出さない
             textLocalMessage.visibility = View.GONE
         }
+        updateLocalChromeVisibility()
+    }
+
+    // ★ ブラウザ側クローム（LOCAL MUSIC 見出し行とスキャン進捗）の
+    //   出し分け。「再生」タブは WALKMAN の再生画面のように情報を
+    //   絞るため、見出し行・進捗表示はどちらも出さない。ブラウザ系
+    //   タブに戻れば、スキャン側が保持する wanted の状態どおりに
+    //   復帰する。スキャン進捗の visibility はここだけが決める
+    //   （スキャン側は wanted の更新のみ）。
+    private fun updateLocalChromeVisibility() {
+        if (!::localHeaderRow.isInitialized) return
+        val showBrowserChrome = localTab != LocalTab.NOW_PLAYING
+        localHeaderRow.visibility = if (showBrowserChrome) View.VISIBLE else View.GONE
+        localScanProgress.visibility =
+            if (showBrowserChrome && localScanProgressWanted) View.VISIBLE else View.GONE
+        localScanUpdating.visibility =
+            if (showBrowserChrome && localScanUpdatingWanted) View.VISIBLE else View.GONE
     }
 
     private fun refreshLocalBrowser() {
@@ -886,6 +914,13 @@ class MainActivity : AppCompatActivity() {
         if (position !in tracks.indices) return
         localPlayer.setQueue(tracks)
         localPlayer.playAt(position)
+        // ★ 明示的な曲タップで再生が始まったときだけ「再生」タブへ
+        //   自動で切り替える（曲終わりの自動進行や通知・ウィジェット
+        //   からの操作では切り替えない。ここは一覧タップの単一の
+        //   起点なので、他の再生開始経路は通らない）。切替の作法は
+        //   タブの手動タップと同じ selectLocalTab に揃える
+        //   （ドリルダウン状態も合わせてリセットされる）。
+        selectLocalTab(LocalTab.NOW_PLAYING)
     }
 
     private fun updateLocalTabStyles() {
@@ -1362,6 +1397,7 @@ class MainActivity : AppCompatActivity() {
 
         geckoView = findViewById(R.id.geckoview)
         localPlaceholder = findViewById(R.id.localPlaceholder)
+        localHeaderRow = findViewById(R.id.localHeaderRow)
         textLocalTitle = findViewById(R.id.textLocalTitle)
         textLocalMessage = findViewById(R.id.textLocalMessage)
         textModeSwitch = findViewById(R.id.textModeSwitch)
