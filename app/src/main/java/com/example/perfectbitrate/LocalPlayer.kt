@@ -7,6 +7,7 @@ import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 // ★ Local Music の供給係（仕様書 §4.1）。GeckoSessionController.Listener と
 //   同じ形の通知（PCM / コーデック / flush / メタデータ / 進捗 / 状態）を
@@ -120,6 +121,49 @@ class LocalPlayer(
     fun queueSize(): Int = synchronized(stateLock) { queue.size }
 
     fun currentIndex(): Int = synchronized(stateLock) { currentIndex }
+
+    // ── シャッフル / リピート（Now Playing） ──
+    //
+    // 状態の正は prefs（AppPreferences）で、ここは読み書きの窓口だけを
+    // 持つ。効くのは自動進行（computeAutoAdvanceIndex）のみで、手動の
+    // next / prev は従来どおり表示順の前後へ動く（シャッフル時の
+    // 「前へ」も履歴ではなく通常の前曲）。
+
+    val shuffleEnabled: Boolean
+        get() = AppPreferences.get().localShuffleEnabled
+
+    val repeatMode: Int
+        get() = AppPreferences.get().localRepeatMode
+
+    fun setShuffleEnabled(enabled: Boolean) {
+        AppPreferences.get().localShuffleEnabled = enabled
+    }
+
+    // リピートを OFF → 全曲 → 1曲 の順に循環させ、新しい状態を返す。
+    fun cycleRepeatMode(): Int {
+        val next = (repeatMode + 1) % 3
+        AppPreferences.get().localRepeatMode = next
+        return next
+    }
+
+    // stateLock 保持必須。自動進行の次インデックスを決める（-1 = 再生終了）。
+    // 優先順位: リピート1曲 > シャッフル > 通常順。リピート全曲は通常順の
+    // 末尾で先頭へ回す。シャッフルは現在曲以外から一様に選ぶ（曲が1つ
+    // だけのときは通常順に落ちる）。
+    private fun computeAutoAdvanceIndexLocked(): Int {
+        if (queue.isEmpty() || currentIndex !in queue.indices) return -1
+        if (repeatMode == AppPreferences.LOCAL_REPEAT_ONE) return currentIndex
+        if (shuffleEnabled && queue.size > 1) {
+            var candidate = Random.nextInt(queue.size)
+            if (candidate == currentIndex) {
+                candidate = (candidate + 1) % queue.size
+            }
+            return candidate
+        }
+        if (currentIndex + 1 < queue.size) return currentIndex + 1
+        if (repeatMode == AppPreferences.LOCAL_REPEAT_ALL) return 0
+        return -1
+    }
 
     // ── 再生制御 ──
 
@@ -406,9 +450,11 @@ class LocalPlayer(
         if (gen != generation) return
         synchronized(stateLock) {
             if (gen != generation) return
-            if (currentIndex + 1 < queue.size) {
-                // ★ 曲の終わり → 次曲へ自動送り（全曲リスト順、仕様書 §4.2）
-                startTrackLocked(currentIndex + 1, 0L)
+            // ★ 曲の終わり → 次曲へ自動送り。行き先はシャッフル /
+            //   リピート設定を反映して決める（仕様書 §4.2 + Now Playing）
+            val nextIndex = computeAutoAdvanceIndexLocked()
+            if (nextIndex >= 0) {
+                startTrackLocked(nextIndex, 0L)
             } else {
                 // キュー末尾まで再生し切った
                 isPlaying = false

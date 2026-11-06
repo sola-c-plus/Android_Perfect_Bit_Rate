@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- ★ ルートは FrameLayout: 通常 UI（mainRootLayout）の上に Local の
+     再生画面（localNowPlaying）を全画面オーバーレイとして重ねるため。 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/mainRootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#000000">
+
+    <LinearLayout
+        android:id="@+id/mainRootLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="#000000">
 
     <LinearLayout
         android:id="@+id/topInfoPanel"
@@ -534,7 +541,282 @@
                 android:dividerHeight="1dp"
                 android:cacheColorHint="@android:color/transparent"
                 android:listSelector="@android:color/transparent" />
+
+            <!-- ★ ミニプレイヤーバー: 再生中 / 読み込み済みの曲がある
+                 ときだけ Local 画面の下部に出す。バー本体のタップで
+                 再生画面（localNowPlaying）を開く。表示条件と内容の
+                 更新は updateLocalMiniPlayer が担う。 -->
+            <LinearLayout
+                android:id="@+id/localMiniPlayer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_btn_icon"
+                android:paddingStart="8dp"
+                android:paddingEnd="4dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/imgLocalMiniArtwork"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:scaleType="centerCrop"
+                    android:src="@drawable/ic_local_artwork_placeholder" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="10dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/textLocalMiniTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#F0F0F0"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:ellipsize="end"
+                        android:maxLines="1" />
+
+                    <TextView
+                        android:id="@+id/textLocalMiniArtist"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="1dp"
+                        android:textColor="#888888"
+                        android:textSize="11sp"
+                        android:ellipsize="end"
+                        android:maxLines="1" />
+                </LinearLayout>
+
+                <ImageButton
+                    android:id="@+id/btnLocalMiniPlayPause"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_pause"
+                    android:scaleType="centerInside"
+                    android:background="@drawable/bg_btn_icon"
+                    android:padding="9dp" />
+
+                <ImageButton
+                    android:id="@+id/btnLocalMiniNext"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_skip_next"
+                    android:scaleType="centerInside"
+                    android:background="@drawable/bg_btn_icon"
+                    android:padding="9dp" />
+            </LinearLayout>
         </LinearLayout>
     </FrameLayout>
+    </LinearLayout>
 
-</LinearLayout>
+    <!-- ★ Local 再生画面（Now Playing）: YT Music の再生画面の文法
+         （大きなアートワーク → 曲名 → アーティスト → シークバー →
+         主要操作）に寄せた全画面オーバーレイ。Local モード専用で、
+         モードを離れたら閉じる（switchPlaybackMode）。フォーマット
+         情報の小行はこのアプリの性格に合わせた独自要素。色はテーマに
+         合わせてコード側で切り替える（applyThemeUi）。 -->
+    <LinearLayout
+        android:id="@+id/localNowPlaying"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="#000000"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="22dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <ImageButton
+                android:id="@+id/btnNpClose"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:src="@drawable/ic_expand_more"
+                android:scaleType="centerInside"
+                android:background="@drawable/bg_btn_icon"
+                android:padding="7dp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="12dp"
+                android:text="NOW PLAYING"
+                android:textColor="#888888"
+                android:textSize="10.5sp"
+                android:textStyle="bold"
+                android:fontFamily="@font/font_dap_condensed"
+                android:letterSpacing="0.08" />
+
+            <TextView
+                android:id="@+id/textNpQueuePosition"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#888888"
+                android:textSize="10.5sp"
+                android:fontFamily="@font/font_dap_mono" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/imgNpArtwork"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="18dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_local_artwork_placeholder" />
+
+        <TextView
+            android:id="@+id/textNpTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:textColor="#F0F0F0"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:fontFamily="@font/font_dap_heading"
+            android:ellipsize="end"
+            android:maxLines="2" />
+
+        <TextView
+            android:id="@+id/textNpArtist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#BBBBBB"
+            android:textSize="14sp"
+            android:ellipsize="end"
+            android:maxLines="1" />
+
+        <TextView
+            android:id="@+id/textNpAlbum"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="#888888"
+            android:textSize="12sp"
+            android:ellipsize="end"
+            android:maxLines="1" />
+
+        <TextView
+            android:id="@+id/textNpFormat"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#888888"
+            android:textSize="10.5sp"
+            android:fontFamily="@font/font_dap_mono"
+            android:ellipsize="end"
+            android:maxLines="1" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/textNpCurrentTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#888888"
+                android:textSize="10.5sp"
+                android:fontFamily="@font/font_dap_mono" />
+
+            <SeekBar
+                android:id="@+id/seekNpProgress"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="1000"
+                android:progress="0"
+                android:progressTint="#E5A93C"
+                android:thumbTint="#FFFFFF"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp" />
+
+            <TextView
+                android:id="@+id/textNpTotalTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textColor="#888888"
+                android:textSize="10.5sp"
+                android:fontFamily="@font/font_dap_mono" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:orientation="horizontal"
+            android:gravity="center">
+
+            <ImageButton
+                android:id="@+id/btnNpShuffle"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_shuffle"
+                android:scaleType="centerInside"
+                android:background="@drawable/bg_btn_walkman_circle_small"
+                android:padding="9dp"
+                android:layout_marginEnd="10dp" />
+
+            <ImageButton
+                android:id="@+id/btnNpPrev"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:src="@drawable/ic_skip_previous"
+                android:scaleType="centerInside"
+                android:background="@drawable/bg_btn_walkman_circle_small"
+                android:padding="9dp"
+                android:layout_marginEnd="10dp" />
+
+            <ImageButton
+                android:id="@+id/btnNpPlayPause"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:src="@drawable/ic_pause"
+                android:scaleType="centerInside"
+                android:background="@drawable/bg_btn_walkman_circle_large"
+                android:padding="13dp"
+                android:layout_marginEnd="10dp" />
+
+            <ImageButton
+                android:id="@+id/btnNpNext"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:src="@drawable/ic_skip_next"
+                android:scaleType="centerInside"
+                android:background="@drawable/bg_btn_walkman_circle_small"
+                android:padding="9dp"
+                android:layout_marginEnd="10dp" />
+
+            <ImageButton
+                android:id="@+id/btnNpRepeat"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_repeat"
+                android:scaleType="centerInside"
+                android:background="@drawable/bg_btn_walkman_circle_small"
+                android:padding="9dp" />
+        </LinearLayout>
+    </LinearLayout>
+
+</FrameLayout>

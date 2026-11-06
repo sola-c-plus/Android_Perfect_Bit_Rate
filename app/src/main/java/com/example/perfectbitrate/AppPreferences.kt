@@ -40,11 +40,19 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_DSD_PCM_RATE_HZ = "dsdPcmRateHz"
         private const val KEY_LOCAL_RESCAN_REQUESTED = "localRescanRequested"
         private const val KEY_LOCAL_SORT_MODE = "localSortMode"
+        private const val KEY_LOCAL_SHUFFLE_ENABLED = "localShuffleEnabled"
+        private const val KEY_LOCAL_REPEAT_MODE = "localRepeatMode"
 
         // ★ Local ライブラリ「全曲」タブのソート種別（Phase 2-1）。
         const val LOCAL_SORT_TITLE = 0
         const val LOCAL_SORT_ARTIST = 1
         const val LOCAL_SORT_ALBUM = 2
+
+        // ★ Local 再生のリピート種別（Now Playing）。トグルは
+        //   OFF → 全曲 → 1曲 の順に循環する。
+        const val LOCAL_REPEAT_OFF = 0
+        const val LOCAL_REPEAT_ALL = 1
+        const val LOCAL_REPEAT_ONE = 2
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -174,6 +182,21 @@ class AppPreferences private constructor(context: Context) {
             return if (stored in LOCAL_SORT_TITLE..LOCAL_SORT_ALBUM) stored else LOCAL_SORT_TITLE
         }
         set(value) = prefs.edit { putInt(KEY_LOCAL_SORT_MODE, value) }
+
+    // ★ Local 再生のシャッフル ON/OFF（Now Playing）。状態の正はここで、
+    //   LocalPlayer の自動進行が都度読む。
+    var localShuffleEnabled: Boolean
+        get() = prefs.getBoolean(KEY_LOCAL_SHUFFLE_ENABLED, false)
+        set(value) = prefs.edit { putBoolean(KEY_LOCAL_SHUFFLE_ENABLED, value) }
+
+    // ★ Local 再生のリピート種別（Now Playing）。選択肢外の値は OFF へ倒す
+    //   （ソート種別と同じ流儀）。
+    var localRepeatMode: Int
+        get() {
+            val stored = prefs.getInt(KEY_LOCAL_REPEAT_MODE, LOCAL_REPEAT_OFF)
+            return if (stored in LOCAL_REPEAT_OFF..LOCAL_REPEAT_ONE) stored else LOCAL_REPEAT_OFF
+        }
+        set(value) = prefs.edit { putInt(KEY_LOCAL_REPEAT_MODE, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)

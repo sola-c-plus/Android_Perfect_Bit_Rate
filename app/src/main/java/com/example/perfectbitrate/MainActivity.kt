@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -38,6 +39,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -95,6 +97,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localGroupHeader: View
     private lateinit var btnLocalBack: TextView
     private lateinit var textLocalGroupTitle: TextView
+    // ★ ミニプレイヤーバー（Local 画面下部）と再生画面（Now Playing）
+    private lateinit var localMiniPlayer: View
+    private lateinit var imgLocalMiniArtwork: ImageView
+    private lateinit var textLocalMiniTitle: TextView
+    private lateinit var textLocalMiniArtist: TextView
+    private lateinit var btnLocalMiniPlayPause: ImageButton
+    private lateinit var btnLocalMiniNext: ImageButton
+    private lateinit var localNowPlaying: View
+    private lateinit var btnNpClose: ImageButton
+    private lateinit var textNpQueuePosition: TextView
+    private lateinit var imgNpArtwork: ImageView
+    private lateinit var textNpTitle: TextView
+    private lateinit var textNpArtist: TextView
+    private lateinit var textNpAlbum: TextView
+    private lateinit var textNpFormat: TextView
+    private lateinit var seekNpProgress: SeekBar
+    private lateinit var textNpCurrentTime: TextView
+    private lateinit var textNpTotalTime: TextView
+    private lateinit var btnNpShuffle: ImageButton
+    private lateinit var btnNpPrev: ImageButton
+    private lateinit var btnNpPlayPause: ImageButton
+    private lateinit var btnNpNext: ImageButton
+    private lateinit var btnNpRepeat: ImageButton
+
+    // ★ 再生画面の開閉状態と、シークバーのドラッグ中フラグ
+    //   （ドラッグ中は進捗ポーリングで表示位置を上書きしない）。
+    private var isNowPlayingOpen = false
+    private var isNpSeeking = false
 
     // ★ Local Music の供給係と楽曲インデックス（仕様書 §4.1 / §6）
     private lateinit var libraryRepository: LibraryRepository
@@ -279,6 +309,7 @@ class MainActivity : AppCompatActivity() {
                     currentDuration = dur
                     playbackService?.updateProgress(pos, dur, true)
                     updateDialogPlayerUi()
+                    updateLocalNowPlayingProgress()
                 }
             }
 
@@ -489,7 +520,11 @@ class MainActivity : AppCompatActivity() {
             currentArtist = artist
             currentArtworkBitmap = artwork
             playbackService?.updateMetadataWithBitmap(title, artist, artwork)
-            runOnUiThread { updateDialogPlayerUi() }
+            runOnUiThread {
+                updateDialogPlayerUi()
+                // ★ アートワーク到着も含め、ミニバー / 再生画面へ反映する
+                updateLocalPlayerChrome()
+            }
         }
 
         override fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean) {
@@ -497,7 +532,10 @@ class MainActivity : AppCompatActivity() {
             currentDuration = durationMs
             isPlayingState = isPlaying
             playbackService?.updateProgress(currentMs, durationMs, isPlaying)
-            runOnUiThread { updateDialogPlayerUi() }
+            runOnUiThread {
+                updateDialogPlayerUi()
+                updateLocalNowPlayingProgress()
+            }
         }
 
         override fun onState(isPlaying: Boolean) {
@@ -513,12 +551,16 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updatePlaybackState(isPlaying)
             runOnUiThread {
                 updateDialogPlayerUi()
+                updateLocalPlayerChrome()
                 localTrackAdapter?.notifyDataSetChanged()
             }
         }
 
         override fun onTrackChanged(index: Int, track: LibraryRepository.Track) {
-            runOnUiThread { localTrackAdapter?.notifyDataSetChanged() }
+            runOnUiThread {
+                updateLocalPlayerChrome()
+                localTrackAdapter?.notifyDataSetChanged()
+            }
         }
     }
 
@@ -530,6 +572,9 @@ class MainActivity : AppCompatActivity() {
     //   ようにする。Local → YT は LocalPlayer を停止しデコーダを解放する。
     private fun switchPlaybackMode(newMode: PlaybackMode) {
         if (newMode == currentPlaybackMode) return
+        // ★ 再生画面（Now Playing）は Local モード専用。モードを離れたら
+        //   必ず閉じる（YT 側に Local の画面が残らないように）。
+        closeLocalNowPlaying()
         if (currentPlaybackMode == PlaybackMode.YT_MUSIC) {
             geckoController.sendCommand("pause")
             userWantsPlayback = false
@@ -577,6 +622,9 @@ class MainActivity : AppCompatActivity() {
             playbackService?.updateMetadataWithBitmap(currentTitle, currentArtist, null)
             playbackService?.updateProgress(0L, 0L, false)
         }
+        // ★ ミニバーの表示もモードと現在曲に合わせておく（Local へ戻った
+        //   ときに前回曲のバーが再生中アイコンのまま残らないように）
+        updateLocalPlayerChrome()
         updateStatus()
         updateDialogPlayerUi()
         Toast.makeText(this, "モード: ${newMode.displayName}", Toast.LENGTH_SHORT).show()
@@ -1301,6 +1349,28 @@ class MainActivity : AppCompatActivity() {
         localGroupHeader = findViewById(R.id.localGroupHeader)
         btnLocalBack = findViewById(R.id.btnLocalBack)
         textLocalGroupTitle = findViewById(R.id.textLocalGroupTitle)
+        localMiniPlayer = findViewById(R.id.localMiniPlayer)
+        imgLocalMiniArtwork = findViewById(R.id.imgLocalMiniArtwork)
+        textLocalMiniTitle = findViewById(R.id.textLocalMiniTitle)
+        textLocalMiniArtist = findViewById(R.id.textLocalMiniArtist)
+        btnLocalMiniPlayPause = findViewById(R.id.btnLocalMiniPlayPause)
+        btnLocalMiniNext = findViewById(R.id.btnLocalMiniNext)
+        localNowPlaying = findViewById(R.id.localNowPlaying)
+        btnNpClose = findViewById(R.id.btnNpClose)
+        textNpQueuePosition = findViewById(R.id.textNpQueuePosition)
+        imgNpArtwork = findViewById(R.id.imgNpArtwork)
+        textNpTitle = findViewById(R.id.textNpTitle)
+        textNpArtist = findViewById(R.id.textNpArtist)
+        textNpAlbum = findViewById(R.id.textNpAlbum)
+        textNpFormat = findViewById(R.id.textNpFormat)
+        seekNpProgress = findViewById(R.id.seekNpProgress)
+        textNpCurrentTime = findViewById(R.id.textNpCurrentTime)
+        textNpTotalTime = findViewById(R.id.textNpTotalTime)
+        btnNpShuffle = findViewById(R.id.btnNpShuffle)
+        btnNpPrev = findViewById(R.id.btnNpPrev)
+        btnNpPlayPause = findViewById(R.id.btnNpPlayPause)
+        btnNpNext = findViewById(R.id.btnNpNext)
+        btnNpRepeat = findViewById(R.id.btnNpRepeat)
 
         libraryRepository = LibraryRepository(this)
         localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
@@ -1432,6 +1502,12 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // ★ 戻る操作の優先順位: 再生画面を閉じる → Local の
+                //   ドリルダウンを戻る → Gecko の履歴を戻る → 終了確認。
+                if (isNowPlayingOpen) {
+                    closeLocalNowPlaying()
+                    return
+                }
                 // ★ Local のドリルダウン中は、まずグループ一覧へ戻る
                 if (currentPlaybackMode == PlaybackMode.LOCAL && localGroupKey != null) {
                     localGroupKey = null
@@ -1551,6 +1627,76 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             safFolderPickerLauncher.launch(null)
         }
+        // ★ ミニプレイヤーバー: 本体タップで再生画面を開く。子ボタンの
+        //   クリックは親へ伝播しないため、本体と競合しない。
+        localMiniPlayer.setOnClickListener {
+            it.hapticTick(appPrefs)
+            openLocalNowPlaying()
+        }
+        btnLocalMiniPlayPause.setOnClickListener {
+            it.hapticTick(appPrefs)
+            val cmd = resolvePlayPauseCommand()
+            noteUserPlaybackIntent(cmd)
+            localPlayer.handleCommand(cmd)
+        }
+        btnLocalMiniNext.setOnClickListener {
+            it.hapticTick(appPrefs)
+            noteUserPlaybackIntent("next")
+            localPlayer.next()
+        }
+        // ★ 再生画面（Now Playing）の操作系
+        btnNpClose.setOnClickListener {
+            it.hapticTick(appPrefs)
+            closeLocalNowPlaying()
+        }
+        btnNpPlayPause.setOnClickListener {
+            it.hapticTick(appPrefs)
+            val cmd = resolvePlayPauseCommand()
+            noteUserPlaybackIntent(cmd)
+            localPlayer.handleCommand(cmd)
+        }
+        btnNpNext.setOnClickListener {
+            it.hapticTick(appPrefs)
+            noteUserPlaybackIntent("next")
+            localPlayer.next()
+        }
+        btnNpPrev.setOnClickListener {
+            it.hapticTick(appPrefs)
+            noteUserPlaybackIntent("prev")
+            localPlayer.prev()
+        }
+        btnNpShuffle.setOnClickListener {
+            it.hapticTick(appPrefs)
+            localPlayer.setShuffleEnabled(!localPlayer.shuffleEnabled)
+            updateNpToggleStates()
+        }
+        btnNpRepeat.setOnClickListener {
+            it.hapticTick(appPrefs)
+            localPlayer.cycleRepeatMode()
+            updateNpToggleStates()
+        }
+        seekNpProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                // ドラッグ中は経過時刻の表示だけ追従させる（シーク自体は
+                // 指を離したタイミングで1回だけ発行する）
+                if (fromUser && currentDuration > 0) {
+                    textNpCurrentTime.text =
+                        formatTrackDuration(currentDuration * progress / 1000L)
+                }
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar?) {
+                isNpSeeking = true
+            }
+
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                isNpSeeking = false
+                if (currentDuration > 0) {
+                    localPlayer.seekTo(currentDuration * (sb?.progress ?: 0) / 1000L)
+                }
+                updateLocalNowPlayingProgress()
+            }
+        })
 
         uiHandler.post(uiUpdateRunnable)
     }
@@ -1601,6 +1747,35 @@ class MainActivity : AppCompatActivity() {
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon)
             btnLocalBack.setTextColor(Color.parseColor("#E5A93C"))
             textLocalGroupTitle.setTextColor(Color.parseColor("#F0F0F0"))
+            localMiniPlayer.setBackgroundResource(R.drawable.bg_btn_icon)
+            textLocalMiniTitle.setTextColor(Color.parseColor("#F0F0F0"))
+            textLocalMiniArtist.setTextColor(Color.parseColor("#888888"))
+            btnLocalMiniPlayPause.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnLocalMiniPlayPause.clearColorFilter()
+            btnLocalMiniNext.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnLocalMiniNext.clearColorFilter()
+            localNowPlaying.setBackgroundColor(Color.parseColor("#000000"))
+            btnNpClose.setBackgroundResource(R.drawable.bg_btn_icon)
+            btnNpClose.setColorFilter(Color.parseColor("#CCCCCC"))
+            textNpQueuePosition.setTextColor(Color.parseColor("#888888"))
+            textNpTitle.setTextColor(Color.parseColor("#F0F0F0"))
+            textNpArtist.setTextColor(Color.parseColor("#BBBBBB"))
+            textNpAlbum.setTextColor(Color.parseColor("#888888"))
+            textNpFormat.setTextColor(Color.parseColor("#888888"))
+            textNpCurrentTime.setTextColor(Color.parseColor("#888888"))
+            textNpTotalTime.setTextColor(Color.parseColor("#888888"))
+            seekNpProgress.progressTintList =
+                ColorStateList.valueOf(Color.parseColor("#E5A93C"))
+            seekNpProgress.thumbTintList = ColorStateList.valueOf(Color.WHITE)
+            btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            btnNpShuffle.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            btnNpRepeat.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            btnNpPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large)
+            btnNpPrev.clearColorFilter()
+            btnNpNext.clearColorFilter()
+            btnNpPlayPause.clearColorFilter()
+            updateNpToggleStates()
             updateLocalTabStyles()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
@@ -1639,6 +1814,36 @@ class MainActivity : AppCompatActivity() {
             btnLocalBack.setBackgroundResource(R.drawable.bg_btn_icon_light)
             btnLocalBack.setTextColor(Color.parseColor("#D49B28"))
             textLocalGroupTitle.setTextColor(Color.parseColor("#1C1C1E"))
+            localMiniPlayer.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            textLocalMiniTitle.setTextColor(Color.parseColor("#1C1C1E"))
+            textLocalMiniArtist.setTextColor(Color.parseColor("#636366"))
+            btnLocalMiniPlayPause.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnLocalMiniPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnLocalMiniNext.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnLocalMiniNext.setColorFilter(Color.parseColor("#1C1C1E"))
+            localNowPlaying.setBackgroundColor(Color.parseColor("#FFFFFF"))
+            btnNpClose.setBackgroundResource(R.drawable.bg_btn_icon_light)
+            btnNpClose.setColorFilter(Color.parseColor("#1C1C1E"))
+            textNpQueuePosition.setTextColor(Color.parseColor("#636366"))
+            textNpTitle.setTextColor(Color.parseColor("#1C1C1E"))
+            textNpArtist.setTextColor(Color.parseColor("#48484A"))
+            textNpAlbum.setTextColor(Color.parseColor("#636366"))
+            textNpFormat.setTextColor(Color.parseColor("#636366"))
+            textNpCurrentTime.setTextColor(Color.parseColor("#636366"))
+            textNpTotalTime.setTextColor(Color.parseColor("#636366"))
+            seekNpProgress.progressTintList =
+                ColorStateList.valueOf(Color.parseColor("#D49B28"))
+            seekNpProgress.thumbTintList =
+                ColorStateList.valueOf(Color.parseColor("#1C1C1E"))
+            btnNpPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            btnNpNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            btnNpShuffle.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            btnNpRepeat.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            btnNpPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
+            btnNpPrev.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnNpNext.setColorFilter(Color.parseColor("#1C1C1E"))
+            btnNpPlayPause.setColorFilter(Color.parseColor("#1C1C1E"))
+            updateNpToggleStates()
             updateLocalTabStyles()
             localTrackAdapter?.notifyDataSetChanged()
             localGroupAdapter?.notifyDataSetChanged()
@@ -1662,6 +1867,175 @@ class MainActivity : AppCompatActivity() {
             currentPositionMs = currentPosition,
             durationMs = currentDuration
         )
+    }
+
+    // ── Local ミニプレイヤーバー / 再生画面（Now Playing） ──
+
+    // ★ ミニバーと再生画面の曲情報を LocalPlayer の現在曲へ同期する。
+    //   曲の変化・再生状態の変化・メタデータ（アートワーク到着）のたびに
+    //   localPlayerListener から呼ばれる。ミニバーは「再生中または
+    //   読み込み済みの曲がある」ときだけ出す（＝再生していない状態で
+    //   再生画面を開く導線は作らない）。
+    private fun updateLocalPlayerChrome() {
+        if (!::localPlayer.isInitialized || !::localMiniPlayer.isInitialized) return
+        val track = localPlayer.currentTrack
+        updateLocalMiniPlayer(track)
+        if (isNowPlayingOpen) updateLocalNowPlaying(track)
+    }
+
+    private fun updateLocalMiniPlayer(track: LibraryRepository.Track?) {
+        if (track == null) {
+            localMiniPlayer.visibility = View.GONE
+            return
+        }
+        localMiniPlayer.visibility = View.VISIBLE
+        textLocalMiniTitle.text = track.title
+        textLocalMiniArtist.text = track.artist.ifBlank { track.displayName }
+        btnLocalMiniPlayPause.setImageResource(
+            if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+        )
+        bindMiniArtwork(track)
+    }
+
+    // ミニバー用サムネイル: 曲行と同じメモリキャッシュ＋遅延読み込みを
+    // 使い回す。再生中アートワーク（currentArtworkBitmap）が既にあれば
+    // それを優先する。tag の URI 照合で別曲の絵の混入を防ぐ（行と同じ作法）。
+    private fun bindMiniArtwork(track: LibraryRepository.Track) {
+        val cacheKey = track.uri.toString()
+        imgLocalMiniArtwork.tag = cacheKey
+        val cached = localThumbCache.get(cacheKey)
+        if (cached != null) {
+            imgLocalMiniArtwork.setImageBitmap(cached)
+            return
+        }
+        val fullArtwork = currentArtworkBitmap
+        if (fullArtwork != null) {
+            imgLocalMiniArtwork.setImageBitmap(fullArtwork)
+            return
+        }
+        imgLocalMiniArtwork.setImageResource(R.drawable.ic_local_artwork_placeholder)
+        if (!::libraryRepository.isInitialized) return
+        libraryRepository.loadThumbnail(track) { bitmap ->
+            if (bitmap == null) return@loadThumbnail
+            localThumbCache.put(cacheKey, bitmap)
+            runOnUiThread {
+                if (imgLocalMiniArtwork.tag == cacheKey) {
+                    imgLocalMiniArtwork.setImageBitmap(bitmap)
+                }
+            }
+        }
+    }
+
+    // ★ 再生画面を開く。Local モード専用で、現在曲が無いときは開かない。
+    private fun openLocalNowPlaying() {
+        if (currentPlaybackMode != PlaybackMode.LOCAL) return
+        if (!::localPlayer.isInitialized) return
+        val track = localPlayer.currentTrack ?: return
+        isNowPlayingOpen = true
+        localNowPlaying.visibility = View.VISIBLE
+        localNowPlaying.bringToFront()
+        updateLocalNowPlaying(track)
+        updateLocalNowPlayingProgress()
+    }
+
+    private fun closeLocalNowPlaying() {
+        if (!isNowPlayingOpen) return
+        isNowPlayingOpen = false
+        isNpSeeking = false
+        if (::localNowPlaying.isInitialized) {
+            localNowPlaying.visibility = View.GONE
+        }
+    }
+
+    // 再生画面の曲情報ブロックを現在曲で描き直す（シーク位置は
+    // updateLocalNowPlayingProgress が別途担う）。現在曲が消えたら
+    // 画面自体を閉じる。
+    private fun updateLocalNowPlaying(track: LibraryRepository.Track?) {
+        if (track == null) {
+            closeLocalNowPlaying()
+            return
+        }
+        textNpTitle.text = track.title
+        textNpArtist.text = track.artist
+        textNpArtist.visibility = if (track.artist.isBlank()) View.GONE else View.VISIBLE
+        textNpAlbum.text = track.album
+        textNpAlbum.visibility = if (track.album.isBlank()) View.GONE else View.VISIBLE
+        textNpFormat.text = buildLocalFormatLabel(track)
+        val queueSize = localPlayer.queueSize()
+        val index = localPlayer.currentIndex()
+        textNpQueuePosition.text =
+            if (queueSize > 0 && index in 0 until queueSize) "${index + 1} / $queueSize" else ""
+        val artwork = currentArtworkBitmap
+        if (artwork != null) {
+            imgNpArtwork.setImageBitmap(artwork)
+        } else {
+            imgNpArtwork.setImageResource(R.drawable.ic_local_artwork_placeholder)
+        }
+        btnNpPlayPause.setImageResource(
+            if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+        )
+        updateNpToggleStates()
+    }
+
+    // フォーマット情報の小行: コーデック / サンプリングレート /
+    // ビット深度 / ビットレート。デコーダの確定値（LocalPlayer の
+    // currentInfo）を優先し、無ければライブラリのタグ値で補う。
+    private fun buildLocalFormatLabel(track: LibraryRepository.Track): String {
+        val info = localPlayer.currentInfo
+        val codec = (info?.codecName ?: track.codecName).uppercase()
+        val rate = info?.sampleRate?.takeIf { it > 0 } ?: track.sampleRate
+        val bits = info?.bitDepth?.takeIf { it > 0 } ?: track.bitDepth
+        val bitRate = info?.bitRate ?: 0L
+        val parts = mutableListOf<String>()
+        if (codec.isNotBlank()) parts += codec
+        if (rate > 0) parts += String.format(Locale.US, "%.1f kHz", rate / 1000.0)
+        if (bits > 0) parts += "$bits bit"
+        if (bitRate > 0) parts += "${bitRate / 1000} kbps"
+        if (track.isDsd || info?.isDsd == true) {
+            parts += "DSD → PCM ${appPrefs.dsdPcmRateHz / 1000.0} kHz"
+        }
+        return parts.joinToString(" • ")
+    }
+
+    // シャッフル / リピートトグルの見た目を LocalPlayer（= prefs）の
+    // 状態へ同期する。有効な側はアクセント色、無効な側はグレーで示す。
+    private fun updateNpToggleStates() {
+        if (!::btnNpShuffle.isInitialized || !::localPlayer.isInitialized) return
+        val isDark = isDarkThemeActive()
+        val colorAccent = Color.parseColor(if (isDark) "#E5A93C" else "#D49B28")
+        val colorOff = Color.parseColor(if (isDark) "#777777" else "#9A9AA0")
+        btnNpShuffle.setColorFilter(
+            if (localPlayer.shuffleEnabled) colorAccent else colorOff
+        )
+        when (localPlayer.repeatMode) {
+            AppPreferences.LOCAL_REPEAT_ALL -> {
+                btnNpRepeat.setImageResource(R.drawable.ic_repeat)
+                btnNpRepeat.setColorFilter(colorAccent)
+            }
+            AppPreferences.LOCAL_REPEAT_ONE -> {
+                btnNpRepeat.setImageResource(R.drawable.ic_repeat_one)
+                btnNpRepeat.setColorFilter(colorAccent)
+            }
+            else -> {
+                btnNpRepeat.setImageResource(R.drawable.ic_repeat)
+                btnNpRepeat.setColorFilter(colorOff)
+            }
+        }
+    }
+
+    // 再生画面のシークバーと時刻表示を現在の再生位置へ同期する。
+    // 呼び出しは Local の進捗ポーリング（250ms）と LocalPlayer の
+    // onProgress からのみ。ドラッグ中は表示を上書きしない。
+    private fun updateLocalNowPlayingProgress() {
+        if (!isNowPlayingOpen || isNpSeeking) return
+        seekNpProgress.progress = if (currentDuration > 0) {
+            ((currentPosition.toDouble() / currentDuration.toDouble()) * 1000)
+                .toInt().coerceIn(0, 1000)
+        } else {
+            0
+        }
+        textNpCurrentTime.text = formatTrackDuration(currentPosition)
+        textNpTotalTime.text = formatTrackDuration(currentDuration)
     }
 
     private fun showDspSettingsDialog() {
