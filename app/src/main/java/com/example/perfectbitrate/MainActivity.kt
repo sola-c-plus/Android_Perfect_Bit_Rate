@@ -654,6 +654,14 @@ class MainActivity : AppCompatActivity() {
                 if (localTab == LocalTab.QUEUE) refreshQueueTab()
             }
         }
+
+        override fun onPlaybackError(message: String) {
+            // ★ Local 再生がエラーで止まった理由をユーザーへ見せる
+            //   （従来は無言で止まっていた）。
+            runOnUiThread {
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     // ★ モード切替（仕様書 §3.2）: 必ず再生を停止し PCM を flush してから切り替える
@@ -2481,6 +2489,9 @@ class MainActivity : AppCompatActivity() {
     private val deviceDetectRunnable = Runnable {
         detectAudioOutputDevice()
         playbackService?.setOutputDevice(activeOutputDevice)
+        // ★ 出力先が変わったら Local のデコードレート上限は解除する
+        //   （新しい経路では素のレートから試し直す）。
+        if (::localPlayer.isInitialized) localPlayer.clearOutputRateCap()
         btCodecTracker.fetchCurrentCodec()
 
         // resume_audio は Gecko 側の復帰コマンドなので YT モード時のみ送る
@@ -2578,6 +2589,53 @@ class MainActivity : AppCompatActivity() {
             //   バグの修正）。表示は updateStatus がスナップショットの実績値を読む。
             playbackService?.onActualBitModeChanged = {
                 runOnUiThread { updateStatus() }
+            }
+
+            // ★ ストリーム構成の結果通知（レートフォールバック発生・
+            //   出力レート上限の要求・構成失敗の上限到達）。
+            playbackService?.onStreamRateFallback = { requestedRate, actualRate ->
+                runOnUiThread {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "出力レートを ${actualRate}Hz に切り替えて再生します（要求 ${requestedRate}Hz）",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    updateStatus()
+                }
+            }
+            playbackService?.onOutputRateCapNeeded = { capHz ->
+                // ★ 出力側がソースレートの AudioTrack を作れなかった
+                //   ため、Local のデコード側で上限レートへ変換して
+                //   供給し直す。YT 側にはデコードレートの概念が無い
+                //   ため、Local モードのときだけ適用する。
+                if (currentPlaybackMode == PlaybackMode.LOCAL) {
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "出力に合わせて ${capHz}Hz に変換して再生します",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    localPlayer.applyOutputRateCap(capHz)
+                }
+            }
+            playbackService?.onStreamConfigurationFailed = { _, targetRate ->
+                // ★ 同じ構成で上限回数失敗した。Local ではその曲を
+                //   理由つきで終え、YT では理由だけ知らせる（従来は
+                //   再構成と破棄が無言で無限に繰り返されていた）。
+                if (currentPlaybackMode == PlaybackMode.LOCAL) {
+                    localPlayer.stopWithError(
+                        "出力ストリームを構成できませんでした（${targetRate}Hz）"
+                    )
+                } else {
+                    runOnUiThread {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "出力ストリームを構成できませんでした（${targetRate}Hz）",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
             }
 
             playbackService?.onPeakListener = { dbL, dbR, mask, queueSize, latencyMs ->

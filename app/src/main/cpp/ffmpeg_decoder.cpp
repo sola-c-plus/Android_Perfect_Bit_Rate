@@ -64,7 +64,7 @@ struct DecoderContext {
     AVFormatContext *fmtCtx = nullptr;
     AVIOContext *avioCtx = nullptr;
     AVCodecContext *codecCtx = nullptr;
-    SwrContext *swrCtx = nullptr; // DSD 経路専用
+    SwrContext *swrCtx = nullptr; // レート変換経路（DSD 変換／出力レート上限）用
     int streamIndex = -1;
 
     // ファイル情報（nativeOpen 成功後に確定）
@@ -272,6 +272,36 @@ int interruptCallback(void *opaque) {
     return ctx->stopRequested.load() ? 1 : 0;
 }
 
+// ★ swresample のセットアップ（DSD の変換レート化と、非 DSD の
+//   出力レート上限への変換で共用）。変換が不要な場合（レート同一
+//   かつ float 形式）は swrCtx を作らず true を返す（従来の直接
+//   変換経路のまま）。失敗時は false（呼び出し側がオープン失敗
+//   として扱う）。
+bool setupSwrIfNeeded(DecoderContext *ctx, int inRate,
+                      enum AVSampleFormat inFmt, int outRate) {
+    if (inRate == outRate && inFmt == AV_SAMPLE_FMT_FLT) return true;
+    AVChannelLayout inLayout;
+    av_channel_layout_default(&inLayout, ctx->srcChannels);
+    AVChannelLayout outLayout;
+    av_channel_layout_default(&outLayout, ctx->channels);
+    SwrContext *swr = swr_alloc();
+    av_opt_set_chlayout(swr, "in_chlayout", &inLayout, 0);
+    av_opt_set_chlayout(swr, "out_chlayout", &outLayout, 0);
+    av_opt_set_int(swr, "in_sample_rate", inRate, 0);
+    av_opt_set_int(swr, "out_sample_rate", outRate, 0);
+    av_opt_set_sample_fmt(swr, "in_sample_fmt", inFmt, 0);
+    av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
+    const bool ok = swr_init(swr) >= 0;
+    if (ok) {
+        ctx->swrCtx = swr;
+    } else {
+        swr_free(&swr);
+    }
+    av_channel_layout_uninit(&inLayout);
+    av_channel_layout_uninit(&outLayout);
+    return ok;
+}
+
 void closeDecoder(DecoderContext *ctx) {
     if (ctx->swrCtx != nullptr) {
         swr_free(&ctx->swrCtx);
@@ -344,7 +374,8 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeRelease(JNIEnv *env, jobject
 JNIEXPORT jint JNICALL
 Java_com_example_perfectbitrate_FfmpegDecoder_nativeOpen(JNIEnv *env, jobject /*thiz*/,
                                                          jlong handle, jboolean useAvio,
-                                                         jstring path, jint dsdPcmRateHz) {
+                                                         jstring path, jint dsdPcmRateHz,
+                                                         jint pcmOutputRateHz) {
     DecoderContext *ctx = fromHandle(handle);
     if (ctx == nullptr) return -1000;
     tlsEnv = env;
@@ -469,32 +500,27 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeOpen(JNIEnv *env, jobject /*
         //   dsdPcmRateHz へ落とす。変換先レイアウトは出力チャンネル数に合わせる。
         const int inRate = ctx->codecCtx->sample_rate;
         ctx->sampleRate = dsdPcmRateHz > 0 ? dsdPcmRateHz : 176400;
-        if (inRate != ctx->sampleRate || ctx->codecCtx->sample_fmt != AV_SAMPLE_FMT_FLT) {
-            AVChannelLayout inLayout;
-            av_channel_layout_default(&inLayout, ctx->srcChannels);
-            AVChannelLayout outLayout;
-            av_channel_layout_default(&outLayout, ctx->channels);
-            SwrContext *swr = swr_alloc();
-            av_opt_set_chlayout(swr, "in_chlayout", &inLayout, 0);
-            av_opt_set_chlayout(swr, "out_chlayout", &outLayout, 0);
-            av_opt_set_int(swr, "in_sample_rate", inRate, 0);
-            av_opt_set_int(swr, "out_sample_rate", ctx->sampleRate, 0);
-            av_opt_set_sample_fmt(swr, "in_sample_fmt", ctx->codecCtx->sample_fmt, 0);
-            av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
-            if (swr_init(swr) < 0) {
-                LOGE("nativeOpen: swr_init failed for DSD path");
-                swr_free(&swr);
-                av_channel_layout_uninit(&inLayout);
-                av_channel_layout_uninit(&outLayout);
-                closeDecoder(ctx);
-                return -1004;
-            }
-            ctx->swrCtx = swr;
-            av_channel_layout_uninit(&inLayout);
-            av_channel_layout_uninit(&outLayout);
+        if (!setupSwrIfNeeded(ctx, inRate, ctx->codecCtx->sample_fmt, ctx->sampleRate)) {
+            LOGE("nativeOpen: swr_init failed for DSD path");
+            closeDecoder(ctx);
+            return -1004;
         }
     } else {
         ctx->sampleRate = ctx->codecCtx->sample_rate;
+        // ★ 出力レート上限（pcmOutputRateHz）: 出力側（AudioTrack）が
+        //   そのレートを作れない場合に、デコード出力を上限レートへ
+        //   変換して供給する。変換は DSD と同じ swresample 経路を
+        //   使う（後段のアップサンプラとは独立）。上限がソース
+        //   レート以上の場合は変換しない（従来動作）。
+        if (pcmOutputRateHz > 0 && pcmOutputRateHz < ctx->sampleRate) {
+            if (!setupSwrIfNeeded(ctx, ctx->sampleRate,
+                                  ctx->codecCtx->sample_fmt, pcmOutputRateHz)) {
+                LOGE("nativeOpen: swr_init failed for output rate cap");
+                closeDecoder(ctx);
+                return -1004;
+            }
+            ctx->sampleRate = pcmOutputRateHz;
+        }
     }
     if (ctx->sampleRate <= 0) ctx->sampleRate = 48000;
 

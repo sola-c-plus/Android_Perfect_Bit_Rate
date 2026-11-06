@@ -7,6 +7,7 @@ import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import kotlin.random.Random
 
 // ★ Local Music の供給係（仕様書 §4.1）。GeckoSessionController.Listener と
@@ -40,6 +41,8 @@ class LocalPlayer(
         fun onProgress(currentMs: Long, durationMs: Long, isPlaying: Boolean)
         fun onState(isPlaying: Boolean)
         fun onTrackChanged(index: Int, track: LibraryRepository.Track)
+        // エラーで再生が止まった理由の通知（無言の停止をなくすため）
+        fun onPlaybackError(message: String)
     }
 
     private val stateLock = Any()
@@ -331,6 +334,70 @@ class LocalPlayer(
             positionMs = 0L
             pendingSeekMs = -1L
             decodeFinished = false
+            // 出力レート上限は出力経路の性質だが、モードを離れたら
+            // 持ち越さない（次回は素のレートから試す）。
+            outputRateCapHz = 0
+            rateCapReopenCount = 0
+        }
+    }
+
+    // ★ エラーで完全に止める（理由をユーザーへ通知する）。モード
+    //   切替用の stop() と違い、状態通知と理由表示まで行う。
+    fun stopWithError(message: String) {
+        synchronized(stateLock) {
+            isPlaying = false
+            generation++
+            stopAndReleaseDecoderLocked()
+            positionMs = 0L
+            pendingSeekMs = -1L
+            decodeFinished = false
+            listener.onState(false)
+            listener.onPlaybackError(message)
+        }
+    }
+
+    // ★ 出力側（Service）の都合でデコード出力レートに上限が必要に
+    //   なったときに MainActivity 経由で呼ばれる（例: 本体出力が
+    //   96kHz の AudioTrack を作れず、48kHz へ落とす必要がある）。
+    //   上限は出力経路の性質なので曲をまたいで保持し（解除は
+    //   stop() と clearOutputRateCap()）、上限より高いレートで
+    //   デコード中の曲があれば、聞こえている位置から変換付きで
+    //   開き直す。開き直し回数には上限を設け、変換しても進展
+    //   しない場合（DSD 等、上限が効かない経路）は理由を出して
+    //   止める（無限の開き直しループにしない）。
+    fun applyOutputRateCap(capHz: Int) {
+        synchronized(stateLock) {
+            if (capHz <= 0) return
+            outputRateCapHz = capHz
+            val currentRate = currentInfo?.sampleRate ?: 0
+            if (currentIndex !in queue.indices || currentRate <= capHz) return
+            if (rateCapReopenCount >= MAX_RATE_CAP_REOPENS) {
+                Log.w(
+                    TAG,
+                    "output rate cap ${capHz}Hz did not take effect " +
+                        "after $rateCapReopenCount reopens"
+                )
+                isPlaying = false
+                generation++
+                stopAndReleaseDecoderLocked()
+                listener.onState(false)
+                listener.onPlaybackError("出力デバイスが対応するレートで再生できませんでした")
+                return
+            }
+            rateCapReopenCount++
+            Log.i(
+                TAG,
+                "applying output rate cap ${capHz}Hz (was ${currentRate}Hz), reopening"
+            )
+            startTrackLocked(currentIndex, displayPositionMs(), isDecodeRetry = true)
+        }
+    }
+
+    // 出力デバイス変更等で上限が不要になった場合の解除。
+    fun clearOutputRateCap() {
+        synchronized(stateLock) {
+            outputRateCapHz = 0
+            rateCapReopenCount = 0
         }
     }
 
@@ -444,7 +511,9 @@ class LocalPlayer(
         val track = queue[index]
         val gen = ++generation
         if (!isDecodeRetry) {
-            lastDecodeErrorRetryPositionMs = -1L
+            lastDecodeErrorLocusMs = -1L
+            decodeErrorRetriesAtLocus = 0
+            rateCapReopenCount = 0
         }
 
         // ★ フラッシュはデコーダのオープンより先に送る。Service の
@@ -492,7 +561,7 @@ class LocalPlayer(
         }
 
         val dsdRate = AppPreferences.get().dsdPcmRateHz
-        val opened = dec.openUri(track.uri, dsdRate)
+        val opened = dec.openUri(track.uri, dsdRate, outputRateCapHz)
         if (!opened) {
             Log.w(TAG, "startTrack: open failed: ${track.displayName}")
             isPlaying = false
@@ -560,27 +629,48 @@ class LocalPlayer(
                 // ★ デコードエラーで即・全停止にしない。一時的な読み取り
                 //   失敗（SAF 越しの瞬断など）やコーデックの一時的な
                 //   異常でも、聞こえている位置から開き直せば再開できる
-                //   ことが多い。同じ位置付近で繰り返す場合（ファイル
-                //   自体の破損など）はリトライせず従来どおり止める:
-                //   リトライ位置が前回のリトライ位置から十分に進んで
-                //   いる場合だけ、もう一度だけ開き直す。
-                val retryAtMs = displayPositionMs()
-                val lastRetryAtMs = lastDecodeErrorRetryPositionMs
+                //   ことが多い。
+                // ★ リトライ可否は「デコード位置（読み取り位置）」で
+                //   判定する。旧方式は表示位置＋3秒ルールだったが、
+                //   リトライは表示位置から開き直すため、再開した
+                //   デコーダはキュー滞留分だけ先にある同じ不良箇所へ
+                //   ほぼ即座に再到達し、その時点で表示位置は 3 秒
+                //   進んでおらず、2 回目のエラーが常に対策をすり
+                //   抜けて全停止していた。デコード位置同士なら同じ
+                //   不良箇所はほぼ同じ位置になるため、「同一位置
+                //   近傍のエラー」を数えて上限を設ける形に変える
+                //   （上限到達 = その箇所は恒常的に読めないとみなし
+                //   て停止し、理由をユーザーへ出す。破損ファイルで
+                //   止まる従来の意図は維持される）。
+                val errorPosMs = positionMs // デコード位置（最後に送出したチャンクの位置）
+                val sameLocus = lastDecodeErrorLocusMs >= 0L &&
+                    abs(errorPosMs - lastDecodeErrorLocusMs) <=
+                    DECODE_RETRY_SAME_LOCUS_WINDOW_MS
+                val retriesAtLocus = if (sameLocus) decodeErrorRetriesAtLocus else 0
                 if (currentIndex in queue.indices &&
-                    (lastRetryAtMs < 0L || retryAtMs - lastRetryAtMs > DECODE_RETRY_MIN_ADVANCE_MS)
+                    retriesAtLocus < DECODE_RETRY_MAX_PER_LOCUS
                 ) {
-                    lastDecodeErrorRetryPositionMs = retryAtMs
+                    lastDecodeErrorLocusMs = errorPosMs
+                    decodeErrorRetriesAtLocus = retriesAtLocus + 1
+                    val retryAtMs = displayPositionMs()
                     Log.w(
                         TAG,
-                        "decode error at index=$currentIndex, reopening at ${retryAtMs}ms"
+                        "decode error at index=$currentIndex decodePos=${errorPosMs}ms, " +
+                            "reopening at ${retryAtMs}ms " +
+                            "(retry ${retriesAtLocus + 1}/$DECODE_RETRY_MAX_PER_LOCUS at this locus)"
                     )
                     startTrackLocked(currentIndex, retryAtMs, isDecodeRetry = true)
                     return
                 }
-                Log.w(TAG, "decode ended with error at index=$currentIndex")
+                Log.w(
+                    TAG,
+                    "decode ended with error at index=$currentIndex decodePos=${errorPosMs}ms"
+                )
                 isPlaying = false
                 listener.onState(false)
                 listener.onProgress(displayPositionMs(), durationMs, false)
+                // ★ 無言で止めない: 停止理由をユーザーへ見せる
+                listener.onPlaybackError("読み取りエラーのため再生を停止しました")
                 return
             }
             // ★ デコード完了 ≠ 再生完了。Service のキューには未再生の PCM が
@@ -682,16 +772,28 @@ class LocalPlayer(
 
     private var consecutiveOpenFailures = 0
 
-    // デコードエラーのリトライを行った位置（表示位置 ms）。同じ位置
-    // 付近での再エラーではリトライしないための記録で、新しい曲の
-    // 開始（リトライでない startTrackLocked）でリセットされる。
-    private var lastDecodeErrorRetryPositionMs = -1L
+    // デコードエラーのリトライ管理（デコード位置基準）。
+    // lastDecodeErrorLocusMs は直近にリトライしたエラーのデコード
+    // 位置、decodeErrorRetriesAtLocus はその位置近傍で既に使った
+    // リトライ回数。新しい曲の開始（リトライでない startTrackLocked）
+    // でリセットされる。
+    private var lastDecodeErrorLocusMs = -1L
+    private var decodeErrorRetriesAtLocus = 0
+
+    // 出力レート上限（Hz、0 = 上限なし）。Service 側で AudioTrack を
+    // 作れないレートだった場合に、デコード側（既存の swresample
+    // 経路）で変換して供給するための上限。出力経路の性質なので
+    // 曲をまたいで保持する。
+    private var outputRateCapHz = 0
+    private var rateCapReopenCount = 0
 
     private fun autoAdvanceAfterFailure(gen: Int, failedIndex: Int) {
         // startTrackLocked 内（stateLock 保持中）から呼ばれる前提
         consecutiveOpenFailures++
         if (consecutiveOpenFailures > MAX_CONSECUTIVE_FAILURES) {
             consecutiveOpenFailures = 0
+            // ★ 無言で止めない: 停止理由をユーザーへ見せる
+            listener.onPlaybackError("再生できない曲が続いたため停止しました")
             return
         }
         // 開けない曲は実効再生順の次へ送る（順序表に無い場合は
@@ -761,8 +863,13 @@ class LocalPlayer(
         // 流れ切るまで待つ猶予と、そのポーリング間隔
         private const val DRAIN_POLL_INTERVAL_MS = 50L
         private const val DRAIN_SETTLE_MS = 500L
-        // デコードエラーのリトライ可否: 前回のリトライ位置からこの時間
-        // 以上デコード（表示位置）が進んでいる場合だけ再リトライする
-        private const val DECODE_RETRY_MIN_ADVANCE_MS = 3000L
+        // デコードエラーのリトライ: 同一位置近傍とみなす幅と、その
+        // 位置近傍でのリトライ上限（デコード位置基準。表示位置＋
+        // 3秒進展ルールだった旧方式は、再開デコーダが同じ不良
+        // 箇所へ即再到達して常に対策をすり抜けたため置き換えた）
+        private const val DECODE_RETRY_SAME_LOCUS_WINDOW_MS = 3000L
+        private const val DECODE_RETRY_MAX_PER_LOCUS = 2
+        // 出力レート上限の適用（変換付きで開き直す）の上限回数
+        private const val MAX_RATE_CAP_REOPENS = 3
     }
 }
