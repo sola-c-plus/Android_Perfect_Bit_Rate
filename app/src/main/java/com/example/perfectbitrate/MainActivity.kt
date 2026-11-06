@@ -567,8 +567,16 @@ class MainActivity : AppCompatActivity() {
             ensureLocalLibrary()
             return
         }
+        // ★ 設定画面で「ライブラリの再スキャン」が予約されていたら、この
+        //   スキャンを強制フルリフレッシュとして実行し、予約を消費する
+        //   （予約の消費はスキャンを実際に開始できる場合に限る）。
+        val rescanRequested = appPrefs.localRescanRequested
+        if (rescanRequested) {
+            appPrefs.localRescanRequested = false
+        }
+        val effectiveForceFull = forceFull || rescanRequested
         localScanRunning = true
-        val foreground = forceFull || !localLibraryShown
+        val foreground = effectiveForceFull || !localLibraryShown
         if (foreground) {
             textLocalMessage.visibility = View.GONE
             localScanUpdating.visibility = View.GONE
@@ -582,7 +590,7 @@ class MainActivity : AppCompatActivity() {
             localScanUpdating.visibility = View.VISIBLE
         }
         libraryRepository.refreshLibrary(
-            forceFull = forceFull,
+            forceFull = effectiveForceFull,
             onProgress = { progress ->
                 runOnUiThread { updateLocalScanProgress(progress, foreground) }
             }
@@ -662,7 +670,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     // ★ SAF フォルダ追加: 永続化許可を取って prefs へ保存し、ライブラリを再読込する。
-    //   取得範囲の管理 UI（削除など）は設定画面の次 PR で実装する。
+    //   取得範囲の管理（追加/削除）は設定画面にも同じ導線がある（prefs を共有）。
     private val safFolderPickerLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             if (uri == null) return@registerForActivityResult
@@ -852,15 +860,22 @@ class MainActivity : AppCompatActivity() {
     // ★ 設定画面（SettingsActivity）からの戻り: 永続化されたモードを正として
     //   同期し（設定画面は永続化までを担当、実際の切替はここで一元化する）、
     //   依頼があれば既存の DSP / UI 設定ダイアログを開く。
+    //   モードが変わっていない Local 表示中は、取得範囲（MediaStore
+    //   ON/OFF・SAF フォルダ）の変更を一覧へ反映するため再読込する
+    //   （仕様書 §6.1: 取得範囲を変えたら再スキャンして一覧を更新する）。
     private val settingsLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val savedMode = appPrefs.playbackMode
-            if (savedMode != currentPlaybackMode) {
+            val modeChanged = savedMode != currentPlaybackMode
+            if (modeChanged) {
                 switchPlaybackMode(savedMode)
             }
             when (result.data?.getStringExtra(SettingsActivity.EXTRA_ACTION)) {
                 SettingsActivity.ACTION_OPEN_DSP -> showDspSettingsDialog()
                 SettingsActivity.ACTION_OPEN_UI -> showUiSettingsDialog()
+            }
+            if (!modeChanged && currentPlaybackMode == PlaybackMode.LOCAL) {
+                reloadLocalLibrary()
             }
         }
 

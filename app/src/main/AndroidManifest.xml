@@ -41,6 +41,11 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode" />
 
         <activity
+            android:name=".LicenseActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode" />
+
+        <activity
             android:name=".PlayerWidgetConfigureActivity"
             android:exported="true"
             android:theme="@style/Theme.AppCompat.DayNight.Dialog">

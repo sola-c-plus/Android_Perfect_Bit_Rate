@@ -38,6 +38,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_USE_MEDIASTORE = "useMediaStore"
         private const val KEY_SAF_FOLDER_URIS = "safFolderUris"
         private const val KEY_DSD_PCM_RATE_HZ = "dsdPcmRateHz"
+        private const val KEY_LOCAL_RESCAN_REQUESTED = "localRescanRequested"
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -131,8 +132,8 @@ class AppPreferences private constructor(context: Context) {
         get() = PlaybackMode.fromPrefValue(prefs.getString(KEY_PLAYBACK_MODE, PlaybackMode.YT_MUSIC.prefValue))
         set(value) = prefs.edit { putString(KEY_PLAYBACK_MODE, value.prefValue) }
 
-    // ★ Local Music のライブラリ取得範囲（仕様書 §6.1）。設定 UI は次 PR で
-    //   実装し、ここでは永続化と参照の受け口だけを用意する。
+    // ★ Local Music のライブラリ取得範囲（仕様書 §6.1）。
+    //   設定画面（SettingsActivity）から変更する。
     var useMediaStore: Boolean
         get() = prefs.getBoolean(KEY_USE_MEDIASTORE, true)
         set(value) = prefs.edit { putBoolean(KEY_USE_MEDIASTORE, value) }
@@ -150,6 +151,14 @@ class AppPreferences private constructor(context: Context) {
             return if (stored in DSD_PCM_RATE_CHOICES) stored else DSD_PCM_RATE_DEFAULT
         }
         set(value) = prefs.edit { putInt(KEY_DSD_PCM_RATE_HZ, value) }
+
+    // ★ ライブラリ再スキャンの予約フラグ（仕様書 §6.1 の手動再スキャン）。
+    //   設定画面の「ライブラリの再スキャン」で立て、MainActivity が次に
+    //   Local のスキャンを開始するときに強制フルリフレッシュとして
+    //   消費する（消費したら下ろす）。
+    var localRescanRequested: Boolean
+        get() = prefs.getBoolean(KEY_LOCAL_RESCAN_REQUESTED, false)
+        set(value) = prefs.edit { putBoolean(KEY_LOCAL_RESCAN_REQUESTED, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)
