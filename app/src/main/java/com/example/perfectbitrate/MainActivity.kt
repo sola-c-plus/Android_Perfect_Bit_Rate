@@ -30,7 +30,9 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
 import android.util.LruCache
+import android.view.GestureDetector
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
@@ -52,6 +54,7 @@ import org.mozilla.geckoview.GeckoView
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -664,6 +667,10 @@ class MainActivity : AppCompatActivity() {
             localPlayer.stop()
         }
         playbackService?.resetBuffer("mode")
+        // ★ Service 側にも現在の供給元を伝える（ストリーム構成切替中の
+        //   pushPcm の扱いが供給元で異なるため。BitPerfectPlaybackService
+        //   の isLocalSourceActive 参照）。
+        playbackService?.isLocalSourceActive = (newMode == PlaybackMode.LOCAL)
         currentPlaybackMode = newMode
         appPrefs.playbackMode = newMode
         isPlayingState = false
@@ -1118,6 +1125,81 @@ class MainActivity : AppCompatActivity() {
         localGroupKey = null
         localPlaylistDrillId = null
         refreshLocalBrowser()
+    }
+
+    // ★ 下部タブの並び順（左→右）。スワイプでの隣接移動に使う。
+    //   レイアウト（activity_main.xml の localTabBar）と LocalTab の
+    //   宣言順に一致させること。
+    private val localTabOrder = listOf(
+        LocalTab.QUEUE, LocalTab.NOW_PLAYING, LocalTab.ALL,
+        LocalTab.ALBUM, LocalTab.ARTIST, LocalTab.PLAYLIST
+    )
+
+    // スワイプ判定の閾値: 水平フリックとして明確な場合だけタブ切替に
+    // 使うための距離（dp）と、水平優位の条件（|dx| が |dy| の何倍か）。
+    private val LOCAL_TAB_SWIPE_MIN_DISTANCE_DP = 48f
+    private val LOCAL_TAB_SWIPE_MIN_VELOCITY = 120f
+    private val LOCAL_TAB_SWIPE_AXIS_RATIO = 2.0f
+
+    // ★ スワイプでのタブ移動（ユーザー指定の方向）: 左スワイプ →
+    //   左隣のタブ、右スワイプ → 右隣のタブ（例: 再生タブで左へ
+    //   スワイプするとキュー、右へスワイプすると全曲）。端のタブ
+    //   ではそれ以上移動しない。切替の作法はタブのタップと同じ
+    //   selectLocalTab に揃える（ドリルダウン中なら抜けて対象
+    //   タブのトップ表示になる）。
+    private fun switchLocalTabBySwipe(toLeft: Boolean) {
+        val index = localTabOrder.indexOf(localTab)
+        if (index < 0) return
+        val target = if (toLeft) index - 1 else index + 1
+        if (target !in localTabOrder.indices) return
+        selectLocalTab(localTabOrder[target])
+    }
+
+    // ★ Local コンテンツ領域の左右スワイプでタブを切り替える配線。
+    //   リスナは常に false を返し、通常のタッチ処理（リストの縦
+    //   スクロール・クリック・長押し）を一切妨げない。タブ切替に
+    //   使うのは、水平成分が垂直成分を明確に上回るフリックだけ。
+    //   再生ページではシークバーやボタンが自分のタッチを消費する
+    //   ため、ページ側のリスナには届かず競合しない（シーク中の
+    //   フラグでも追加で弾く）。
+    private fun setupLocalTabSwipe() {
+        val detector = GestureDetector(
+            this,
+            object : GestureDetector.SimpleOnGestureListener() {
+                override fun onFling(
+                    e1: MotionEvent?,
+                    e2: MotionEvent,
+                    velocityX: Float,
+                    velocityY: Float
+                ): Boolean {
+                    if (currentPlaybackMode != PlaybackMode.LOCAL) return false
+                    if (isNpSeeking) return false
+                    val start = e1 ?: return false
+                    val dx = e2.x - start.x
+                    val dy = e2.y - start.y
+                    val minDistance = LOCAL_TAB_SWIPE_MIN_DISTANCE_DP *
+                        resources.displayMetrics.density
+                    if (abs(dx) < minDistance) return false
+                    if (abs(dx) < abs(dy) * LOCAL_TAB_SWIPE_AXIS_RATIO) return false
+                    if (abs(velocityX) < LOCAL_TAB_SWIPE_MIN_VELOCITY) return false
+                    if (abs(velocityX) < abs(velocityY) * LOCAL_TAB_SWIPE_AXIS_RATIO) {
+                        return false
+                    }
+                    // 左スワイプ（指が左へ, dx < 0）→ 左隣のタブ
+                    switchLocalTabBySwipe(toLeft = dx < 0)
+                    return true
+                }
+            }
+        )
+        val listener = View.OnTouchListener { _, event ->
+            detector.onTouchEvent(event)
+            false
+        }
+        localTrackList.setOnTouchListener(listener)
+        localQueueList.setOnTouchListener(listener)
+        localBrowserPage.setOnTouchListener(listener)
+        localQueuePage.setOnTouchListener(listener)
+        localNowPlaying.setOnTouchListener(listener)
     }
 
     // 一覧のタップ振り分け: グループ一覧ならドリルダウン、曲リストなら
@@ -1781,6 +1863,10 @@ class MainActivity : AppCompatActivity() {
             val binder = service as BitPerfectPlaybackService.LocalBinder
             playbackService = binder.getService()
             isServiceBound = true
+            // ★ 供給元フラグの初期同期（起動時の保存モードに合わせる。
+            //   以後の切替は switchPlaybackMode が同期する）。
+            playbackService?.isLocalSourceActive =
+                (currentPlaybackMode == PlaybackMode.LOCAL)
             detectAudioOutputDevice()
 
             playbackService?.isVolumeLocked = isVolLockOn
@@ -2215,6 +2301,8 @@ class MainActivity : AppCompatActivity() {
             it.hapticTick(appPrefs)
             selectLocalTab(LocalTab.PLAYLIST)
         }
+        // ★ コンテンツ領域の左右スワイプでもタブ切替できるようにする
+        setupLocalTabSwipe()
         btnLocalBack.setOnClickListener {
             it.hapticTick(appPrefs)
             localGroupKey = null
