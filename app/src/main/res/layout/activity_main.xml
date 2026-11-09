@@ -846,6 +846,166 @@
                 </FrameLayout>
             </FrameLayout>
 
+            <!-- ★ Local 常駐ミニプレイヤー: 「再生」タブ以外のとき
+                 （キュー／ライブラリ表示中）でも現在曲の操作を残す
+                 ための常駐バー。レイアウトは DSP 設定シートの
+                 ミニプレイヤーをそのまま流用する（総高 74dp）。
+                 表示条件（Local モード＋現在曲あり＋再生タブ以外）
+                 はコード側（updateLocalMiniPlayer）が決め、初期
+                 状態は GONE。ページコンテナとタブバーの間に置く
+                 ため、表示してもページ側の高さが縮むだけで他要素
+                 のレイアウトは変わらない。色は直書きせず既存
+                 トークンで置き、ライト側は applyThemeUi で
+                 付け替える。 -->
+            <LinearLayout
+                android:id="@+id/localMiniPlayer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="vertical"
+                android:background="@color/main_background"
+                android:visibility="gone">
+
+                <View
+                    android:id="@+id/miniPlayerDivider"
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/divider" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp">
+
+                    <androidx.cardview.widget.CardView
+                        android:id="@+id/miniPlayerCard"
+                        android:layout_width="58dp"
+                        android:layout_height="58dp"
+                        app:cardCornerRadius="6dp"
+                        app:cardElevation="0dp"
+                        app:cardBackgroundColor="@color/surface_thumbnail">
+
+                        <ImageView
+                            android:id="@+id/imgMiniArtwork"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:scaleType="centerCrop"
+                            android:src="@drawable/ic_local_artwork_placeholder" />
+                    </androidx.cardview.widget.CardView>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:layout_marginStart="12dp"
+                        android:layout_marginEnd="6dp">
+
+                        <TextView
+                            android:id="@+id/textMiniTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text=""
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:fontFamily="@font/font_dap_heading" />
+
+                        <TextView
+                            android:id="@+id/textMiniArtist"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text=""
+                            android:textColor="@color/text_np_artist"
+                            android:textSize="12sp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:layout_marginTop="1dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="2dp">
+
+                            <TextView
+                                android:id="@+id/textMiniCurrentTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0:00"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+
+                            <SeekBar
+                                android:id="@+id/seekMiniProgress"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:max="1000"
+                                android:progress="0"
+                                android:progressTint="@color/accent"
+                                android:thumbTint="@color/white"
+                                android:paddingStart="6dp"
+                                android:paddingEnd="6dp" />
+
+                            <TextView
+                                android:id="@+id/textMiniTotalTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0:00"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="10.5sp"
+                                android:fontFamily="@font/font_dap_mono" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <ImageButton
+                            android:id="@+id/btnMiniPrev"
+                            android:layout_width="34dp"
+                            android:layout_height="34dp"
+                            android:src="@drawable/ic_skip_previous"
+                            android:scaleType="centerInside"
+                            android:background="@drawable/bg_btn_walkman_circle_small"
+                            android:padding="6dp"
+                            android:layout_marginEnd="6dp" />
+
+                        <ImageButton
+                            android:id="@+id/btnMiniPlayPause"
+                            android:layout_width="42dp"
+                            android:layout_height="42dp"
+                            android:src="@drawable/ic_play"
+                            android:scaleType="centerInside"
+                            android:background="@drawable/bg_btn_walkman_circle_large"
+                            android:padding="8dp"
+                            android:layout_marginEnd="6dp" />
+
+                        <ImageButton
+                            android:id="@+id/btnMiniNext"
+                            android:layout_width="34dp"
+                            android:layout_height="34dp"
+                            android:src="@drawable/ic_skip_next"
+                            android:scaleType="centerInside"
+                            android:background="@drawable/bg_btn_walkman_circle_small"
+                            android:padding="6dp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
             <!-- ★ ライブラリの下部タブバー: 左から キュー / 再生 /
                  ライブラリ の3つ。ライブラリは WALKMAN OS の
                  ライブラリートップに相当する専用ページで、TRACKS /

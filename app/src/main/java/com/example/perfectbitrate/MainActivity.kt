@@ -49,12 +49,14 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.cardview.widget.CardView
 import androidx.core.content.ContextCompat
 import org.mozilla.geckoview.GeckoView
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
@@ -143,9 +145,39 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnNpRepeat: ImageButton
     private lateinit var btnNpStar: ImageButton
 
+    // ★ Local 常駐ミニプレイヤー（「再生」タブ以外で出すバー）。
+    //   レイアウトは DSP 設定シートのミニプレイヤーと同一で、操作
+    //   系も再生ページと同じ作法で LocalPlayer へ流す。表示条件は
+    //   updateLocalMiniPlayer が一手に決める。
+    private lateinit var localMiniPlayer: View
+    private lateinit var miniPlayerDivider: View
+    private lateinit var miniPlayerCard: CardView
+    private lateinit var imgMiniArtwork: ImageView
+    private lateinit var textMiniTitle: TextView
+    private lateinit var textMiniArtist: TextView
+    private lateinit var seekMiniProgress: SeekBar
+    private lateinit var textMiniCurrentTime: TextView
+    private lateinit var textMiniTotalTime: TextView
+    private lateinit var btnMiniPrev: ImageButton
+    private lateinit var btnMiniPlayPause: ImageButton
+    private lateinit var btnMiniNext: ImageButton
+
+    // ★ ミニプレイヤーのページスライド連動用: 完全表示時の実測
+    //   高さと上マージン（px）。連動中は高さを露出度で縮めるため、
+    //   自然なサイズ（wrap_content）のときに一度だけ測って保持
+    //   する。-1 は未計測。
+    private var localMiniPlayerFullHeightPx = -1
+    private var localMiniPlayerFullMarginTopPx = -1
+    // ★ スライド連動でバーの高さ／マージンを書き換え中か。
+    //   静止状態へ戻すときに自然サイズへ復元する判定に使う。
+    private var localMiniPlayerSlideShrunk = false
+
     // ★ 再生画面のシークバーのドラッグ中フラグ
     //   （ドラッグ中は進捗ポーリングで表示位置を上書きしない）。
     private var isNpSeeking = false
+    // ★ 常駐ミニプレイヤー側のシークバーのドラッグ中フラグ
+    //   （再生ページ側と独立に持つ）。
+    private var isMiniSeeking = false
 
     // ★ Local Music の供給係と楽曲インデックス（仕様書 §4.1 / §6）
     private lateinit var libraryRepository: LibraryRepository
@@ -398,6 +430,7 @@ class MainActivity : AppCompatActivity() {
                     playbackService?.updateProgress(pos, dur, true)
                     updateDialogPlayerUi()
                     updateLocalNowPlayingProgress()
+                    updateLocalMiniPlayerProgress()
                 }
             }
 
@@ -735,6 +768,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 updateDialogPlayerUi()
                 updateLocalNowPlayingProgress()
+                updateLocalMiniPlayerProgress()
             }
         }
 
@@ -1032,6 +1066,9 @@ class MainActivity : AppCompatActivity() {
             textLocalMessage.visibility = View.GONE
         }
         updateLocalChromeVisibility()
+        // ★ タブ切替で常駐ミニプレイヤーの表示条件（再生タブでは
+        //   隠す）も変わるため、ここでも再評価する。
+        updateLocalMiniPlayer()
     }
 
     // ★ ブラウザ側クローム（スキャン進捗）の出し分け。「再生」
@@ -1704,10 +1741,12 @@ class MainActivity : AppCompatActivity() {
                 .translationX(-enterFrom)
                 .setDuration(durationMs)
                 .setInterpolator(interpolator)
+                .addUpdateListener { applyLocalMiniPlayerSlide() }
                 .withEndAction {
                     oldPage.visibility = View.GONE
                     oldPage.translationX = 0f
                     localSlideAnimators.remove(outAnimator)
+                    applyLocalMiniPlayerSlide()
                 }
             localSlideAnimators.add(outAnimator)
             outAnimator.start()
@@ -1718,9 +1757,11 @@ class MainActivity : AppCompatActivity() {
             .translationX(0f)
             .setDuration(durationMs)
             .setInterpolator(interpolator)
+            .addUpdateListener { applyLocalMiniPlayerSlide() }
             .withEndAction {
                 newPage.translationX = 0f
                 localSlideAnimators.remove(inAnimator)
+                applyLocalMiniPlayerSlide()
             }
         localSlideAnimators.add(inAnimator)
         inAnimator.start()
@@ -1840,10 +1881,12 @@ class MainActivity : AppCompatActivity() {
         val targetPage = localSwipeDragTargetPage
         if (targetPage == null) {
             sourcePage.translationX = 0f
+            applyLocalMiniPlayerSlide()
             return
         }
         if (targetPage === sourcePage) {
             sourcePage.translationX = dx
+            applyLocalMiniPlayerSlide()
             return
         }
         val width = localPageContainer.width
@@ -1851,6 +1894,8 @@ class MainActivity : AppCompatActivity() {
         val sideOffset = if (localSwipeDragToNext) width.toFloat() else -width.toFloat()
         sourcePage.translationX = dx
         targetPage.translationX = dx + sideOffset
+        // ★ ドラッグの進行にミニプレイヤーを連動させる。
+        applyLocalMiniPlayerSlide()
     }
 
     private fun updateLocalTabDrag(ev: MotionEvent): Boolean {
@@ -1905,6 +1950,7 @@ class MainActivity : AppCompatActivity() {
         }
         localSwipeDragActive = false
         localSwipeDragSourcePage?.translationX = 0f
+        applyLocalMiniPlayerSlide()
         localSwipeDragSourceTab = null
         localSwipeDragSourcePage = null
         localSwipeDragLastDx = 0f
@@ -1930,6 +1976,7 @@ class MainActivity : AppCompatActivity() {
                 pendingLocalDragRestoreState = savedState
                 applyPendingLocalDragRestore()
             }
+            applyLocalMiniPlayerSlide()
             return
         }
         val width = localPageContainer.width
@@ -1942,6 +1989,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 updateLocalPageVisibility()
             }
+            applyLocalMiniPlayerSlide()
             return
         }
 
@@ -1956,9 +2004,11 @@ class MainActivity : AppCompatActivity() {
                 .translationX(0f)
                 .setDuration(duration)
                 .setInterpolator(interpolator)
+                .addUpdateListener { applyLocalMiniPlayerSlide() }
                 .withEndAction {
                     sourcePage.translationX = 0f
                     localSlideAnimators.remove(animator)
+                    applyLocalMiniPlayerSlide()
                 }
             localSlideAnimators.add(animator)
             animator.start()
@@ -1971,9 +2021,11 @@ class MainActivity : AppCompatActivity() {
             .translationX(0f)
             .setDuration(duration)
             .setInterpolator(interpolator)
+            .addUpdateListener { applyLocalMiniPlayerSlide() }
             .withEndAction {
                 sourcePage.translationX = 0f
                 localSlideAnimators.remove(sourceAnimator)
+                applyLocalMiniPlayerSlide()
             }
         localSlideAnimators.add(sourceAnimator)
         sourceAnimator.start()
@@ -1983,11 +2035,13 @@ class MainActivity : AppCompatActivity() {
             .translationX(sideOffset)
             .setDuration(duration)
             .setInterpolator(interpolator)
+            .addUpdateListener { applyLocalMiniPlayerSlide() }
             .withEndAction {
                 targetPage.visibility = View.GONE
                 targetPage.translationX = 0f
                 localSlideAnimators.remove(targetAnimator)
                 applyPendingLocalDragRestore()
+                applyLocalMiniPlayerSlide()
             }
         localSlideAnimators.add(targetAnimator)
         targetAnimator.start()
@@ -2015,6 +2069,7 @@ class MainActivity : AppCompatActivity() {
         if (width <= 0) {
             sourcePage.translationX = 0f
             newPage.translationX = 0f
+            applyLocalMiniPlayerSlide()
             return
         }
         val remaining = (width - abs(dx).toInt()).coerceIn(0, width)
@@ -2035,6 +2090,7 @@ class MainActivity : AppCompatActivity() {
         if (targetTab == null) {
             localSwipeDragActive = false
             localSwipeDragSourcePage?.translationX = 0f
+            applyLocalMiniPlayerSlide()
             localSwipeDragSourceTab = null
             localSwipeDragSourcePage = null
             return
@@ -3229,6 +3285,18 @@ class MainActivity : AppCompatActivity() {
         btnNpNext = findViewById(R.id.btnNpNext)
         btnNpRepeat = findViewById(R.id.btnNpRepeat)
         btnNpStar = findViewById(R.id.btnNpStar)
+        localMiniPlayer = findViewById(R.id.localMiniPlayer)
+        miniPlayerDivider = findViewById(R.id.miniPlayerDivider)
+        miniPlayerCard = findViewById(R.id.miniPlayerCard)
+        imgMiniArtwork = findViewById(R.id.imgMiniArtwork)
+        textMiniTitle = findViewById(R.id.textMiniTitle)
+        textMiniArtist = findViewById(R.id.textMiniArtist)
+        seekMiniProgress = findViewById(R.id.seekMiniProgress)
+        textMiniCurrentTime = findViewById(R.id.textMiniCurrentTime)
+        textMiniTotalTime = findViewById(R.id.textMiniTotalTime)
+        btnMiniPrev = findViewById(R.id.btnMiniPrev)
+        btnMiniPlayPause = findViewById(R.id.btnMiniPlayPause)
+        btnMiniNext = findViewById(R.id.btnMiniNext)
 
         libraryRepository = LibraryRepository(this)
         localPlayer = LocalPlayer(this, libraryRepository, localPlayerListener)
@@ -3626,6 +3694,52 @@ class MainActivity : AppCompatActivity() {
                 updateLocalNowPlayingProgress()
             }
         })
+        // ★ 常駐ミニプレイヤーの操作系。ボタンは再生ページと全く
+        //   同じ手順で LocalPlayer へ流す。バーの地（ボタンや
+        //   シークバー以外の領域）のタップは再生タブへの遷移に
+        //   使う（キューの曲タップ時と同じスライド作法）。
+        localMiniPlayer.setOnClickListener {
+            it.hapticTick(appPrefs)
+            selectLocalTabAnimated(LocalTab.NOW_PLAYING)
+        }
+        btnMiniPlayPause.setOnClickListener {
+            it.hapticTick(appPrefs)
+            val cmd = resolvePlayPauseCommand()
+            noteUserPlaybackIntent(cmd)
+            localPlayer.handleCommand(cmd)
+        }
+        btnMiniNext.setOnClickListener {
+            it.hapticTick(appPrefs)
+            noteUserPlaybackIntent("next")
+            localPlayer.next()
+        }
+        btnMiniPrev.setOnClickListener {
+            it.hapticTick(appPrefs)
+            noteUserPlaybackIntent("prev")
+            localPlayer.prev()
+        }
+        seekMiniProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                // 再生ページと同じ作法: ドラッグ中は経過時刻の表示
+                // だけ追従させ、シークは指を離したときに1回だけ。
+                if (fromUser && currentDuration > 0) {
+                    textMiniCurrentTime.text =
+                        formatTrackDuration(currentDuration * progress / 1000L)
+                }
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar?) {
+                isMiniSeeking = true
+            }
+
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                isMiniSeeking = false
+                if (currentDuration > 0) {
+                    localPlayer.seekTo(currentDuration * (sb?.progress ?: 0) / 1000L)
+                }
+                updateLocalMiniPlayerProgress()
+            }
+        })
 
         uiHandler.post(uiUpdateRunnable)
     }
@@ -3690,6 +3804,23 @@ class MainActivity : AppCompatActivity() {
             btnNpPrev.clearColorFilter()
             btnNpNext.clearColorFilter()
             btnNpPlayPause.clearColorFilter()
+            // ★ 常駐ミニプレイヤーも再生ページと同じ作法で付け替える
+            localMiniPlayer.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
+            miniPlayerDivider.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.divider))
+            miniPlayerCard.setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.surface_thumbnail))
+            textMiniTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            textMiniArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_np_artist))
+            textMiniCurrentTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            textMiniTotalTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            seekMiniProgress.progressTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            seekMiniProgress.thumbTintList = ColorStateList.valueOf(Color.WHITE)
+            btnMiniPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            btnMiniNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small)
+            btnMiniPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large)
+            btnMiniPrev.clearColorFilter()
+            btnMiniNext.clearColorFilter()
+            btnMiniPlayPause.clearColorFilter()
             updateNpToggleStates()
             updateLocalTabStyles()
             updateAzIndexBar()
@@ -3744,6 +3875,25 @@ class MainActivity : AppCompatActivity() {
             btnNpPrev.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             btnNpNext.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             btnNpPlayPause.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            // ★ 常駐ミニプレイヤー（ライト側）: アーティスト色は
+            //   再生ページのライト作法（text_secondary_strong）に寄せる
+            localMiniPlayer.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
+            miniPlayerDivider.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.divider_light))
+            miniPlayerCard.setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.surface_thumbnail_light))
+            textMiniTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            textMiniArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_strong_light))
+            textMiniCurrentTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            textMiniTotalTime.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            seekMiniProgress.progressTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.accent_light))
+            seekMiniProgress.thumbTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnMiniPrev.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            btnMiniNext.setBackgroundResource(R.drawable.bg_btn_walkman_circle_small_light)
+            btnMiniPlayPause.setBackgroundResource(R.drawable.bg_btn_walkman_circle_large_light)
+            btnMiniPrev.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnMiniNext.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
+            btnMiniPlayPause.setColorFilter(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             updateNpToggleStates()
             updateLocalTabStyles()
             updateAzIndexBar()
@@ -3780,6 +3930,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateLocalPlayerChrome() {
         if (!::localPlayer.isInitialized || !::localNowPlaying.isInitialized) return
         updateLocalNowPlaying(localPlayer.currentTrack)
+        updateLocalMiniPlayer()
     }
 
     // 再生画面の曲情報ブロックを現在曲で描き直す（シーク位置は
@@ -3882,6 +4033,172 @@ class MainActivity : AppCompatActivity() {
         }
         textNpCurrentTime.text = formatTrackDuration(currentPosition)
         textNpTotalTime.text = formatTrackDuration(currentDuration)
+    }
+
+    // ★ Local 常駐ミニプレイヤーの表示条件と内容を現在曲へ同期
+    //   する。表示条件は Local モード＋現在曲あり（曲が無いとき
+    //   は隠してページ領域を返す）。「再生」タブで隠れる分は、
+    //   ページスライド連動（applyLocalMiniPlayerSlide）が露出度
+    //   で畳んで担うため、ここではタブ条件を見ない。曲情報の
+    //   正は LocalPlayer（共有の currentTitle 等は YT 側の到着で
+    //   書き換わりうるため使わない）、アートワークは再生ページ
+    //   と同じく Local 専用の localArtworkBitmap を正とする。
+    //   再生アイコンの判定も Local の正である localPlayer
+    //   .isPlaying を使う（PR #69 の教訓どおり、共有の
+    //   isPlayingState は YT ページ側の状態で倒れうる）。
+    private fun updateLocalMiniPlayer() {
+        if (!::localPlayer.isInitialized || !::localMiniPlayer.isInitialized) return
+        val track = localPlayer.currentTrack
+        if (currentPlaybackMode != PlaybackMode.LOCAL || track == null) {
+            localMiniPlayer.visibility = View.GONE
+            // 次に表示するとき縮んだ形状が残らないよう、自然な
+            // サイズへ戻しておく（GONE の間は見えない）。
+            restoreLocalMiniPlayerNaturalSize()
+            return
+        }
+        localMiniPlayer.visibility = View.VISIBLE
+        textMiniTitle.text = track.title
+        textMiniArtist.text = track.artist
+        val artwork = localArtworkBitmap
+        if (artwork != null) {
+            imgMiniArtwork.setImageBitmap(artwork)
+        } else {
+            imgMiniArtwork.setImageResource(R.drawable.ic_local_artwork_placeholder)
+        }
+        btnMiniPlayPause.setImageResource(
+            if (localPlayer.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+        )
+        // ★ 現在のスライド露出度を形状へ反映する（静止状態でも
+        //   同じ関数を通すことで、タブ切替・スライド・ドラッグ
+        //   の全経路でバーの形状が揃う）。
+        applyLocalMiniPlayerSlide()
+        updateLocalMiniPlayerProgress()
+    }
+
+    // 常駐ミニプレイヤーのシーク位置と時刻表示を現在の再生位置へ
+    // 同期する。呼び出しは進捗ポーリング（250ms）と LocalPlayer
+    // の onProgress。再生ページ側のようなタブ条件は付けず、バー
+    // の visibility とドラッグ中フラグだけで判定する（バーが
+    // 出ていない間は早期リターンで描画を止める）。
+    private fun updateLocalMiniPlayerProgress() {
+        if (!::localMiniPlayer.isInitialized) return
+        if (localMiniPlayer.visibility != View.VISIBLE || isMiniSeeking) return
+        seekMiniProgress.progress = if (currentDuration > 0) {
+            ((currentPosition.toDouble() / currentDuration.toDouble()) * 1000)
+                .toInt().coerceIn(0, 1000)
+        } else {
+            0
+        }
+        textMiniCurrentTime.text = formatTrackDuration(currentPosition)
+        textMiniTotalTime.text = formatTrackDuration(currentDuration)
+    }
+
+    // ★ 再生ページ（localNowPlaying）の露出度: 0 = 画面に全く
+    //   出ていない、1 = 画面を埋めている。ページの translationX
+    //   から導出するため、ドラッグ追従・スライドアニメーション
+    //   ・静止状態のすべてで同じ意味になる。入場中は |tx| が
+    //   幅→0、出場中は 0→幅へ動くので、どちらも
+    //   「1 - |tx| / 幅」で表せる。ページが GONE のときは 0。
+    private fun localNowPlayingExposure(): Float {
+        if (!::localPageContainer.isInitialized ||
+            !::localNowPlaying.isInitialized
+        ) return 0f
+        if (localNowPlaying.visibility != View.VISIBLE) return 0f
+        val width = localPageContainer.width
+        if (width <= 0) return 0f
+        return (1f - abs(localNowPlaying.translationX) / width)
+            .coerceIn(0f, 1f)
+    }
+
+    // ★ ミニプレイヤーをページスライドへ連動させる（ユーザー
+    //   要望: 再生ページへゆっくりスワイプしたとき、バーが残っ
+    //   たまま最後に急に消えるのではなく、バーごとスライドし
+    //   てほしい）。露出度に応じてバーの高さと上マージンを縮
+    //   め、中身が下端で切り取られながら沈む見え方にする。縮
+    //   んだ分はページコンテナ（weight=1）が吸収するため、タ
+    //   ブバーへ被さらず、レイアウトもガタつかない。露出度 0
+    //   では自然サイズで完全表示、1 では畳み切って GONE にな
+    //   り、静止状態は従来どおり（再生タブ=完全に隠れ、それ
+    //   以外=完全表示）。表示条件そのもの（Local＋曲あり）は
+    //   updateLocalMiniPlayer が決め、ここは形状だけを担うた
+    //   め、条件外のときは何もしない。
+    private fun applyLocalMiniPlayerSlide() {
+        if (!::localMiniPlayer.isInitialized) return
+        if (currentPlaybackMode != PlaybackMode.LOCAL ||
+            !::localPlayer.isInitialized || localPlayer.currentTrack == null
+        ) return
+        val exposure = localNowPlayingExposure()
+        if (exposure >= 1f) {
+            if (localMiniPlayer.visibility != View.GONE) {
+                localMiniPlayer.visibility = View.GONE
+            }
+            // 畳み切った形状は次回表示へ持ち越さない。
+            restoreLocalMiniPlayerNaturalSize()
+            return
+        }
+        if (localMiniPlayer.visibility != View.VISIBLE) {
+            localMiniPlayer.visibility = View.VISIBLE
+        }
+        if (exposure <= 0f) {
+            restoreLocalMiniPlayerNaturalSize()
+            return
+        }
+        // 完全表示時のサイズが未計測なら実測する。レイアウト前
+        // で寸法が取れない場合は形状変更を見送り、次の呼び出し
+        // （ドラッグの次イベント／アニメーションの次フレーム）
+        // に委ねる。
+        if (localMiniPlayerFullHeightPx <= 0) {
+            captureLocalMiniPlayerFullSize()
+            if (localMiniPlayerFullHeightPx <= 0) return
+        }
+        val lp = localMiniPlayer.layoutParams as? ViewGroup.MarginLayoutParams
+            ?: return
+        val newHeight =
+            (localMiniPlayerFullHeightPx * (1f - exposure)).roundToInt()
+        val newMargin =
+            (localMiniPlayerFullMarginTopPx * (1f - exposure)).roundToInt()
+        if (lp.height != newHeight || lp.topMargin != newMargin) {
+            lp.height = newHeight
+            lp.topMargin = newMargin
+            localMiniPlayer.layoutParams = lp
+            localMiniPlayerSlideShrunk = true
+        }
+    }
+
+    // 完全表示時のバーの高さと上マージンを実測して保持する。
+    // 縮小中（明示寸法が入っている状態）の寸法は拾わない。
+    private fun captureLocalMiniPlayerFullSize() {
+        if (localMiniPlayerSlideShrunk) return
+        val lp = localMiniPlayer.layoutParams as? ViewGroup.MarginLayoutParams
+            ?: return
+        if (localMiniPlayerFullMarginTopPx < 0) {
+            localMiniPlayerFullMarginTopPx = lp.topMargin
+        }
+        val w = localMiniPlayer.width
+        if (w > 0) {
+            localMiniPlayer.measure(
+                View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            )
+            if (localMiniPlayer.measuredHeight > 0) {
+                localMiniPlayerFullHeightPx = localMiniPlayer.measuredHeight
+            }
+        }
+    }
+
+    // スライド連動で書き換えた高さ／マージンを自然なサイズ
+    // （wrap_content＋XML のマージン）へ戻す。
+    private fun restoreLocalMiniPlayerNaturalSize() {
+        if (!::localMiniPlayer.isInitialized) return
+        if (!localMiniPlayerSlideShrunk) return
+        val lp = localMiniPlayer.layoutParams as? ViewGroup.MarginLayoutParams
+            ?: return
+        lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
+        if (localMiniPlayerFullMarginTopPx >= 0) {
+            lp.topMargin = localMiniPlayerFullMarginTopPx
+        }
+        localMiniPlayer.layoutParams = lp
+        localMiniPlayerSlideShrunk = false
     }
 
     private fun showDspSettingsDialog() {
