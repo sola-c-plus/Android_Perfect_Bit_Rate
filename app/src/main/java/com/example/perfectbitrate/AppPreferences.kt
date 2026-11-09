@@ -21,6 +21,21 @@ data class CustomEqPreset(
     override fun hashCode(): Int = id.hashCode()
 }
 
+// ★ Local キューの位置保存のスナップショット（LocalPlayer が作り、
+//   起動時の復元で読み戻す）。キュー本体は URI 文字列の並び、実効
+//   再生順はキュー内インデックスの並び（order[実効位置] = キュー内
+//   インデックス、LocalPlayer の playOrder と同じ表現）で持つ。
+//   orderPosition は実効順上の現在位置、positionMs は現在曲の
+//   再生位置（表示位置 = 実際に聞こえている位置）。
+data class LocalQueueState(
+    val queueUris: List<String>,
+    val order: List<Int>,
+    val orderPosition: Int,
+    val positionMs: Long,
+    val shuffleEnabled: Boolean,
+    val repeatMode: Int
+)
+
 class AppPreferences private constructor(context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -47,6 +62,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_SLEEP_TIMER_MINUTES = "sleepTimerMinutes"
         private const val KEY_SLEEP_TIMER_END_AT_MS = "sleepTimerEndAtMs"
         private const val KEY_SLEEP_TIMER_FADE_OUT = "sleepTimerFadeOut"
+        private const val KEY_LOCAL_QUEUE_STATE_JSON = "localQueueStateJson"
 
         // ★ スリープタイマーの選択肢（分）。0 は OFF。期限は
         //   sleepTimerEndAtMs（UNIX ミリ秒、0 = 未設定）を正とし、
@@ -288,6 +304,78 @@ class AppPreferences private constructor(context: Context) {
     var sleepTimerFadeOut: Boolean
         get() = prefs.getBoolean(KEY_SLEEP_TIMER_FADE_OUT, true)
         set(value) = prefs.edit { putBoolean(KEY_SLEEP_TIMER_FADE_OUT, value) }
+
+    // ★ Local キューの位置保存（常時有効、ON/OFF 設定なし）。
+    //   保存先は SharedPreferences の JSON 1 件（カスタム EQ /
+    //   Freq プリセットと同じ流儀）。キューは URI 文字列の配列、
+    //   実効順はインデックス配列で持つため、数千曲規模でも JSON は
+    //   URI 合計＋数バイト/曲程度に収まり、DB のスキーマ変更なしで
+    //   既存の永続化パターンに乗せられる。読み出しは防御的に行い、
+    //   壊れた JSON や範囲外の値は「保存なし」へ倒す。
+    fun saveLocalQueueState(state: LocalQueueState) {
+        val obj = JSONObject()
+        val uris = JSONArray()
+        for (uri in state.queueUris) uris.put(uri)
+        obj.put("queueUris", uris)
+        val order = JSONArray()
+        for (index in state.order) order.put(index)
+        obj.put("order", order)
+        obj.put("orderPosition", state.orderPosition)
+        obj.put("positionMs", state.positionMs)
+        obj.put("shuffle", state.shuffleEnabled)
+        obj.put("repeat", state.repeatMode)
+        prefs.edit { putString(KEY_LOCAL_QUEUE_STATE_JSON, obj.toString()) }
+    }
+
+    fun loadLocalQueueState(): LocalQueueState? {
+        val jsonStr = prefs.getString(KEY_LOCAL_QUEUE_STATE_JSON, null)
+        if (jsonStr.isNullOrEmpty()) return null
+        return try {
+            val obj = JSONObject(jsonStr)
+            val urisArr = obj.getJSONArray("queueUris")
+            val queueUris = ArrayList<String>(urisArr.length())
+            for (i in 0 until urisArr.length()) {
+                queueUris.add(urisArr.getString(i))
+            }
+            if (queueUris.isEmpty()) return null
+            // 順序表はキュー範囲内の値だけを重複なく拾い、欠けた
+            // インデックスは末尾へ元の順で補う（保存形式の将来
+            // 変更や部分的な破損でも順序が崩壊しないように）。
+            val orderArr = obj.getJSONArray("order")
+            val order = ArrayList<Int>(queueUris.size)
+            val seen = HashSet<Int>()
+            for (i in 0 until orderArr.length()) {
+                val index = orderArr.getInt(i)
+                if (index in queueUris.indices && seen.add(index)) order.add(index)
+            }
+            if (order.size < queueUris.size) {
+                for (index in queueUris.indices) {
+                    if (seen.add(index)) order.add(index)
+                }
+            }
+            val orderPosition = obj.optInt("orderPosition", 0)
+                .coerceIn(0, order.lastIndex)
+            val repeat = obj.optInt("repeat", LOCAL_REPEAT_OFF)
+            LocalQueueState(
+                queueUris = queueUris,
+                order = order,
+                orderPosition = orderPosition,
+                positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L),
+                shuffleEnabled = obj.optBoolean("shuffle", false),
+                repeatMode = if (repeat in LOCAL_REPEAT_OFF..LOCAL_REPEAT_ONE) {
+                    repeat
+                } else {
+                    LOCAL_REPEAT_OFF
+                }
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun clearLocalQueueState() {
+        prefs.edit { remove(KEY_LOCAL_QUEUE_STATE_JSON) }
+    }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)
