@@ -34,10 +34,18 @@
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
+            <!-- ★ badgeDirect は文言が伸びても段1全体をはみ出させないよう
+                 maxWidth で上限を付け、超過分は省略表示にする（歯車ボタン
+                 が画面外へ押し出される問題の対策）。最長の定型文
+                 「DIRECT STREAM [DSP 8x]」がフォントスケール 1.0 で
+                 切れないよう上限は 120dp。 -->
             <TextView
                 android:id="@+id/badgeDirect"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_maxWidth="120dp"
+                android:maxLines="1"
+                android:ellipsize="end"
                 android:text="DIRECT STREAM"
                 android:textColor="@color/black"
                 android:textSize="9.5sp"
@@ -65,15 +73,21 @@
                 android:maxLines="1"
                 android:fontFamily="@font/font_dap_heading" />
 
-            <!-- ★ CPU / RAM モニター (SW連動で一括表示/非表示) -->
+            <!-- ★ CPU / RAM モニター (SW連動で一括表示/非表示)
+                 段1では textDacName と並んで縮小可能な側に回し、表示幅が
+                 足りないときは末尾を省略する（wrap_content のままだと
+                 右端のボタン群が画面外へ押し出されるため）。 -->
             <TextView
                 android:id="@+id/textCpuRamMonitor"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
                 android:text="CPU: 0%  RAM: 0M"
                 android:textColor="@color/text_secondary"
                 android:textSize="9.5sp"
                 android:fontFamily="@font/font_dap_mono"
+                android:ellipsize="end"
+                android:maxLines="1"
                 android:layout_marginEnd="6dp"
                 android:visibility="gone" />
 
@@ -98,8 +112,8 @@
                     android:text="YT MUSIC"
                     android:textSize="9.5sp"
                     android:textStyle="bold"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
+                    android:paddingStart="5dp"
+                    android:paddingEnd="5dp"
                     android:paddingTop="3dp"
                     android:paddingBottom="3dp"
                     android:fontFamily="@font/font_dap_condensed"
@@ -112,8 +126,8 @@
                     android:text="LOCAL"
                     android:textSize="9.5sp"
                     android:textStyle="bold"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
+                    android:paddingStart="5dp"
+                    android:paddingEnd="5dp"
                     android:paddingTop="3dp"
                     android:paddingBottom="3dp"
                     android:fontFamily="@font/font_dap_condensed"
