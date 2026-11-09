@@ -204,6 +204,9 @@ class MainActivity : AppCompatActivity() {
     //   スキャンの多重実行ガード（仕様書 §6.2 の永続化キャッシュ表示用）
     private var localLibraryShown = false
     private var localScanRunning = false
+    // ★ キューの位置保存の復元を試みたか（ライブラリが初めて
+    //   揃ったタイミングで一度だけ試みるためのガード）。
+    private var localQueueRestoreAttempted = false
     // ★ スキャン進捗クロームの「表示したいか」。実際の visibility は
     //   選択中タブとの組み合わせで updateLocalChromeVisibility が決める
     //   （「再生」タブ表示中は進捗表示を出さないため、スキャン側は
@@ -1079,6 +1082,18 @@ class MainActivity : AppCompatActivity() {
         localTracks = tracks
         localTrackUriSet = tracks.mapTo(HashSet()) { it.uri.toString() }
         localLibraryShown = tracks.isNotEmpty()
+        // ★ キューの位置保存の復元は、ライブラリが初めて揃った
+        //   このタイミングで一度だけ試みる（キャッシュ表示でも
+        //   スキャン結果でも、最初に曲が揃った方で復元する）。
+        //   LocalPlayer の初期化は onCreate で済んでおり、復元は
+        //   一時停止状態で行われ自動再生はしない。既にキューが
+        //   ある場合は LocalPlayer 側で何もしない。
+        if (!localQueueRestoreAttempted && tracks.isNotEmpty() &&
+            ::localPlayer.isInitialized
+        ) {
+            localQueueRestoreAttempted = true
+            localPlayer.restoreSavedQueue(tracks)
+        }
         refreshLocalBrowser()
     }
 
