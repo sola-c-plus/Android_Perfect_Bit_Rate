@@ -184,6 +184,20 @@ class BitPerfectPlaybackService : Service() {
     //   再開条件には影響させない。
     private val LOCAL_PREROLL_THRESHOLD = 3
     @Volatile private var localFastPrerollArmed = false
+
+    // ★ スリープタイマーのフェードアウト（Service 側エンジン）。
+    //   SLEEP_FADE_DURATION_MS は MainActivity 側の開始判定窓
+    //   （SLEEP_TIMER_FADE_WINDOW_MS = 30 秒）と揃えること。
+    //   状態は sleepFadeLock で守り、ゲインの「判定＋適用」を同じ
+    //   ロック内で行うことで、解除（cancel）が走った後に古い
+    //   ゲインが上書きされる競合を防ぐ。
+    private val SLEEP_FADE_DURATION_MS = 30_000L
+    private val SLEEP_FADE_TICK_MS = 50L
+    private val sleepFadeLock = Any()
+    @Volatile private var sleepFadeEndAtMs = 0L   // 対象の終了期限。0 = 非フェード
+    @Volatile private var sleepFadeStartAtMs = 0L // カーブの開始時刻
+    @Volatile private var sleepFadeSpanMs = 0L    // カーブの長さ（最大30秒）
+    private var sleepFadeThread: Thread? = null   // sleepFadeLock 内でのみ触る
     private fun activePrerollThreshold(): Int =
         if (localFastPrerollArmed) LOCAL_PREROLL_THRESHOLD else PREROLL_THRESHOLD
 
@@ -640,6 +654,119 @@ class BitPerfectPlaybackService : Service() {
             } else if (device == null) {
                 forceResetSpeakerVolume()
             }
+        } catch (e: Exception) {}
+    }
+
+    // ★ スリープタイマーのフェードアウト: 終了期限に向けて AudioTrack
+    //   単位の出力ゲイン（setVolume）をコサイン二乗カーブで 1.0 → 0.0 へ
+    //   絞り、期限到来後は 0.0 を保持し続ける。停止そのもの（供給係への
+    //   ポーズと prefs の消費）は従来どおり MainActivity の
+    //   checkSleepTimer が担い、発火後に cancelSleepTimerFade() で
+    //   ゲインを 1.0 へ戻す（ポーズ済みなので復帰は聞こえない）。
+    //
+    //   ゲイン適用点を native の出力段や PCM 乗算ではなく setVolume に
+    //   した理由:
+    //   - システム音量（ストリーム音量）には一切触らない。Vol Lock が
+    //     触るのもストリーム音量と setVolume(1.0f) で、フェード中に
+    //     音量キーで 1.0 へ戻されても次周期（50ms）で再適用される。
+    //   - PCM データ自体は無加工で、ピーク/スペクトラム解析や再生位置
+    //     整列に影響しない。Direct（ビットパーフェクト）時も、フェードは
+    //     ユーザーが明示設定したタイマーの終了演出としてこの段でのみ掛かる。
+    //   - AudioTrack 再生成時は生成側が setVolume(1.0f) に戻すが、本
+    //     エンジンが周期的に「現在のトラック」へ適用するため自動追従する。
+    //   進行管理を Service に置くのは、Activity が破棄されても絞り込みと
+    //   0.0 保持が止まらないようにするため（期限の監視と発火は従来どおり
+    //   MainActivity の UI ループ）。
+
+    /** フェード中（期限到来後の 0.0 保持中を含む）かどうか。 */
+    val isSleepTimerFading: Boolean get() = sleepFadeEndAtMs != 0L
+
+    /**
+     * 終了期限 [endAtMs] に向けてフェードを開始する。実行中の場合は
+     * 対象期限とカーブを張り替える。カーブは常に 1.0 から始める
+     * （残りが短い状態で開始してもゲインが段になって落ちないように、
+     * 区間は「残りの全体か最大30秒」の短いほうを使う）。
+     */
+    fun startSleepTimerFade(endAtMs: Long) {
+        var threadToStart: Thread? = null
+        synchronized(sleepFadeLock) {
+            val now = System.currentTimeMillis()
+            val remaining = endAtMs - now
+            sleepFadeEndAtMs = endAtMs
+            sleepFadeStartAtMs = now
+            sleepFadeSpanMs = if (remaining > 0L) {
+                minOf(remaining, SLEEP_FADE_DURATION_MS)
+            } else {
+                1L
+            }
+            if (sleepFadeThread?.isAlive != true) {
+                threadToStart = Thread { runSleepFadeLoop() }.apply {
+                    name = "SleepTimerFade"
+                    isDaemon = true
+                }
+                sleepFadeThread = threadToStart
+            }
+        }
+        threadToStart?.start()
+    }
+
+    /** フェードを直ちに解除し、出力ゲインを 1.0 へ戻す。 */
+    fun cancelSleepTimerFade() {
+        synchronized(sleepFadeLock) {
+            if (sleepFadeEndAtMs == 0L) return
+            sleepFadeEndAtMs = 0L
+            applySleepFadeGain(1.0f)
+        }
+    }
+
+    private fun runSleepFadeLoop() {
+        while (true) {
+            val shouldContinue = synchronized(sleepFadeLock) {
+                val endAt = sleepFadeEndAtMs
+                if (endAt == 0L) {
+                    false
+                } else {
+                    val now = System.currentTimeMillis()
+                    if (now >= endAt) {
+                        // 期限到来: 発火側（MainActivity）がポーズして
+                        // cancelSleepTimerFade() を呼ぶまで 0.0 を保持する。
+                        applySleepFadeGain(0.0f)
+                    } else {
+                        val span = sleepFadeSpanMs.coerceAtLeast(1L)
+                        val progress = ((now - sleepFadeStartAtMs).toFloat() / span)
+                            .coerceIn(0f, 1f)
+                        applySleepFadeGain(sleepFadeGain(progress))
+                    }
+                    true
+                }
+            }
+            if (!shouldContinue) break
+            try {
+                Thread.sleep(SLEEP_FADE_TICK_MS)
+            } catch (e: InterruptedException) {
+                break
+            }
+        }
+    }
+
+    // コサイン二乗カーブ（(1+cos(πp))/2 と等価）。始端・終端とも傾き 0 で、
+    // 線形より滑らかに出入りする。
+    private fun sleepFadeGain(progress: Float): Float {
+        val c = Math.cos(progress * Math.PI / 2.0)
+        return (c * c).toFloat()
+    }
+
+    // 現在の AudioTrack へゲインを適用する。呼び出し側で sleepFadeLock を保持していること。
+    private fun applySleepFadeGain(gain: Float) {
+        var track: AudioTrack? = null
+        audioLock.lock()
+        try {
+            track = audioTrack
+        } finally {
+            audioLock.unlock()
+        }
+        try {
+            track?.setVolume(gain)
         } catch (e: Exception) {}
     }
 

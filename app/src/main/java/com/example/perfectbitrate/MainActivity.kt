@@ -324,6 +324,13 @@ class MainActivity : AppCompatActivity() {
     //   ページ側メディア要素がストールすると paused=false のまま PCM だけが途絶するため、
     //   isPlayingState だけでは検知できない。PCM の途絶時間で段階的に復旧を試みる。
     private val STALL_THRESHOLD_MS = 3000L       // 再生中なのに PCM がこの時間来なければストールとみなす
+
+    // ★ スリープタイマーのフェードアウト: 期限の何ms前からフェードを
+    //   始めるか（Service 側 SLEEP_FADE_DURATION_MS = 30 秒と揃えること）。
+    //   sleepFadeTargetEndAtMs はフェード対象として Service へ渡した期限で、
+    //   期限の変化（再設定・延長・解除）の検知に使う。0 = 対象なし。
+    private val SLEEP_TIMER_FADE_WINDOW_MS = 30_000L
+    private var sleepFadeTargetEndAtMs = 0L
     private val STALL_STEP_INTERVAL_MS = 5000L   // 復旧ステップの間隔
     private val WATCHDOG_RELOAD_COOLDOWN_MS = 60000L // ページ reload の最小間隔
     private var stallRecoveryStep = 0            // 0=正常, 1=resume_audio 済, 2=play 済, 3=reload 段, 4=最終段到達（以後は低頻度リトライへ移行）
@@ -514,9 +521,22 @@ class MainActivity : AppCompatActivity() {
     //   OFF へ戻して二重発火を防ぎ、理由を Toast で見せる。
     //   YT では再生意思（userWantsPlayback）も落とし、ウォッチドッグが
     //   勝手に再生を再開しないようにする（モード切替時のポーズと同じ作法）。
+    //   フェードアウト（設定 ON 時）: 期限の最大30秒前から Service 側
+    //   エンジンが出力ゲインを絞り、到来時点で 0.0 になっているところへ
+    //   上記のポーズが掛かる。発火後はフェードを解除してゲインを 1.0 へ
+    //   戻す（ポーズ済みなので復帰は聞こえず、次回再生にも残らない）。
     private fun checkSleepTimer(now: Long) {
         val endAt = appPrefs.sleepTimerEndAtMs
-        if (endAt == 0L || now < endAt) return
+        if (endAt == 0L) {
+            // 未設定・解除済み・発火済み。フェード対象が残っていたら
+            // 直ちに解除してゲインを戻す（タイマー解除への追従）。
+            stopSleepFadeTracking()
+            return
+        }
+        if (now < endAt) {
+            updateSleepFade(now, endAt)
+            return
+        }
         appPrefs.sleepTimerEndAtMs = 0L
         appPrefs.sleepTimerMinutes = AppPreferences.SLEEP_TIMER_OFF
         when (currentPlaybackMode) {
@@ -532,11 +552,49 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        stopSleepFadeTracking()
         Toast.makeText(
             this@MainActivity,
             "スリープタイマーで再生を停止しました",
             Toast.LENGTH_LONG
         ).show()
+    }
+
+    // ★ フェードの開始/継続/解除の判定（checkSleepTimer から毎周期呼ばれる）。
+    //   開始条件: 設定 ON・期限まで30秒以内・再生中。条件を外れたら即解除。
+    //   手動ポーズ時は isSleepTimerPlaybackActive() が false になるため、
+    //   次周期（30ms）で解除されゲインが戻る（手動操作で直ちに戻る）。
+    //   期限の張り替え（再設定・延長）は対象期限の不一致で検知して
+    //   Service 側のカーブを張り替える。設定 OFF 中は従来どおり
+    //   フェードなしで発火する。
+    private fun updateSleepFade(now: Long, endAt: Long) {
+        val shouldFade = appPrefs.sleepTimerFadeOut &&
+            endAt - now <= SLEEP_TIMER_FADE_WINDOW_MS &&
+            isSleepTimerPlaybackActive()
+        if (!shouldFade) {
+            stopSleepFadeTracking()
+            return
+        }
+        if (sleepFadeTargetEndAtMs != endAt) {
+            playbackService?.startSleepTimerFade(endAt)
+            sleepFadeTargetEndAtMs = endAt
+        }
+    }
+
+    private fun stopSleepFadeTracking() {
+        if (sleepFadeTargetEndAtMs == 0L) return
+        sleepFadeTargetEndAtMs = 0L
+        playbackService?.cancelSleepTimerFade()
+    }
+
+    // フェードを掛けてよい「再生中」かどうか。Local では共有の
+    // isPlayingState が保持ページの定期通知で倒されうるため、
+    // resolvePlayPauseCommand と同じ作法でモードごとの正を見る。
+    private fun isSleepTimerPlaybackActive(): Boolean {
+        return when (currentPlaybackMode) {
+            PlaybackMode.LOCAL -> ::localPlayer.isInitialized && localPlayer.isPlaying
+            PlaybackMode.YT_MUSIC -> isPlayingState
+        }
     }
 
     private fun resolvePlayPauseCommand(): String {
