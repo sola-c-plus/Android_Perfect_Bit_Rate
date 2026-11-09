@@ -1,4 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- ※未使用（PR-B で明記）: アプリのテーマは AndroidManifest の Theme.AppCompat.NoActionBar が
+         正で、このスタイルはどこからも参照されていない。整理は PR-F で行う。 -->
     <style name="Theme.PerfectBitRate" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorPrimaryVariant">@color/accent_variant</item>
@@ -21,5 +23,90 @@
     <style name="CustomBottomSheetStyle" parent="Widget.MaterialComponents.BottomSheet.Modal">
         <item name="android:background">@android:color/transparent</item>
         <item name="backgroundTint">@android:color/transparent</item>
+    </style>
+
+    <!-- ★ ダイアログ UI 統一 PR-B: AlertDialog 用 ThemeOverlay。
+         PbrDialogs がアプリのテーマ設定（uiThemeMode）に応じてダーク/ライトを明示選択する。
+         色は全て PR-A のトークン参照のみ（新規色なし）。Material ライブラリ側の
+         values-night 追随色（material_on_surface 系）に引っ張られないよう、
+         文字色は textColorPrimary 等で明示する。 -->
+    <style name="ThemeOverlay.PBR.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorSurface">@color/main_background</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorControlActivated">@color/accent</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.PBR.Dialog</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorTertiary">@color/text_tertiary</item>
+        <item name="android:textColorHint">@color/text_tertiary</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/PBR.Dialog.Title</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/PBR.Dialog.Body</item>
+        <item name="buttonBarPositiveButtonStyle">@style/PBR.Dialog.Button.Positive</item>
+        <item name="buttonBarNegativeButtonStyle">@style/PBR.Dialog.Button.Negative</item>
+        <item name="buttonBarNeutralButtonStyle">@style/PBR.Dialog.Button.Negative</item>
+    </style>
+
+    <style name="ThemeOverlay.PBR.Dialog.Light" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorSurface">@color/main_background_light</item>
+        <item name="colorOnSurface">@color/text_primary_light</item>
+        <item name="colorPrimary">@color/accent_light</item>
+        <item name="colorControlActivated">@color/accent_light</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.PBR.Dialog</item>
+        <item name="android:textColorPrimary">@color/text_primary_light</item>
+        <item name="android:textColorSecondary">@color/text_secondary_light</item>
+        <item name="android:textColorTertiary">@color/text_tertiary_light</item>
+        <item name="android:textColorHint">@color/text_tertiary_light</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/PBR.Dialog.Title.Light</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/PBR.Dialog.Body.Light</item>
+        <item name="buttonBarPositiveButtonStyle">@style/PBR.Dialog.Button.Positive.Light</item>
+        <item name="buttonBarNegativeButtonStyle">@style/PBR.Dialog.Button.Negative.Light</item>
+        <item name="buttonBarNeutralButtonStyle">@style/PBR.Dialog.Button.Negative.Light</item>
+    </style>
+
+    <!-- ダイアログの角丸（DSP シートの 16dp を踏襲） -->
+    <style name="ShapeAppearance.PBR.Dialog" parent="ShapeAppearance.MaterialComponents.MediumComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">16dp</item>
+    </style>
+
+    <!-- タイトルは DSP シート見出しの書式（accent・condensed・bold） -->
+    <style name="PBR.Dialog.Title" parent="MaterialAlertDialog.MaterialComponents.Title.Text">
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:textSize">13.5sp</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="PBR.Dialog.Title.Light" parent="MaterialAlertDialog.MaterialComponents.Title.Text">
+        <item name="android:textColor">@color/accent_light</item>
+        <item name="android:textSize">13.5sp</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="PBR.Dialog.Body" parent="MaterialAlertDialog.MaterialComponents.Body.Text">
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <style name="PBR.Dialog.Body.Light" parent="MaterialAlertDialog.MaterialComponents.Body.Text">
+        <item name="android:textColor">@color/text_primary_light</item>
+    </style>
+
+    <!-- ボタン: 肯定=accent（太字は TextButton.Dialog 側の書式を継承）、否定/中立=一段弱く -->
+    <style name="PBR.Dialog.Button.Positive" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/accent</item>
+    </style>
+
+    <style name="PBR.Dialog.Button.Positive.Light" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/accent_light</item>
+    </style>
+
+    <style name="PBR.Dialog.Button.Negative" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <style name="PBR.Dialog.Button.Negative.Light" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/text_secondary_light</item>
     </style>
 </resources>

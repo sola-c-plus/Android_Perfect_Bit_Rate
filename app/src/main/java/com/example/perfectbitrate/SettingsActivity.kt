@@ -333,7 +333,7 @@ class SettingsActivity : AppCompatActivity() {
         val modes = PlaybackMode.entries
         val labels = Array<CharSequence>(modes.size) { modes[it].displayName }
         val currentIndex = modes.indexOf(appPrefs.playbackMode)
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("再生モード")
             .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
                 val selected = modes[which]
@@ -371,7 +371,7 @@ class SettingsActivity : AppCompatActivity() {
             if (values[i] == AppPreferences.SLEEP_TIMER_OFF) "オフ" else "${values[i]}分"
         }
         val currentIndex = values.indexOf(appPrefs.sleepTimerMinutes).coerceAtLeast(0)
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("スリープタイマー")
             .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
                 val selected = values[which]
@@ -411,7 +411,7 @@ class SettingsActivity : AppCompatActivity() {
         )
         val labels = Array<CharSequence>(values.size) { artistGroupingLabel(values[it]) }
         val currentIndex = values.indexOf(appPrefs.localArtistGrouping).coerceAtLeast(0)
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("アーティストの分類")
             .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
                 val selected = values[which]
@@ -439,7 +439,7 @@ class SettingsActivity : AppCompatActivity() {
         val values = arrayOf("dark", "light", "auto")
         val labels = Array<CharSequence>(values.size) { themeLabel(values[it]) }
         val currentIndex = values.indexOf(appPrefs.uiThemeMode).coerceAtLeast(0)
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("テーマ")
             .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
                 val selected = values[which]
@@ -519,12 +519,13 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun confirmRemoveFolder(treeUriString: String) {
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("フォルダを削除")
             .setMessage("「${folderDisplayName(treeUriString)}」を取得範囲から外しますか？")
             .setPositiveButton("削除") { _, _ -> removeFolder(treeUriString) }
             .setNegativeButton("キャンセル", null)
             .show()
+            .also { PbrDialogs.applyDestructive(it) }
     }
 
     private fun removeFolder(treeUriString: String) {
