@@ -567,13 +567,14 @@
                             android:layout_weight="1" />
 
                         <!-- ★ アートワーク枠（表示切替の土台）:
-                             タップで表示を順送り切替する（アートワーク
-                             → スペクトラム → VU メーター → 詳細情報）。
-                             長押しは従来どおりアルバムビューへの
-                             ジャンプ。選択中のビューだけを VISIBLE に
-                             し、右上にビュー名、 下端中央にドットで
-                             現在位置を示す。選択は AppPreferences
-                             （localNpViewMode）に永続化する。 -->
+                             タップで表示ビューの選択シートを開く
+                             （アートワーク／スペクトラム／VU メーター
+                             ／詳細情報から直接選ぶ）。長押しは従来
+                             どおりアルバムビューへのジャンプ。選択中
+                             のビューだけを VISIBLE にし、右上にビュー
+                             名、下端中央にドットで現在位置を示す。
+                             選択は AppPreferences（localNpViewMode）
+                             に永続化する。 -->
                         <FrameLayout
                             android:id="@+id/npViewContainer"
                             android:layout_width="match_parent"

@@ -134,7 +134,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textNpEmpty: TextView
     private lateinit var textNpQueuePosition: TextView
     private lateinit var imgNpArtwork: ImageView
-    // ★ 再生画面のアートワーク枠の表示切替（タップで順送り）。
+    // ★ 再生画面のアートワーク枠の表示切替（タップで選択シート）。
     //   npViewContainer の中にビューを重ね、選択中だけ表示する。
     //   選択は AppPreferences.localNpViewMode に永続化する。
     private lateinit var npViewContainer: FrameLayout
@@ -3649,18 +3649,20 @@ class MainActivity : AppCompatActivity() {
         //   アルバム名 → その曲のアルバムビュー、アーティスト名 →
         //   アーティストビューへドリルインする。再生は止めず、
         //   表示だけライブラリ側へ移る。
-        // ★ アートワーク枠はタップで表示ビューを順送り切替し
-        //   （アートワーク → スペクトラム → VU → 詳細）、長押しで
-        //   従来のアルバムジャンプを残す。子ビュー（スクロール
-        //   する詳細など）がタッチを消費するため、枠と全子ビューに
-        //   同じ割り当てを付ける。
+        // ★ アートワーク枠はタップで表示ビューの選択シートを開き、
+        //   長押しで従来のアルバムジャンプを残す。子ビューがタッチ
+        //   を消費するため、枠と全子ビューに同じ割り当てを付ける。
+        //   詳細の ScrollView は本体へのタップが click に届きにくく、
+        //   PR #85 の実機確認で「詳細から先へ進めない」事象が出た
+        //   ため、中身の TextView にも直接付ける。
         val npViewTapTargets = listOf<View>(
-            npViewContainer, imgNpArtwork, npSpectrumView, npVuMeterView, npDetailsScroll
+            npViewContainer, imgNpArtwork, npSpectrumView, npVuMeterView,
+            npDetailsScroll, textNpDetails
         )
         for (target in npViewTapTargets) {
             target.setOnClickListener {
                 it.hapticTick(appPrefs)
-                cycleNpView()
+                showNpViewChooser()
             }
             target.setOnLongClickListener {
                 it.hapticTick(appPrefs)
@@ -3925,15 +3927,32 @@ class MainActivity : AppCompatActivity() {
         return parts.joinToString(" • ")
     }
 
-    // ★ アートワーク枠の表示ビューを次の種別へ進める（タップ）。
-    //   選択は prefs へ保存し、次回起動時にも復元される。
-    private fun cycleNpView() {
-        npViewMode = if (npViewMode >= AppPreferences.LOCAL_NP_VIEW_LAST) {
-            AppPreferences.LOCAL_NP_VIEW_ARTWORK
-        } else {
-            npViewMode + 1
+    // ★ アートワーク枠のタップで表示ビューの選択シートを開く。
+    //   現在のビューにラジオ印が付く単一選択（共通部品
+    //   PbrChooserSheet）で、選んだら即切り替える。選択肢は
+    //   LOCAL_NP_VIEW_LAST までの4種のみ（並びは値の順）で、
+    //   波形（値4、PR-2 予約）へは遷移しない。
+    private fun showNpViewChooser() {
+        val labels = listOf<CharSequence>(
+            "アルバム画像", "スペクトラム", "VUメーター", "詳細情報"
+        )
+        PbrChooserSheet.showSingleChoice(this, "表示切替", labels, npViewMode) { which ->
+            setNpViewMode(which)
         }
-        appPrefs.localNpViewMode = npViewMode
+    }
+
+    // ★ 表示ビューを切り替えて prefs へ保存する（次回起動時にも
+    //   復元される）。範囲外の値はアートワーク表示へ倒す。
+    private fun setNpViewMode(mode: Int) {
+        val safe = if (mode in
+            AppPreferences.LOCAL_NP_VIEW_ARTWORK..AppPreferences.LOCAL_NP_VIEW_LAST
+        ) {
+            mode
+        } else {
+            AppPreferences.LOCAL_NP_VIEW_ARTWORK
+        }
+        npViewMode = safe
+        appPrefs.localNpViewMode = safe
         applyNpViewMode()
     }
 
