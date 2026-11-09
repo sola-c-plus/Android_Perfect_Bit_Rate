@@ -463,7 +463,8 @@ class BitPerfectPlaybackService : Service() {
 
     private var currentTitle = "Perfect Bit Rate"
     private var currentArtist = "YouTube Music"
-    private var currentCodec = "Opus 160kbps"
+    // ★ 通知側も未検出は「—」で統一（検出前から OPUS と表示しない）
+    private var currentCodec = "—"
     private var currentDuration = 0L
     private var currentPosition = 0L
     @Volatile var isCurrentlyPlaying = false

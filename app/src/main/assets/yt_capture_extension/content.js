@@ -12,6 +12,8 @@ try {
 
 let port = null;
 let lastCodecName = "";
+let lastCodecSentAt = 0;
+let lastUnmappedCodecLogKey = "";
 let adBlockEnabled = true;
 let userWantsPlaying = false;
 let lastUserGestureAt = 0;
@@ -45,10 +47,13 @@ const itagMap = {
     '251': { name: 'Opus 160kbps (48k)', rate: 48000 },
     '250': { name: 'Opus 70kbps (48k)', rate: 48000 },
     '249': { name: 'Opus 50kbps (48k)', rate: 48000 },
-    '140': { name: 'AAC 128kbps (44.1k)', rate: 48000 },
     '141': { name: 'AAC 256kbps (44.1k)', rate: 48000 },
+    '140': { name: 'AAC 128kbps (44.1k)', rate: 48000 },
+    '139': { name: 'AAC 48kbps (44.1k)', rate: 48000 },
     '256': { name: 'AAC 256kbps (HQ 44.1k)', rate: 48000 },
-    '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 48000 }
+    '258': { name: 'AAC 384kbps (5.1ch 44.1k)', rate: 48000 },
+    '172': { name: 'Vorbis 192kbps (WebM 44.1k)', rate: 48000 },
+    '171': { name: 'Vorbis 128kbps (WebM 44.1k)', rate: 48000 }
 };
 
 const SMART_INVERT_CSS = `
@@ -179,8 +184,10 @@ function scanStreamCodec() {
 
     try {
         const entries = performance.getEntriesByType('resource');
-        const startIdx = Math.max(0, entries.length - 20);
-        for (let i = entries.length - 1; i >= startIdx; i--) {
+        // ★ 全件を新しい順に走査する。以前は最新20件だけだったため、ページの
+        //   リソース読み込みが多いと音声セグメントのエントリが窓の外へ押し
+        //   出され、曲ごとに検出できたりできなかったりした。
+        for (let i = entries.length - 1; i >= 0; i--) {
             const url = entries[i].name;
             if (url.includes('videoplayback')) {
                 const matchItag = url.match(/[?&]itag=(\d+)/);
@@ -198,16 +205,39 @@ function scanStreamCodec() {
                     detectedRate = 48000;
                     break;
                 }
+                // videoplayback なのに itag 表にも mime 判定にも掛からない場合は
+                // 切り分け用に一度だけログへ残す（同じ組み合わせでは再出力しない）。
+                const logKey = (matchItag ? matchItag[1] : 'noitag') + '|' + (url.match(/[?&]mime=([^&]+)/)?.[1] || 'nomime');
+                if (logKey !== lastUnmappedCodecLogKey) {
+                    lastUnmappedCodecLogKey = logKey;
+                    console.log('[BitPerfect] Unmapped stream URL: itag/mime = ' + logKey);
+                }
+                break;
             }
         }
-        if (entries.length > 40) {
+        // ★ クリアは走査が終わってから、バッファが上限（既定150件）へ近づいた
+        //   ときだけ。以前は40件超で無条件に消していたため、まだ走査窓に
+        //   入っていないエントリまで消え、その曲では二度と検出できなかった。
+        if (entries.length > 120) {
             performance.clearResourceTimings();
         }
     } catch(e) {}
 
-    if (detectedName && (detectedName !== lastCodecName || detectedRate !== detectedStreamRate)) {
+    if (!detectedName) return;
+
+    const changed = detectedName !== lastCodecName || detectedRate !== detectedStreamRate;
+    // ★ 取りこぼし回復: 変化がなくても、再生中なら15秒に一度は同じ値を
+    //   再送する。ネイティブ側は未検出表示へリセットされることがあり
+    //   （モード往復時の初期化など）、変化時のみ送信だと表示が未検出の
+    //   まま固定されてしまうため。ポーズ中（Local モード中を含む）は
+    //   再送しない。
+    const now = Date.now();
+    const heartbeatDue = now - lastCodecSentAt >= 15000
+        && currentMediaElement && !currentMediaElement.paused && !currentMediaElement.ended;
+    if (changed || heartbeatDue) {
         lastCodecName = detectedName;
         detectedStreamRate = detectedRate;
+        lastCodecSentAt = now;
 
         postNativeMessage({
             type: "codec",

@@ -235,7 +235,10 @@ class MainActivity : AppCompatActivity() {
     private var pcmPacketCount = 0L
     private var outputDeviceName = "内蔵スピーカー"
     private var activeOutputDevice: AudioDeviceInfo? = null
-    private var currentCodec = "OPUS 160kbps (48k)"
+    // ★ 未検出の間は実在のコーデック名で偽らず「—」とする（検出が届けば
+    //   onCodec が実値で上書きする）。以前は初期値が "OPUS 160kbps (48k)"
+    //   で、検出失敗時に AAC の曲でも OPUS と表示され続けていた。
+    private var currentCodec = "—"
     private var currentBtCodecName = ""
 
     private var currentTitle = "YouTube Music"
@@ -847,7 +850,9 @@ class MainActivity : AppCompatActivity() {
             currentArtist = ""
             currentArtworkBitmap = null
             localArtworkBitmap = null
-            currentCodec = "OPUS 160kbps (48k)"
+            // ★ コーデック表示は未検出「—」へ戻す。ページ側は検出値の再送
+            //   （変化時＋再生中15秒ごとのハートビート）で実値へ復帰する。
+            currentCodec = "—"
             currentPosition = 0L
             currentDuration = 0L
             playbackService?.updateCodec(currentCodec)
