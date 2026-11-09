@@ -27,7 +27,10 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.text.Editable
+import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.TextWatcher
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.util.LruCache
 import android.view.KeyEvent
@@ -37,11 +40,13 @@ import android.view.ViewGroup
 import android.view.ViewPropertyAnimator
 import android.widget.BaseAdapter
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -131,6 +136,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textNpEmpty: TextView
     private lateinit var textNpQueuePosition: TextView
     private lateinit var imgNpArtwork: ImageView
+    // ★ 再生画面のアートワーク枠の表示切替（タップで選択シート）。
+    //   npViewContainer の中にビューを重ね、選択中だけ表示する。
+    //   選択は AppPreferences.localNpViewMode に永続化する。
+    private lateinit var npViewContainer: FrameLayout
+    private lateinit var npSpectrumView: NpSpectrumView
+    private lateinit var npVuMeterView: NpVuMeterView
+    private lateinit var npDetailsScroll: ScrollView
+    private lateinit var textNpDetails: TextView
+    private lateinit var textNpViewName: TextView
+    private var npViewMode: Int = AppPreferences.LOCAL_NP_VIEW_ARTWORK
     private lateinit var textNpTitle: TextView
     private lateinit var textNpArtist: TextView
     private lateinit var textNpAlbum: TextView
@@ -445,6 +460,37 @@ class MainActivity : AppCompatActivity() {
                     NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
                 }
                 activePlayerDialog?.setSpectrumLevels(uiSpectrumBands)
+            }
+
+            // ★ 再生画面（Local「再生」タブ）の表示ビューへの供給。
+            //   選択中のビューにだけ既存の整列スナップショットを渡す
+            //   （非選択ビューへは供給しない）。スペクトラムは SPEC
+            //   設定に関わらず供給する（整列が取れない場合は native
+            //   の最新値へフォールバックする既存経路をそのまま使う）。
+            if (currentPlaybackMode == PlaybackMode.LOCAL &&
+                localTab == LocalTab.NOW_PLAYING &&
+                ::npSpectrumView.isInitialized
+            ) {
+                when (npViewMode) {
+                    AppPreferences.LOCAL_NP_VIEW_SPECTRUM -> {
+                        if (isPlayingState) {
+                            val service = playbackService
+                            if (service == null ||
+                                !service.getSpectrumAlignedToPlayback(uiSpectrumBands)
+                            ) {
+                                NativeAudioEngine.nativeGetSpectrum(uiSpectrumBands)
+                            }
+                            npSpectrumView.setSpectrumLevels(uiSpectrumBands)
+                        }
+                    }
+                    AppPreferences.LOCAL_NP_VIEW_VU -> {
+                        if (isPlayingState &&
+                            playbackService?.getPeakAlignedToPlayback(uiPeakDb) == true
+                        ) {
+                            npVuMeterView.setLevels(uiPeakDb[0], uiPeakDb[1])
+                        }
+                    }
+                }
             }
 
             if (appPrefs.isSysMonitorEnabled) {
@@ -3272,6 +3318,12 @@ class MainActivity : AppCompatActivity() {
         textNpEmpty = findViewById(R.id.textNpEmpty)
         textNpQueuePosition = findViewById(R.id.textNpQueuePosition)
         imgNpArtwork = findViewById(R.id.imgNpArtwork)
+        npViewContainer = findViewById(R.id.npViewContainer)
+        npSpectrumView = findViewById(R.id.npSpectrumView)
+        npVuMeterView = findViewById(R.id.npVuMeterView)
+        npDetailsScroll = findViewById(R.id.npDetailsScroll)
+        textNpDetails = findViewById(R.id.textNpDetails)
+        textNpViewName = findViewById(R.id.textNpViewName)
         textNpTitle = findViewById(R.id.textNpTitle)
         textNpArtist = findViewById(R.id.textNpArtist)
         textNpAlbum = findViewById(R.id.textNpAlbum)
@@ -3316,6 +3368,9 @@ class MainActivity : AppCompatActivity() {
         appPrefs.isVolLockEnabled = false
         currentBitMode = appPrefs.selectedBitMode
         currentPlaybackMode = appPrefs.playbackMode
+        // ★ 再生画面の表示ビュー（アートワーク枠の切替）を復元する
+        npViewMode = appPrefs.localNpViewMode
+        applyNpViewMode()
         upsampleFactor = appPrefs.selectedUpsampleFactor
 
         // ★ 項目9: プリセット本体を復元してから選択 index を反映する
@@ -3657,12 +3712,29 @@ class MainActivity : AppCompatActivity() {
             true
         }
         // ★ 再生画面からのジャンプ（Local モードのみ）:
-        //   アートワーク／アルバム名 → その曲のアルバムビュー、
-        //   アーティスト名 → アーティストビューへドリルインする。
-        //   再生は止めず、表示だけライブラリ側へ移る。
-        imgNpArtwork.setOnClickListener {
-            it.hapticTick(appPrefs)
-            jumpToLocalAlbumOfCurrentTrack()
+        //   アルバム名 → その曲のアルバムビュー、アーティスト名 →
+        //   アーティストビューへドリルインする。再生は止めず、
+        //   表示だけライブラリ側へ移る。
+        // ★ アートワーク枠はタップで表示ビューの選択シートを開き、
+        //   長押しで従来のアルバムジャンプを残す。子ビューがタッチ
+        //   を消費するため、枠と全子ビューに同じ割り当てを付ける。
+        //   詳細の ScrollView は本体へのタップが click に届きにくく、
+        //   PR #85 の実機確認で「詳細から先へ進めない」事象が出た
+        //   ため、中身の TextView にも直接付ける。
+        val npViewTapTargets = listOf<View>(
+            npViewContainer, imgNpArtwork, npSpectrumView, npVuMeterView,
+            npDetailsScroll, textNpDetails
+        )
+        for (target in npViewTapTargets) {
+            target.setOnClickListener {
+                it.hapticTick(appPrefs)
+                showNpViewChooser()
+            }
+            target.setOnLongClickListener {
+                it.hapticTick(appPrefs)
+                jumpToLocalAlbumOfCurrentTrack()
+                true
+            }
         }
         textNpAlbum.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -3786,6 +3858,10 @@ class MainActivity : AppCompatActivity() {
             textLocalGroupTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
             localNowPlaying.setBackgroundColor(ContextCompat.getColor(this, R.color.main_background))
             textNpEmpty.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            npSpectrumView.isLightMode = false
+            npVuMeterView.isLightMode = false
+            updateNpViewIndicator()
+            updateNpDetails()
             textNpQueuePosition.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
             textNpTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
             textNpArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_np_artist))
@@ -3857,6 +3933,10 @@ class MainActivity : AppCompatActivity() {
             textLocalGroupTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             localNowPlaying.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.main_background_light))
             textNpEmpty.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
+            npSpectrumView.isLightMode = true
+            npVuMeterView.isLightMode = true
+            updateNpViewIndicator()
+            updateNpDetails()
             textNpQueuePosition.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
             textNpTitle.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary_light))
             textNpArtist.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary_strong_light))
@@ -3972,6 +4052,8 @@ class MainActivity : AppCompatActivity() {
         )
         updateNpToggleStates()
         updateNpStarState()
+        // ★ 詳細ビュー（表示切替）の内容も現在曲へ同期する
+        updateNpDetails()
     }
 
     // フォーマット情報の小行: コーデック / サンプリングレート /
@@ -3992,6 +4074,168 @@ class MainActivity : AppCompatActivity() {
             parts += "DSD → PCM ${appPrefs.dsdPcmRateHz / 1000.0} kHz"
         }
         return parts.joinToString(" • ")
+    }
+
+    // ★ アートワーク枠のタップで表示ビューの選択シートを開く。
+    //   現在のビューにラジオ印が付く単一選択（共通部品
+    //   PbrChooserSheet）で、選んだら即切り替える。選択肢は
+    //   LOCAL_NP_VIEW_LAST までの4種のみ（並びは値の順）で、
+    //   波形（値4、PR-2 予約）へは遷移しない。
+    private fun showNpViewChooser() {
+        val labels = listOf<CharSequence>(
+            "アルバム画像", "スペクトラム", "VUメーター", "詳細情報"
+        )
+        PbrChooserSheet.showSingleChoice(this, "表示切替", labels, npViewMode) { which ->
+            setNpViewMode(which)
+        }
+    }
+
+    // ★ 表示ビューを切り替えて prefs へ保存する（次回起動時にも
+    //   復元される）。範囲外の値はアートワーク表示へ倒す。
+    private fun setNpViewMode(mode: Int) {
+        val safe = if (mode in
+            AppPreferences.LOCAL_NP_VIEW_ARTWORK..AppPreferences.LOCAL_NP_VIEW_LAST
+        ) {
+            mode
+        } else {
+            AppPreferences.LOCAL_NP_VIEW_ARTWORK
+        }
+        npViewMode = safe
+        appPrefs.localNpViewMode = safe
+        applyNpViewMode()
+    }
+
+    // ★ 選択中のビューだけを VISIBLE にし、ビュー名キャプ
+    //   ションを同期する。波形（PR-2）はこの一覧へ1行足す形
+    //   で拡張する。
+    private fun applyNpViewMode() {
+        if (!::npViewContainer.isInitialized) return
+        val views = listOf<Pair<Int, View>>(
+            AppPreferences.LOCAL_NP_VIEW_ARTWORK to imgNpArtwork,
+            AppPreferences.LOCAL_NP_VIEW_SPECTRUM to npSpectrumView,
+            AppPreferences.LOCAL_NP_VIEW_VU to npVuMeterView,
+            AppPreferences.LOCAL_NP_VIEW_DETAILS to npDetailsScroll
+        )
+        for ((mode, view) in views) {
+            val selected = mode == npViewMode
+            val wasVisible = view.visibility == View.VISIBLE
+            view.visibility = if (selected) View.VISIBLE else View.GONE
+            if (selected && !wasVisible) {
+                view.alpha = 0f
+                view.animate().alpha(1f).setDuration(150).start()
+            }
+        }
+        npSpectrumView.active =
+            npViewMode == AppPreferences.LOCAL_NP_VIEW_SPECTRUM
+        if (npViewMode == AppPreferences.LOCAL_NP_VIEW_DETAILS) {
+            updateNpDetails()
+        }
+        updateNpViewIndicator()
+    }
+
+    // ★ ビュー名キャプションを選択へ同期する（現在位置の
+    //   ドット表示は廃止し、位置はキャプションで示す）。
+    private fun updateNpViewIndicator() {
+        if (!::textNpViewName.isInitialized) return
+        textNpViewName.text = when (npViewMode) {
+            AppPreferences.LOCAL_NP_VIEW_SPECTRUM -> "SPECTRUM"
+            AppPreferences.LOCAL_NP_VIEW_VU -> "VU METER"
+            AppPreferences.LOCAL_NP_VIEW_DETAILS -> "DETAILS"
+            else -> "ARTWORK"
+        }
+    }
+
+    // ★ 詳細ビューのテキストを現在曲で組み直す（曲変化・テーマ
+    //   変更のたびに呼ばれる）。
+    private fun updateNpDetails() {
+        if (!::textNpDetails.isInitialized || !::localPlayer.isInitialized) return
+        val track = localPlayer.currentTrack
+        textNpDetails.text = if (track == null) "" else buildLocalDetailsText(track)
+    }
+
+    // 詳細ビューの行組み: 項目名（グレー）＋値（白）の2色で、
+    // デコーダ確定値（LocalPlayer の currentInfo）を優先し、
+    // 無ければライブラリのタグ値で補う（1行ラベルと同じ優先順位）。
+    private fun buildLocalDetailsText(
+        track: LibraryRepository.Track
+    ): SpannableStringBuilder {
+        val info = localPlayer.currentInfo
+        val codec = (info?.codecName ?: track.codecName).uppercase()
+        val container = formatContainerName(info?.container ?: "")
+        val rate = info?.sampleRate?.takeIf { it > 0 } ?: track.sampleRate
+        val bits = info?.bitDepth?.takeIf { it > 0 } ?: track.bitDepth
+        val bitRate = info?.bitRate ?: 0L
+        val channels = info?.channels?.takeIf { it > 0 } ?: 0
+        val rows = mutableListOf<Pair<String, String>>()
+        if (container.isNotBlank()) rows += "FORMAT" to container
+        if (codec.isNotBlank()) rows += "CODEC" to codec
+        if (rate > 0) {
+            rows += "SAMPLE RATE" to String.format(Locale.US, "%,d Hz", rate)
+        }
+        if (bits > 0) rows += "BIT DEPTH" to "$bits bit"
+        if (bitRate > 0) {
+            rows += "BIT RATE" to String.format(Locale.US, "%,d kbps", bitRate / 1000)
+        }
+        if (channels > 0) rows += "CHANNELS" to "$channels ch"
+        if (track.isDsd || info?.isDsd == true) {
+            rows += "DSD" to "→ PCM ${appPrefs.dsdPcmRateHz / 1000.0} kHz"
+        }
+        val durationMs = info?.durationMs?.takeIf { it > 0 } ?: track.durationMs
+        if (durationMs > 0) rows += "LENGTH" to formatTrackDuration(durationMs)
+        if (track.sizeBytes > 0) rows += "FILE SIZE" to formatFileSize(track.sizeBytes)
+        if (track.title.isNotBlank()) rows += "TITLE" to track.title
+        if (track.artist.isNotBlank()) rows += "ARTIST" to track.artist
+        if (track.album.isNotBlank()) rows += "ALBUM" to track.album
+        val albumArtist = info?.albumArtist?.takeIf { it.isNotBlank() }
+            ?: track.albumArtist
+        if (albumArtist.isNotBlank() && albumArtist != track.artist) {
+            rows += "ALBUM ARTIST" to albumArtist
+        }
+        val isDark = isDarkThemeActive()
+        val labelColor = ContextCompat.getColor(
+            this, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light
+        )
+        val valueColor = ContextCompat.getColor(
+            this, if (isDark) R.color.text_primary else R.color.text_primary_light
+        )
+        val builder = SpannableStringBuilder()
+        for ((index, row) in rows.withIndex()) {
+            if (index > 0) builder.append("\n")
+            val labelStart = builder.length
+            builder.append(row.first.padEnd(13))
+            builder.setSpan(
+                ForegroundColorSpan(labelColor),
+                labelStart, builder.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            val valueStart = builder.length
+            builder.append(row.second)
+            builder.setSpan(
+                ForegroundColorSpan(valueColor),
+                valueStart, builder.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+        return builder
+    }
+
+    // native の iformat 名（"mov,mp4,m4a,3gp,3g2,mj2" 等）を
+    // 表示用へ整形する。先頭トークンを取り、代表的なものは
+    // 通称へ置き換える。
+    private fun formatContainerName(raw: String): String {
+        val first = raw.substringBefore(',').trim().lowercase()
+        if (first.isBlank()) return ""
+        return when (first) {
+            "mov" -> "MP4"
+            "iff" -> "DFF"
+            else -> first.uppercase()
+        }
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        return if (bytes >= 1024 * 1024) {
+            String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        } else {
+            String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        }
     }
 
     // シャッフル / リピートトグルの見た目を LocalPlayer（= prefs）の

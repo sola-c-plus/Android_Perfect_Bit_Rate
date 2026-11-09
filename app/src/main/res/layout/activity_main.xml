@@ -566,15 +566,78 @@
                             android:layout_height="0dp"
                             android:layout_weight="1" />
 
-                        <ImageView
-                            android:id="@+id/imgNpArtwork"
+                        <!-- ★ アートワーク枠（表示切替の土台）:
+                             タップで表示ビューの選択シートを開く
+                             （アートワーク／スペクトラム／VU メーター
+                             ／詳細情報から直接選ぶ）。長押しは従来
+                             どおりアルバムビューへのジャンプ。選択中
+                             のビューだけを VISIBLE にし、右上にビュー
+                             名キャプションで現在位置を示す。
+                             選択は AppPreferences（localNpViewMode）
+                             に永続化する。 -->
+                        <FrameLayout
+                            android:id="@+id/npViewContainer"
                             android:layout_width="match_parent"
                             android:layout_height="320dp"
                             android:layout_marginStart="16dp"
                             android:layout_marginEnd="16dp"
-                            android:layout_marginTop="4dp"
-                            android:scaleType="fitCenter"
-                            android:src="@drawable/ic_local_artwork_placeholder" />
+                            android:layout_marginTop="4dp">
+
+                            <ImageView
+                                android:id="@+id/imgNpArtwork"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:scaleType="fitCenter"
+                                android:src="@drawable/ic_local_artwork_placeholder" />
+
+                            <com.example.perfectbitrate.NpSpectrumView
+                                android:id="@+id/npSpectrumView"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:visibility="gone" />
+
+                            <com.example.perfectbitrate.NpVuMeterView
+                                android:id="@+id/npVuMeterView"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:visibility="gone" />
+
+                            <ScrollView
+                                android:id="@+id/npDetailsScroll"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:visibility="gone">
+
+                                <TextView
+                                    android:id="@+id/textNpDetails"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:padding="16dp"
+                                    android:textColor="@color/text_primary"
+                                    android:textSize="12.5sp"
+                                    android:fontFamily="@font/font_dap_mono"
+                                    android:lineSpacingMultiplier="1.5" />
+                            </ScrollView>
+
+                            <TextView
+                                android:id="@+id/textNpViewName"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="top|end"
+                                android:layout_margin="10dp"
+                                android:background="@drawable/bg_np_caption"
+                                android:paddingStart="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingTop="3dp"
+                                android:paddingBottom="3dp"
+                                android:text="ARTWORK"
+                                android:textColor="@color/text_primary"
+                                android:textSize="9.5sp"
+                                android:textStyle="bold"
+                                android:fontFamily="@font/font_dap_condensed"
+                                android:letterSpacing="0.08" />
+
+                        </FrameLayout>
 
                         <!-- ★ 中間スペーサ（アートワークと下側ブロックの
                              間隔を広く取り、曲情報〜操作行を下寄りに） -->
