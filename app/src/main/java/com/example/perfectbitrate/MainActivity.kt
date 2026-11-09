@@ -4670,12 +4670,28 @@ class MainActivity : AppCompatActivity() {
             //   Direct 時・未バインド時・ガード OFF 時はガードが働かないため "-" 表示にする。
             //   OFF 時は native 側の統計が最後の低減量を保持し続けるため、表示側で Prefs の
             //   ON/OFF を見て "-" に倒す（キャッシュや Prefs への書き戻しはしない）。
+            // ★ 最大低減も併記する（TP:現在/最大）。最大値は native 統計のリセット
+            //   （ストリーム再初期化・再構成時）以来の最大で、表示専用統計をそのまま使う
+            //   （表示側ではリセットしない。DROP の累計表示と同じ考え方）。
+            //   最大低減キャップ（-6dB）への到達が 1 回でもあれば末尾に "*" を付け、
+            //   TP 部分を危険色にしてキャップ張り付きが分かるようにする。
+            val tpActive = svc != null && !svc.isDirectSource && appPrefs.isTruePeakGuardEnabled
             val tpCurrent = svc?.truePeakCurrentReductionDb ?: 0f
-            val tpStr = if (svc != null && !svc.isDirectSource && appPrefs.isTruePeakGuardEnabled) String.format(java.util.Locale.US, "-%.1f", tpCurrent) else "-"
+            val tpMax = svc?.truePeakMaxReductionDb ?: 0f
+            val tpCapHit = (svc?.truePeakCapHitCount ?: 0L) > 0L
+            val tpStr = if (tpActive) String.format(java.util.Locale.US, "-%.1f/-%.1f", tpCurrent, tpMax) else "-"
             // ★ DROP の累計 ms は桁が増え続けステータス行を押し広げるため、
             //   1 秒以上は秒表記（例: 1.2s）に短縮する。意味は ms 表記と同じ。
             val dropMsStr = if (dropMs >= 1000L) String.format(java.util.Locale.US, "%.1fs", dropMs / 1000.0) else "${dropMs}ms"
-            textBufferLatency.text = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMsStr}) TP:${tpStr}dB"
+            val bufLatText = "BUF:${bufPercent}% LAT:${latStr} DROP:${drop}(${dropMsStr}) TP:${tpStr}dB" + if (tpActive && tpCapHit) "*" else ""
+            if (tpActive && tpCapHit) {
+                val spanned = android.text.SpannableString(bufLatText)
+                val capColor = ContextCompat.getColor(this@MainActivity, if (isDarkThemeActive()) R.color.danger else R.color.danger_light)
+                spanned.setSpan(android.text.style.ForegroundColorSpan(capColor), bufLatText.indexOf(" TP:"), bufLatText.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                textBufferLatency.text = spanned
+            } else {
+                textBufferLatency.text = bufLatText
+            }
             textBufferLatency.setTextColor(if (isDarkThemeActive()) ContextCompat.getColor(this@MainActivity, R.color.text_secondary) else ContextCompat.getColor(this@MainActivity, R.color.text_secondary_light))
         } else {
             textCpuRamMonitor.visibility = View.GONE
