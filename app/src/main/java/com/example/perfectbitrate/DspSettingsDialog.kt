@@ -379,7 +379,7 @@ class DspSettingsDialog(
         rebuildSpinnerItems()
 
         fun showSaveCustomDialog() {
-            val input = EditText(activity).apply {
+            val input = EditText(PbrDialogs.themedContext(activity)).apply {
                 hint = "プリセット名を入力"
                 setSingleLine()
                 val currentItem = spinnerItemList.getOrNull(spinnerEqPreset?.selectedItemPosition ?: 0)
@@ -388,7 +388,7 @@ class DspSettingsDialog(
                 selectAll()
             }
 
-            AlertDialog.Builder(activity)
+            PbrDialogs.builder(activity)
                 .setTitle("カスタムEQプリセットの保存")
                 .setView(input)
                 .setPositiveButton("保存") { _, _ ->
@@ -398,7 +398,7 @@ class DspSettingsDialog(
 
                     if (existing != null) {
                         // 同名が存在する場合は上書き確認
-                        AlertDialog.Builder(activity)
+                        PbrDialogs.builder(activity)
                             .setTitle("上書きの確認")
                             .setMessage("「$newName」は既に存在します。上書き保存しますか？")
                             .setPositiveButton("上書き") { _, _ ->
@@ -410,6 +410,7 @@ class DspSettingsDialog(
                             }
                             .setNegativeButton("キャンセル", null)
                             .show()
+                            .also { PbrDialogs.applyDestructive(it) }
                     } else {
                         // 新規保存
                         val newCustom = CustomEqPreset(
@@ -435,7 +436,7 @@ class DspSettingsDialog(
             val customId = selId.removePrefix("custom:")
             val targetCustom = savedCustomPresets.firstOrNull { it.id == customId } ?: return
 
-            AlertDialog.Builder(activity)
+            PbrDialogs.builder(activity)
                 .setTitle("プリセットの削除")
                 .setMessage("カスタムプリセット「${targetCustom.name}」を削除しますか？")
                 .setPositiveButton("削除") { _, _ ->
@@ -447,6 +448,7 @@ class DspSettingsDialog(
                 }
                 .setNegativeButton("キャンセル", null)
                 .show()
+                .also { PbrDialogs.applyDestructive(it) }
         }
 
         spinnerEqPreset?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {

@@ -2401,7 +2401,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val labels = playlists.map { it.name as CharSequence }
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("どのプレイリストから外しますか")
             .setItems(labels.toTypedArray()) { _, which ->
                 removeTrackFromPlaylist(track, playlists[which])
@@ -2428,7 +2428,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAddToPlaylistDialog(track: LibraryRepository.Track) {
         val playlists = playlistStore.listPlaylists()
         val labels = playlists.map { it.name as CharSequence } + "＋ 新規作成"
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("プレイリストに追加")
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which >= playlists.size) {
@@ -2446,7 +2446,7 @@ class MainActivity : AppCompatActivity() {
     //   作成できたら onCreated に新しい id を渡す。表示中のタブが
     //   プレイリストなら一覧も更新する。
     private fun showCreatePlaylistDialog(onCreated: ((Long) -> Unit)? = null) {
-        val input = EditText(this).apply {
+        val input = EditText(PbrDialogs.themedContext(this)).apply {
             hint = "プレイリスト名"
             setSingleLine(true)
         }
@@ -2457,7 +2457,7 @@ class MainActivity : AppCompatActivity() {
             addView(input, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        val dialog = AlertDialog.Builder(this)
+        val dialog = PbrDialogs.builder(this)
             .setTitle("プレイリストを作成")
             .setView(container)
             .setPositiveButton("作成", null)
@@ -2483,13 +2483,13 @@ class MainActivity : AppCompatActivity() {
     // ★ プレイリスト行の長押しメニュー（名前の変更／削除）。
     private fun showPlaylistManageDialog(playlist: PlaylistStore.Playlist) {
         val labels = arrayOf<CharSequence>("名前を変更", "削除")
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle(playlist.name)
             .setItems(labels) { _, which ->
                 when (which) {
                     0 -> showRenamePlaylistDialog(playlist)
                     1 -> {
-                        AlertDialog.Builder(this)
+                        PbrDialogs.builder(this)
                             .setTitle("プレイリストを削除")
                             .setMessage("「${playlist.name}」を削除しますか？（曲のファイル自体は消えません）")
                             .setPositiveButton("削除") { _, _ ->
@@ -2502,6 +2502,7 @@ class MainActivity : AppCompatActivity() {
                             }
                             .setNegativeButton("キャンセル", null)
                             .show()
+                            .also { PbrDialogs.applyDestructive(it) }
                     }
                 }
             }
@@ -2509,7 +2510,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showRenamePlaylistDialog(playlist: PlaylistStore.Playlist) {
-        val input = EditText(this).apply {
+        val input = EditText(PbrDialogs.themedContext(this)).apply {
             setText(playlist.name)
             setSingleLine(true)
             setSelection(text.length)
@@ -2521,7 +2522,7 @@ class MainActivity : AppCompatActivity() {
             addView(input, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        val dialog = AlertDialog.Builder(this)
+        val dialog = PbrDialogs.builder(this)
             .setTitle("名前を変更")
             .setView(container)
             .setPositiveButton("変更", null)
@@ -2544,7 +2545,7 @@ class MainActivity : AppCompatActivity() {
 
     // ★ プレイリスト内の曲行の長押し: そのプレイリストから外す。
     private fun showRemoveFromPlaylistDialog(playlistId: Long, track: LibraryRepository.Track) {
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle(track.title.ifBlank { track.displayName })
             .setItems(arrayOf<CharSequence>("プレイリストから削除")) { _, _ ->
                 playlistStore.removeItem(playlistId, track.uri.toString())
@@ -2639,7 +2640,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLocalSortDialog() {
         val labels = arrayOf<CharSequence>("タイトル順", "アーティスト順", "アルバム順")
-        AlertDialog.Builder(this)
+        PbrDialogs.builder(this)
             .setTitle("並び替え（全曲）")
             .setSingleChoiceItems(labels, appPrefs.localSortMode) { dialog, which ->
                 appPrefs.localSortMode = which
