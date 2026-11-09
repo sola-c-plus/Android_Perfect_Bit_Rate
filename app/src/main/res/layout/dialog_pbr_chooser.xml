@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ ダイアログ UI 統一 PR-C: 選択系共通シート（PbrChooserSheet）の土台。
+     DSP 設定シートと同じ作法: 地は bg_bottom_sheet_dap（上角丸 16dp＋
+     border_sheet 1dp）、つまみは accent、見出しは DSP 見出し書式
+     （accent・condensed bold 13.5sp）。行は PbrChooserSheet が動的に組む。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/chooserRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_bottom_sheet_dap">
+
+    <View
+        android:id="@+id/chooserHandle"
+        android:layout_width="36dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:background="@color/accent"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="6dp" />
+
+    <TextView
+        android:id="@+id/chooserTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/accent"
+        android:textSize="13.5sp"
+        android:textStyle="bold"
+        android:fontFamily="@font/font_dap_condensed"
+        android:letterSpacing="0.05" />
+
+    <ScrollView
+        android:id="@+id/chooserScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:id="@+id/chooserList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingBottom="14dp" />
+    </ScrollView>
+</LinearLayout>

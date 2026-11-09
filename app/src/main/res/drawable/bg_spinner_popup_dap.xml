@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ ダイアログ UI 統一 PR-C: Spinner ドロップダウン専用の背景（ダーク）。
+     従来ダーク時はフレームワーク既定の枠だったものを、シート地と同系
+     （main_background＋border_sheet 1dp＋角丸 16dp）に揃えるための専用 drawable。
+     ライト時の bg_bottom_sheet_dap_light 流用もこちらへ置き換える。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/main_background" />
+    <corners android:radius="16dp" />
+    <stroke android:width="1dp" android:color="@color/border_sheet" />
+</shape>

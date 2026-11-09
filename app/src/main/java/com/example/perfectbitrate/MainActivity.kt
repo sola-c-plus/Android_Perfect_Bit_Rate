@@ -2401,12 +2401,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val labels = playlists.map { it.name as CharSequence }
-        PbrDialogs.builder(this)
-            .setTitle("どのプレイリストから外しますか")
-            .setItems(labels.toTypedArray()) { _, which ->
-                removeTrackFromPlaylist(track, playlists[which])
-            }
-            .show()
+        PbrChooserSheet.showItems(this, "どのプレイリストから外しますか", labels) { which ->
+            removeTrackFromPlaylist(track, playlists[which])
+        }
     }
 
     // ★ ★タップ（輪郭状態）のクイック追加: 最後に作成した
@@ -2428,18 +2425,15 @@ class MainActivity : AppCompatActivity() {
     private fun showAddToPlaylistDialog(track: LibraryRepository.Track) {
         val playlists = playlistStore.listPlaylists()
         val labels = playlists.map { it.name as CharSequence } + "＋ 新規作成"
-        PbrDialogs.builder(this)
-            .setTitle("プレイリストに追加")
-            .setItems(labels.toTypedArray()) { _, which ->
-                if (which >= playlists.size) {
-                    showCreatePlaylistDialog { newId ->
-                        playlistStore.getPlaylist(newId)?.let { addTrackToPlaylist(track, it) }
-                    }
-                } else {
-                    addTrackToPlaylist(track, playlists[which])
+        PbrChooserSheet.showItems(this, "プレイリストに追加", labels) { which ->
+            if (which >= playlists.size) {
+                showCreatePlaylistDialog { newId ->
+                    playlistStore.getPlaylist(newId)?.let { addTrackToPlaylist(track, it) }
                 }
+            } else {
+                addTrackToPlaylist(track, playlists[which])
             }
-            .show()
+        }
     }
 
     // ★ 新規作成ダイアログ（名前入力、空名不可）。
@@ -2482,31 +2476,28 @@ class MainActivity : AppCompatActivity() {
 
     // ★ プレイリスト行の長押しメニュー（名前の変更／削除）。
     private fun showPlaylistManageDialog(playlist: PlaylistStore.Playlist) {
-        val labels = arrayOf<CharSequence>("名前を変更", "削除")
-        PbrDialogs.builder(this)
-            .setTitle(playlist.name)
-            .setItems(labels) { _, which ->
-                when (which) {
-                    0 -> showRenamePlaylistDialog(playlist)
-                    1 -> {
-                        PbrDialogs.builder(this)
-                            .setTitle("プレイリストを削除")
-                            .setMessage("「${playlist.name}」を削除しますか？（曲のファイル自体は消えません）")
-                            .setPositiveButton("削除") { _, _ ->
-                                playlistStore.deletePlaylist(playlist.id)
-                                if (localPlaylistDrillId == playlist.id) {
-                                    localPlaylistDrillId = null
-                                }
-                                Toast.makeText(this, "削除しました", Toast.LENGTH_SHORT).show()
-                                refreshLocalBrowser()
+        val labels = listOf<CharSequence>("名前を変更", "削除")
+        PbrChooserSheet.showItems(this, playlist.name, labels) { which ->
+            when (which) {
+                0 -> showRenamePlaylistDialog(playlist)
+                1 -> {
+                    PbrDialogs.builder(this)
+                        .setTitle("プレイリストを削除")
+                        .setMessage("「${playlist.name}」を削除しますか？（曲のファイル自体は消えません）")
+                        .setPositiveButton("削除") { _, _ ->
+                            playlistStore.deletePlaylist(playlist.id)
+                            if (localPlaylistDrillId == playlist.id) {
+                                localPlaylistDrillId = null
                             }
-                            .setNegativeButton("キャンセル", null)
-                            .show()
-                            .also { PbrDialogs.applyDestructive(it) }
-                    }
+                            Toast.makeText(this, "削除しました", Toast.LENGTH_SHORT).show()
+                            refreshLocalBrowser()
+                        }
+                        .setNegativeButton("キャンセル", null)
+                        .show()
+                        .also { PbrDialogs.applyDestructive(it) }
                 }
             }
-            .show()
+        }
     }
 
     private fun showRenamePlaylistDialog(playlist: PlaylistStore.Playlist) {
@@ -2545,15 +2536,16 @@ class MainActivity : AppCompatActivity() {
 
     // ★ プレイリスト内の曲行の長押し: そのプレイリストから外す。
     private fun showRemoveFromPlaylistDialog(playlistId: Long, track: LibraryRepository.Track) {
-        PbrDialogs.builder(this)
-            .setTitle(track.title.ifBlank { track.displayName })
-            .setItems(arrayOf<CharSequence>("プレイリストから削除")) { _, _ ->
-                playlistStore.removeItem(playlistId, track.uri.toString())
-                Toast.makeText(this, "プレイリストから削除しました", Toast.LENGTH_SHORT).show()
-                updateNpStarState()
-                refreshLocalBrowser()
-            }
-            .show()
+        PbrChooserSheet.showItems(
+            this,
+            track.title.ifBlank { track.displayName },
+            listOf<CharSequence>("プレイリストから削除")
+        ) {
+            playlistStore.removeItem(playlistId, track.uri.toString())
+            Toast.makeText(this, "プレイリストから削除しました", Toast.LENGTH_SHORT).show()
+            updateNpStarState()
+            refreshLocalBrowser()
+        }
     }
 
     // ★ 再生画面の ★ の見た目を同期する。塗りつぶしになるのは
@@ -2639,16 +2631,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showLocalSortDialog() {
-        val labels = arrayOf<CharSequence>("タイトル順", "アーティスト順", "アルバム順")
-        PbrDialogs.builder(this)
-            .setTitle("並び替え（全曲）")
-            .setSingleChoiceItems(labels, appPrefs.localSortMode) { dialog, which ->
-                appPrefs.localSortMode = which
-                dialog.dismiss()
-                refreshLocalBrowser()
-            }
-            .setNegativeButton("キャンセル", null)
-            .show()
+        val labels = listOf<CharSequence>("タイトル順", "アーティスト順", "アルバム順")
+        PbrChooserSheet.showSingleChoice(this, "並び替え（全曲）", labels, appPrefs.localSortMode) { which ->
+            appPrefs.localSortMode = which
+            refreshLocalBrowser()
+        }
     }
 
     // 検索フィルタ: タイトル / アーティスト / アルバム（タグが無い曲でも
