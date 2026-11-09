@@ -51,7 +51,11 @@ class FfmpegDecoder(private val context: Context) {
         // アルバムアーティスト（タグの album_artist 系）。無い曲は ""
         // （呼び出し側でアーティストへ代替する）。旧い .so（戻り値が
         // 11 要素まで）では常に "" になる。
-        val albumArtist: String = ""
+        val albumArtist: String = "",
+        // コンテナ形式（AVFormatContext の iformat 名、例 "flac" /
+        // "mov,mp4,m4a,3gp,3g2,mj2"）。旧い .so（戻り値が 12 要素
+        // まで）では常に "" になる。
+        val container: String = ""
     )
 
     @Volatile
@@ -125,7 +129,8 @@ class FfmpegDecoder(private val context: Context) {
             artist = values[8],
             album = values[9],
             track = values[10],
-            albumArtist = values.getOrNull(11) ?: ""
+            albumArtist = values.getOrNull(11) ?: "",
+            container = values.getOrNull(12) ?: ""
         )
     }
 

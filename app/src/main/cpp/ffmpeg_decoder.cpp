@@ -535,11 +535,12 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeOpen(JNIEnv *env, jobject /*
 //   [0]=sampleRate [1]=channels [2]=bitDepth [3]=codecName [4]=bitRate
 //   [5]=durationMs [6]=isDsd(0/1) [7]=title [8]=artist [9]=album [10]=track
 //   [11]=albumArtist（タグの album_artist 系。表記揺れを吸収して探す）
+//   [12]=container（iformat 名。例 "flac" / "mov,mp4,m4a,3gp,3g2,mj2"）
 JNIEXPORT jobjectArray JNICALL
 Java_com_example_perfectbitrate_FfmpegDecoder_nativeGetInfo(JNIEnv *env, jobject /*thiz*/, jlong handle) {
     DecoderContext *ctx = fromHandle(handle);
     jclass stringCls = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(12, stringCls, nullptr);
+    jobjectArray result = env->NewObjectArray(13, stringCls, nullptr);
     env->DeleteLocalRef(stringCls);
     if (ctx == nullptr || result == nullptr) return result;
 
@@ -550,7 +551,7 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeGetInfo(JNIEnv *env, jobject
         return entry != nullptr && entry->value != nullptr ? entry->value : "";
     };
 
-    std::string values[12];
+    std::string values[13];
     values[0] = std::to_string(ctx->sampleRate);
     values[1] = std::to_string(ctx->channels);
     values[2] = std::to_string(ctx->bitDepth);
@@ -567,7 +568,13 @@ Java_com_example_perfectbitrate_FfmpegDecoder_nativeGetInfo(JNIEnv *env, jobject
     values[11] = getMeta("album_artist");
     if (values[11].empty()) values[11] = getMeta("albumArtist");
     if (values[11].empty()) values[11] = getMeta("AlbumArtist");
-    for (int i = 0; i < 12; i++) {
+    // コンテナ形式は AVFormatContext の入力フォーマット名をそのまま渡す
+    // （表示側で "mov,..." → MP4 のような整形を行う）。
+    values[12] = (ctx->fmtCtx != nullptr && ctx->fmtCtx->iformat != nullptr &&
+                  ctx->fmtCtx->iformat->name != nullptr)
+                     ? ctx->fmtCtx->iformat->name
+                     : "";
+    for (int i = 0; i < 13; i++) {
         jstring s = env->NewStringUTF(values[i].c_str());
         env->SetObjectArrayElement(result, i, s);
         env->DeleteLocalRef(s);

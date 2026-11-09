@@ -43,6 +43,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_LOCAL_SHUFFLE_ENABLED = "localShuffleEnabled"
         private const val KEY_LOCAL_REPEAT_MODE = "localRepeatMode"
         private const val KEY_LOCAL_ARTIST_GROUPING = "localArtistGrouping"
+        private const val KEY_LOCAL_NP_VIEW_MODE = "localNpViewMode"
         private const val KEY_SLEEP_TIMER_MINUTES = "sleepTimerMinutes"
         private const val KEY_SLEEP_TIMER_END_AT_MS = "sleepTimerEndAtMs"
 
@@ -68,6 +69,17 @@ class AppPreferences private constructor(context: Context) {
         //   無い曲はアーティストで代替）。ARTIST: 曲のアーティスト。
         const val LOCAL_ARTIST_GROUPING_ALBUM_ARTIST = 0
         const val LOCAL_ARTIST_GROUPING_ARTIST = 1
+
+        // ★ Local 再生画面（Now Playing）のアートワーク枠に表示する
+        //   ビューの種別。タップでこの順に循環する。WAVEFORM は
+        //   PR-2 で追加予定の予約値で、PR-1 の循環範囲
+        //   （LOCAL_NP_VIEW_LAST）にはまだ含めない。
+        const val LOCAL_NP_VIEW_ARTWORK = 0
+        const val LOCAL_NP_VIEW_SPECTRUM = 1
+        const val LOCAL_NP_VIEW_VU = 2
+        const val LOCAL_NP_VIEW_DETAILS = 3
+        const val LOCAL_NP_VIEW_WAVEFORM = 4
+        const val LOCAL_NP_VIEW_LAST = LOCAL_NP_VIEW_DETAILS
         private const val KEY_VOL_LOCK_ENABLED = "vol_lock_enabled"
         private const val KEY_SELECTED_BIT_MODE = "selected_bit_mode"
         private const val KEY_SELECTED_PERF_MODE = "selected_perf_mode"
@@ -197,6 +209,19 @@ class AppPreferences private constructor(context: Context) {
             return if (stored in LOCAL_SORT_TITLE..LOCAL_SORT_ALBUM) stored else LOCAL_SORT_TITLE
         }
         set(value) = prefs.edit { putInt(KEY_LOCAL_SORT_MODE, value) }
+
+    // ★ Local 再生画面のアートワーク枠の表示ビュー（Now Playing）。
+    //   範囲外の値はアートワーク表示へ倒す（他の選択系と同じ流儀）。
+    var localNpViewMode: Int
+        get() {
+            val stored = prefs.getInt(KEY_LOCAL_NP_VIEW_MODE, LOCAL_NP_VIEW_ARTWORK)
+            return if (stored in LOCAL_NP_VIEW_ARTWORK..LOCAL_NP_VIEW_LAST) {
+                stored
+            } else {
+                LOCAL_NP_VIEW_ARTWORK
+            }
+        }
+        set(value) = prefs.edit { putInt(KEY_LOCAL_NP_VIEW_MODE, value) }
 
     // ★ Local 再生のシャッフル ON/OFF（Now Playing）。状態の正はここで、
     //   LocalPlayer の自動進行が都度読む。
