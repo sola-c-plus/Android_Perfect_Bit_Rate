@@ -143,7 +143,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var npDetailsScroll: ScrollView
     private lateinit var textNpDetails: TextView
     private lateinit var textNpViewName: TextView
-    private lateinit var textNpViewDots: TextView
     private var npViewMode: Int = AppPreferences.LOCAL_NP_VIEW_ARTWORK
     private lateinit var textNpTitle: TextView
     private lateinit var textNpArtist: TextView
@@ -3269,7 +3268,6 @@ class MainActivity : AppCompatActivity() {
         npDetailsScroll = findViewById(R.id.npDetailsScroll)
         textNpDetails = findViewById(R.id.textNpDetails)
         textNpViewName = findViewById(R.id.textNpViewName)
-        textNpViewDots = findViewById(R.id.textNpViewDots)
         textNpTitle = findViewById(R.id.textNpTitle)
         textNpArtist = findViewById(R.id.textNpArtist)
         textNpAlbum = findViewById(R.id.textNpAlbum)
@@ -3956,8 +3954,9 @@ class MainActivity : AppCompatActivity() {
         applyNpViewMode()
     }
 
-    // ★ 選択中のビューだけを VISIBLE にし、ビュー名とドットを
-    //   同期する。波形（PR-2）はこの一覧へ1行足す形で拡張する。
+    // ★ 選択中のビューだけを VISIBLE にし、ビュー名キャプ
+    //   ションを同期する。波形（PR-2）はこの一覧へ1行足す形
+    //   で拡張する。
     private fun applyNpViewMode() {
         if (!::npViewContainer.isInitialized) return
         val views = listOf<Pair<Int, View>>(
@@ -3983,8 +3982,8 @@ class MainActivity : AppCompatActivity() {
         updateNpViewIndicator()
     }
 
-    // ★ ビュー名キャプションと現在位置のドット（選択中は accent、
-    //   それ以外は控えめなグレー）を選択へ同期する。
+    // ★ ビュー名キャプションを選択へ同期する（現在位置の
+    //   ドット表示は廃止し、位置はキャプションで示す）。
     private fun updateNpViewIndicator() {
         if (!::textNpViewName.isInitialized) return
         textNpViewName.text = when (npViewMode) {
@@ -3993,25 +3992,6 @@ class MainActivity : AppCompatActivity() {
             AppPreferences.LOCAL_NP_VIEW_DETAILS -> "DETAILS"
             else -> "ARTWORK"
         }
-        val isDark = isDarkThemeActive()
-        val activeColor = ContextCompat.getColor(
-            this, if (isDark) R.color.accent else R.color.accent_light
-        )
-        val idleColor = ContextCompat.getColor(
-            this, if (isDark) R.color.text_tertiary else R.color.text_tertiary_light
-        )
-        val count = AppPreferences.LOCAL_NP_VIEW_LAST + 1
-        val builder = SpannableStringBuilder()
-        for (i in 0 until count) {
-            if (i > 0) builder.append(" ")
-            val start = builder.length
-            builder.append("●")
-            builder.setSpan(
-                ForegroundColorSpan(if (i == npViewMode) activeColor else idleColor),
-                start, builder.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-        }
-        textNpViewDots.text = builder
     }
 
     // ★ 詳細ビューのテキストを現在曲で組み直す（曲変化・テーマ
