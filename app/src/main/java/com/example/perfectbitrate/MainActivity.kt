@@ -1787,7 +1787,7 @@ class MainActivity : AppCompatActivity() {
                 .translationX(-enterFrom)
                 .setDuration(durationMs)
                 .setInterpolator(interpolator)
-                .addUpdateListener { applyLocalMiniPlayerSlide() }
+                .setUpdateListener { applyLocalMiniPlayerSlide() }
                 .withEndAction {
                     oldPage.visibility = View.GONE
                     oldPage.translationX = 0f
@@ -1803,7 +1803,7 @@ class MainActivity : AppCompatActivity() {
             .translationX(0f)
             .setDuration(durationMs)
             .setInterpolator(interpolator)
-            .addUpdateListener { applyLocalMiniPlayerSlide() }
+            .setUpdateListener { applyLocalMiniPlayerSlide() }
             .withEndAction {
                 newPage.translationX = 0f
                 localSlideAnimators.remove(inAnimator)
@@ -2050,7 +2050,7 @@ class MainActivity : AppCompatActivity() {
                 .translationX(0f)
                 .setDuration(duration)
                 .setInterpolator(interpolator)
-                .addUpdateListener { applyLocalMiniPlayerSlide() }
+                .setUpdateListener { applyLocalMiniPlayerSlide() }
                 .withEndAction {
                     sourcePage.translationX = 0f
                     localSlideAnimators.remove(animator)
@@ -2067,7 +2067,7 @@ class MainActivity : AppCompatActivity() {
             .translationX(0f)
             .setDuration(duration)
             .setInterpolator(interpolator)
-            .addUpdateListener { applyLocalMiniPlayerSlide() }
+            .setUpdateListener { applyLocalMiniPlayerSlide() }
             .withEndAction {
                 sourcePage.translationX = 0f
                 localSlideAnimators.remove(sourceAnimator)
@@ -2081,7 +2081,7 @@ class MainActivity : AppCompatActivity() {
             .translationX(sideOffset)
             .setDuration(duration)
             .setInterpolator(interpolator)
-            .addUpdateListener { applyLocalMiniPlayerSlide() }
+            .setUpdateListener { applyLocalMiniPlayerSlide() }
             .withEndAction {
                 targetPage.visibility = View.GONE
                 targetPage.translationX = 0f
