@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ ダイアログ UI 統一 PR-C: Spinner ドロップダウン専用の背景（ライト）。
+     bg_bottom_sheet_dap_light と同じ地・枠トークンで、四隅角丸 16dp の
+     ポップアップ専用形にしたもの（シート用 drawable の流用をやめる）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/main_background_light" />
+    <corners android:radius="16dp" />
+    <stroke android:width="1dp" android:color="@color/divider_light" />
+</shape>

@@ -187,6 +187,15 @@ class DspSettingsDialog(
                 spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!,
                 switchTruePeak, spinnerTruePeakCeiling, spinnerDsdRate
             )
+        } else {
+            // ★ PR-C: ダーク時も Spinner ドロップダウンの枠をシート地と同系に
+            //   揃える（従来はフレームワーク既定）。ライト時は
+            //   applyLightModeStyle 側で専用 drawable（_light）を当てる。
+            listOf(
+                spinnerTruePeakCeiling, spinnerBitDepth, spinnerDither, spinnerDcPhase,
+                spinnerDsee, spinnerUpsample, spinnerDsdRate,
+                spinnerPerfMode!!, spinnerEqPreset!!
+            ).forEach { it.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap) }
         }
 
         bottomSheetDialog.setOnShowListener {
@@ -827,7 +836,7 @@ class DspSettingsDialog(
         view.findViewById<TextView>(R.id.textTruePeakCeilingLabel)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
         view.findViewById<View>(R.id.dividerDspTruePeak)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
         spinnerTruePeakCeiling.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerTruePeakCeiling.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+        spinnerTruePeakCeiling.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
         view.findViewById<TextView>(R.id.textDcPhaseTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
         view.findViewById<TextView>(R.id.textDcPhaseSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
         view.findViewById<TextView>(R.id.textPerfModeTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
@@ -845,9 +854,9 @@ class DspSettingsDialog(
             swRich.thumbDrawable = swThumbL
         }
         spinnerPerfMode.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerPerfMode.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+        spinnerPerfMode.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
         spinnerEqPreset.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerEqPreset.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+        spinnerEqPreset.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
         view.findViewById<TextView>(R.id.textDseeTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
         view.findViewById<TextView>(R.id.textDseeSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
         view.findViewById<TextView>(R.id.textUpsampleTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
@@ -860,7 +869,7 @@ class DspSettingsDialog(
         view.findViewById<TextView>(R.id.textDsdRateSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
         view.findViewById<View>(R.id.dividerDspDsd)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
         spinnerDsdRate.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerDsdRate.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+        spinnerDsdRate.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
 
         view.findViewById<View>(R.id.dividerDsp1)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
         view.findViewById<View>(R.id.dividerDsp2)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
@@ -899,11 +908,11 @@ class DspSettingsDialog(
         spinnerDcPhase.setBackgroundResource(R.drawable.bg_spinner_dap_light)
         spinnerDsee.setBackgroundResource(R.drawable.bg_spinner_dap_light)
         spinnerUpsample.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerBitDepth.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-        spinnerDither.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-        spinnerDcPhase.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-        spinnerDsee.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-        spinnerUpsample.setPopupBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
+        spinnerBitDepth.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
+        spinnerDither.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
+        spinnerDcPhase.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
+        spinnerDsee.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
+        spinnerUpsample.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
 
         seekBar?.progressBackgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(activity, R.color.component_border_light))
         seekBar?.progressTintList = ColorStateList.valueOf(ContextCompat.getColor(activity, R.color.accent_light))

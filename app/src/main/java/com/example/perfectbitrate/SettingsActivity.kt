@@ -331,18 +331,13 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun showPlaybackModeDialog() {
         val modes = PlaybackMode.entries
-        val labels = Array<CharSequence>(modes.size) { modes[it].displayName }
+        val labels = List<CharSequence>(modes.size) { modes[it].displayName }
         val currentIndex = modes.indexOf(appPrefs.playbackMode)
-        PbrDialogs.builder(this)
-            .setTitle("再生モード")
-            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
-                val selected = modes[which]
-                appPrefs.playbackMode = selected
-                modeValueText?.text = selected.displayName
-                dialog.dismiss()
-            }
-            .setNegativeButton("キャンセル", null)
-            .show()
+        PbrChooserSheet.showSingleChoice(this, "再生モード", labels, currentIndex) { which ->
+            val selected = modes[which]
+            appPrefs.playbackMode = selected
+            modeValueText?.text = selected.displayName
+        }
     }
 
     // ★ スリープタイマーの現在値表示。未設定なら「オフ」、設定中なら
@@ -367,30 +362,25 @@ class SettingsActivity : AppCompatActivity() {
             AppPreferences.SLEEP_TIMER_OFF,
             *AppPreferences.SLEEP_TIMER_CHOICES_MINUTES
         )
-        val labels = Array<CharSequence>(values.size) { i ->
+        val labels = List<CharSequence>(values.size) { i ->
             if (values[i] == AppPreferences.SLEEP_TIMER_OFF) "オフ" else "${values[i]}分"
         }
         val currentIndex = values.indexOf(appPrefs.sleepTimerMinutes).coerceAtLeast(0)
-        PbrDialogs.builder(this)
-            .setTitle("スリープタイマー")
-            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
-                val selected = values[which]
-                appPrefs.sleepTimerMinutes = selected
-                appPrefs.sleepTimerEndAtMs = if (selected == AppPreferences.SLEEP_TIMER_OFF) {
-                    0L
-                } else {
-                    System.currentTimeMillis() + selected * 60_000L
-                }
-                sleepTimerValueText?.text = sleepTimerLabel()
-                if (selected != AppPreferences.SLEEP_TIMER_OFF) {
-                    Toast.makeText(
-                        this, "${selected}分後に再生を停止します", Toast.LENGTH_SHORT
-                    ).show()
-                }
-                dialog.dismiss()
+        PbrChooserSheet.showSingleChoice(this, "スリープタイマー", labels, currentIndex) { which ->
+            val selected = values[which]
+            appPrefs.sleepTimerMinutes = selected
+            appPrefs.sleepTimerEndAtMs = if (selected == AppPreferences.SLEEP_TIMER_OFF) {
+                0L
+            } else {
+                System.currentTimeMillis() + selected * 60_000L
             }
-            .setNegativeButton("キャンセル", null)
-            .show()
+            sleepTimerValueText?.text = sleepTimerLabel()
+            if (selected != AppPreferences.SLEEP_TIMER_OFF) {
+                Toast.makeText(
+                    this, "${selected}分後に再生を停止します", Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     private fun artistGroupingLabel(grouping: Int): String {
@@ -409,18 +399,13 @@ class SettingsActivity : AppCompatActivity() {
             AppPreferences.LOCAL_ARTIST_GROUPING_ALBUM_ARTIST,
             AppPreferences.LOCAL_ARTIST_GROUPING_ARTIST
         )
-        val labels = Array<CharSequence>(values.size) { artistGroupingLabel(values[it]) }
+        val labels = List<CharSequence>(values.size) { artistGroupingLabel(values[it]) }
         val currentIndex = values.indexOf(appPrefs.localArtistGrouping).coerceAtLeast(0)
-        PbrDialogs.builder(this)
-            .setTitle("アーティストの分類")
-            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
-                val selected = values[which]
-                appPrefs.localArtistGrouping = selected
-                artistGroupingValueText?.text = artistGroupingLabel(selected)
-                dialog.dismiss()
-            }
-            .setNegativeButton("キャンセル", null)
-            .show()
+        PbrChooserSheet.showSingleChoice(this, "アーティストの分類", labels, currentIndex) { which ->
+            val selected = values[which]
+            appPrefs.localArtistGrouping = selected
+            artistGroupingValueText?.text = artistGroupingLabel(selected)
+        }
     }
 
     private fun themeLabel(mode: String): String {
@@ -437,21 +422,16 @@ class SettingsActivity : AppCompatActivity() {
     //   戻った先が差分を検知して行う。
     private fun showThemeDialog() {
         val values = arrayOf("dark", "light", "auto")
-        val labels = Array<CharSequence>(values.size) { themeLabel(values[it]) }
+        val labels = List<CharSequence>(values.size) { themeLabel(values[it]) }
         val currentIndex = values.indexOf(appPrefs.uiThemeMode).coerceAtLeast(0)
-        PbrDialogs.builder(this)
-            .setTitle("テーマ")
-            .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
-                val selected = values[which]
-                dialog.dismiss()
-                if (selected != appPrefs.uiThemeMode) {
-                    appPrefs.uiThemeMode = selected
-                    themeValueText?.text = themeLabel(selected)
-                    recreate()
-                }
+        PbrChooserSheet.showSingleChoice(this, "テーマ", labels, currentIndex) { which ->
+            val selected = values[which]
+            if (selected != appPrefs.uiThemeMode) {
+                appPrefs.uiThemeMode = selected
+                themeValueText?.text = themeLabel(selected)
+                recreate()
             }
-            .setNegativeButton("キャンセル", null)
-            .show()
+        }
     }
 
     // ★ バッテリー最適化の除外リクエスト（旧 UI 設定ダイアログから移設）。

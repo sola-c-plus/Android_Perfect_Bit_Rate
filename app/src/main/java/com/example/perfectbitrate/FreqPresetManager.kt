@@ -322,6 +322,14 @@ object FreqPresetManager {
             ad.setDropDownViewResource(R.layout.item_spinner_dap)
             frontSp.adapter = ad
             frontSp.setSelection(currentPresetIndex)
+            // ★ PR-C: ドロップダウンの枠をシート地と同系の専用 drawable に揃える
+            frontSp.setPopupBackgroundResource(
+                if (PbrDialogs.isDark(dialogView.context)) {
+                    R.drawable.bg_spinner_popup_dap
+                } else {
+                    R.drawable.bg_spinner_popup_dap_light
+                }
+            )
 
             frontSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(p0: AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -342,6 +350,9 @@ object FreqPresetManager {
                 val ad = ArrayAdapter(ctx, R.layout.item_spinner_dap, items)
                 ad.setDropDownViewResource(R.layout.item_spinner_dap)
                 sp.adapter = ad
+                // ★ PR-C: 開発プリセットシートは常時ダーク作法のため、
+                //   ドロップダウンの枠もダーク専用 drawable に揃える
+                sp.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap)
                 return sp
             }
 
@@ -351,6 +362,7 @@ object FreqPresetManager {
                 ad.setDropDownViewResource(R.layout.item_spinner_dap)
                 backSp.adapter = ad
                 backSp.setSelection(currentPresetIndex)
+                backSp.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap)
                 backSpinnerRef = WeakReference(backSp)
             }
 
