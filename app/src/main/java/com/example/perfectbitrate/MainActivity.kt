@@ -4063,6 +4063,22 @@ class MainActivity : AppCompatActivity() {
         return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
     }
 
+    private fun isBluetoothDevice(device: AudioDeviceInfo?): Boolean {
+        if (device == null) return false
+        return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (
+                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER
+            )) ||
+            device.type == AudioDeviceInfo.TYPE_HEARING_AID
+    }
+
+    // ★ Vol Lock が使える外部出力ルート（USB / BT）。実体の判定は
+    //   Service 側（isVolLockSupportedDevice）と揃える。
+    private fun isVolLockSupportedDevice(device: AudioDeviceInfo?): Boolean {
+        return isUsbDevice(device) || isBluetoothDevice(device)
+    }
+
     private fun updateDialogPlayerUi() {
         activePlayerDialog?.updatePlayerState(
             title = currentTitle,
@@ -5107,7 +5123,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            if (isUsbDevice(activeOutputDevice)) {
+            if (isVolLockSupportedDevice(activeOutputDevice)) {
                 playbackService?.lockSystemVolumeToMax()
                 if (event?.repeatCount == 0) {
                     if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
@@ -5134,7 +5150,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (isVolLockOn && (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP)) {
-            if (isUsbDevice(activeOutputDevice)) return true
+            if (isVolLockSupportedDevice(activeOutputDevice)) return true
         }
         return super.onKeyUp(keyCode, event)
     }

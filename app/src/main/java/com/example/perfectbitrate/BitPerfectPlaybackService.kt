@@ -512,7 +512,7 @@ class BitPerfectPlaybackService : Service() {
 
     fun updateVolumeControlMode() {
         try {
-            if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
+            if (isVolumeLocked && isVolLockSupportedDevice(activeOutputDevice)) {
                 lockSystemVolumeToMax()
                 mediaSession.setPlaybackToRemote(volumeProvider)
             } else {
@@ -525,7 +525,7 @@ class BitPerfectPlaybackService : Service() {
 
     private val volumeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (isVolumeLocked && isUsbDevice(activeOutputDevice)) {
+            if (isVolumeLocked && isVolLockSupportedDevice(activeOutputDevice)) {
                 lockSystemVolumeToMax()
             }
         }
@@ -611,9 +611,35 @@ class BitPerfectPlaybackService : Service() {
                device.type == AudioDeviceInfo.TYPE_HEARING_AID
     }
 
+    // ★ Vol Lock（0dB VOLUME LOCK）が使える外部出力ルート: USB DAC と
+    //   Bluetooth。どちらのルートでも「端末側のストリーム音量を最大に
+    //   固定し、実音量は接続先側の事情で決まる」という Vol Lock の前提が
+    //   成り立つため（BT の絶対音量については lockSystemVolumeToMax の
+    //   コメント参照）。内蔵スピーカー等の本体ルートでは最大固定が
+    //   爆音に直結するため、従来どおり対象外とする。
+    fun isVolLockSupportedDevice(device: AudioDeviceInfo?): Boolean {
+        return isUsbDevice(device) || isBluetoothDevice(device)
+    }
+
+    // ★ Vol Lock の実体: ストリーム音量を最大へ設定し、AudioTrack の
+    //   ゲインも 1.0 に戻す。ロック中は VOLUME_CHANGED_ACTION の受信
+    //   （volumeReceiver）とメディアセッションの VolumeProvider
+    //   （相対モードでキー入力を曲送りに変換）がこの状態を維持する。
+    //
+    //   BT（AVRCP 絶対音量）への対応:
+    //   - 絶対音量対応デバイスでは、端末側のストリーム音量がそのまま
+    //     デバイス音量になるため、最大固定＝デバイス側も最大になる。
+    //     デバイス側の音量キー操作は端末側音量の変更として届くので、
+    //     volumeReceiver が即座に最大へ戻し、奪い合いにはならない
+    //     （同一値への再設定は Android 側で変化なしとして扱われる）。
+    //   - 絶対音量に非対応のデバイスでは、端末側音量とデバイス側音量が
+    //     独立しているため「端末側を最大に固定」までがアプリの守備範囲で、
+    //     デバイス本体の音量つまみは最終的な安全弁として残る。
+    //     デバイス側キーの操作は端末へ届かないため検知できないが、
+    //     その場合も端末側の固定は維持される。
     fun lockSystemVolumeToMax() {
         try {
-            if (isUsbDevice(activeOutputDevice)) {
+            if (isVolLockSupportedDevice(activeOutputDevice)) {
                 val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
                 audioTrack?.setVolume(1.0f)
@@ -650,6 +676,17 @@ class BitPerfectPlaybackService : Service() {
                     // ★ DAC接続時は安全のため音量0から開始
                     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
                     audioTrack?.setVolume(1.0f)
+                }
+            } else if (isBluetoothDevice(device)) {
+                // ★ Vol Lock の BT 対応: トラック再生成時の音量復帰でも
+                //   ロック中なら最大へ戻す（生成側の preserve 判定は
+                //   Vol Lock 中を対象外にしているため、ここが BT 側の
+                //   復帰経路になる）。非ロック時は BT デバイスの音量に
+                //   一切触らない（従来どおり。USB のような 0 開始の
+                //   安全策は、デバイス側にも音量操作がある BT では
+                //   導入しない）。
+                if (isVolumeLocked) {
+                    lockSystemVolumeToMax()
                 }
             } else if (device == null) {
                 forceResetSpeakerVolume()
