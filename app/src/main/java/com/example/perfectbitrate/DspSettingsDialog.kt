@@ -1,10 +1,13 @@
 package com.example.perfectbitrate
 
 import android.app.Activity
+import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.view.View
 import android.view.WindowManager
 import android.widget.AdapterView
@@ -58,6 +61,10 @@ class DspSettingsDialog(
     private var isUserSeeking = false
     private var currentDuration = 0L
     private var isApplyingPreset = false
+
+    // ★ Vol Lock 有効化確認で「大音量」とみなす現在の音量の下限（最大比 %）。
+    //   80% 以上はすでに大音量域で、最大固定までの余裕が 20% 以下しかない。
+    private val VOL_LOCK_LOUD_THRESHOLD_PERCENT = 80
 
     private val bitOptions = arrayOf("16-bit (Std)", "24-bit (Hi-Res)", "32-bit (Int32)")
     private val bitModeValues = arrayOf("16bit", "24bit", "32bit")
@@ -248,7 +255,7 @@ class DspSettingsDialog(
         // ★ PR-C1: 12 セクションを行化してコンテナへ構築する。行の
         //   isEnabled ラムダが相互依存（Direct 時の無効化、倍率 <2 での
         //   FREQ/CASCADE 無効化、PERF/RICH の二重条件、天井行の TP
-        //   スイッチ連動、VOL LOCK の USB 条件）を宣言し、状態変更の
+        //   スイッチ連動、VOL LOCK の外部ルート条件（USB/BT））を宣言し、状態変更の
         //   たびに refreshStates() で再評価する。有効倍率は従来どおり
         //   「Direct 時は 1、それ以外は Prefs の選択倍率」。選択肢の
         //   ラベル・保存先・反映経路は従来の Spinner と同一。
@@ -511,16 +518,36 @@ class DspSettingsDialog(
         )
 
         var volLockSwitch: SwitchCompat? = null
+        // ★ 確認ダイアログで確定された直後の ON し直しを、通常の
+        //   OFF→ON（＝再度ダイアログを出す対象）と区別するための
+        //   一回限りのフラグ。確定コールバックが立てる。
+        var volLockEnableConfirmed = false
         volLockSwitch = rows.switchRow(
             title = "0dB VOLUME LOCK",
             description = "最大音量固定 / 音量UP:次へ / DOWN:前へ",
             initial = isVolumeLocked,
-            isEnabled = { isUsbDevice(activeOutputDevice) },
+            isEnabled = { isVolLockSupportedDevice(activeOutputDevice) },
             onChange = { isChecked ->
-                if (isChecked && !isUsbDevice(activeOutputDevice)) {
-                    volLockSwitch?.isChecked = false
-                } else {
-                    onVolumeLockChanged(isChecked)
+                when {
+                    isChecked && !isVolLockSupportedDevice(activeOutputDevice) -> {
+                        volLockSwitch?.isChecked = false
+                    }
+                    isChecked && !volLockEnableConfirmed -> {
+                        // ★ 有効化は安全のため毎回確認ダイアログを出す。
+                        //   いったんスイッチを OFF に戻し（OFF への変更
+                        //   通知は従来どおり素通し）、確定された場合だけ
+                        //   フラグ付きで ON にし直す。キャンセル時は
+                        //   そのまま OFF で確定する。
+                        volLockSwitch?.isChecked = false
+                        showVolLockEnableConfirmDialog {
+                            volLockEnableConfirmed = true
+                            volLockSwitch?.isChecked = true
+                        }
+                    }
+                    else -> {
+                        volLockEnableConfirmed = false
+                        onVolumeLockChanged(isChecked)
+                    }
                 }
             }
         )
@@ -875,6 +902,66 @@ class DspSettingsDialog(
     private fun isUsbDevice(device: AudioDeviceInfo?): Boolean {
         if (device == null) return false
         return device.type == AudioDeviceInfo.TYPE_USB_DEVICE || device.type == AudioDeviceInfo.TYPE_USB_HEADSET
+    }
+
+    private fun isBluetoothDevice(device: AudioDeviceInfo?): Boolean {
+        if (device == null) return false
+        return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (
+                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+                device.type == AudioDeviceInfo.TYPE_BLE_BROADCAST
+            )) ||
+            device.type == AudioDeviceInfo.TYPE_HEARING_AID
+    }
+
+    // ★ Vol Lock が使える外部出力ルート（USB / BT）。Service 側の
+    //   isVolLockSupportedDevice・MainActivity 側の判定と揃える。
+    private fun isVolLockSupportedDevice(device: AudioDeviceInfo?): Boolean {
+        return isUsbDevice(device) || isBluetoothDevice(device)
+    }
+
+    // ★ Vol Lock の有効化確認（安全対策）。OFF→ON のたびに必ず出し、
+    //   「次回から表示しない」は設けない。現在のメディア音量を
+    //   ステップ値と % で示し、有効化で最大（100%）に固定されることを
+    //   明示する。現在の音量が最大の 80% 以上（＝すでに大音量域で、
+    //   残りの余裕が 20% 以下）の場合は警告文を強い文面にし、
+    //   メッセージと肯定ボタンを danger 色にする。
+    //   確定時のみ [onConfirmed] が呼ばれ、キャンセル・閉じる場合は
+    //   何も起きない（呼び出し側でスイッチは OFF に戻し済み）。
+    private fun showVolLockEnableConfirmDialog(onConfirmed: () -> Unit) {
+        val audioManager = activity.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val maxVolume = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 0
+        val currentVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
+        val percent = if (maxVolume > 0) (currentVolume * 100 + maxVolume / 2) / maxVolume else 0
+        val isLoud = maxVolume > 0 && currentVolume * 100 >= maxVolume * VOL_LOCK_LOUD_THRESHOLD_PERCENT
+
+        val message = buildString {
+            if (isLoud) {
+                append("⚠ 現在の音量がすでに大きい状態です。\n\n")
+            }
+            append("音量固定（0dB VOLUME LOCK）を有効化すると、メディア音量が最大に固定され、音量キーでは音量を変更できなくなります（UP: 次の曲 / DOWN: 前の曲 として動作します）。\n\n")
+            append("現在のメディア音量: $currentVolume / $maxVolume（$percent%）\n")
+            append("有効化すると最大（100%）になります。")
+            if (isLoud) {
+                append("\n\n接続先の機器によっては非常に大きな音が出ることがあります。本当に有効化しますか？")
+            } else {
+                append("\n接続先の機器によっては大きな音が出ることがあります。よろしいですか？")
+            }
+        }
+
+        val dialog = PbrDialogs.builder(activity)
+            .setTitle("音量固定を有効化しますか？")
+            .setMessage(message)
+            .setPositiveButton("有効化") { _, _ -> onConfirmed() }
+            .setNegativeButton("キャンセル", null)
+            .show()
+        if (isLoud) {
+            PbrDialogs.applyDestructive(dialog)
+            val colorRes = if (PbrDialogs.isDark(activity)) R.color.danger else R.color.danger_light
+            dialog.findViewById<TextView>(android.R.id.message)
+                ?.setTextColor(ContextCompat.getColor(activity, colorRes))
+        }
     }
 
     private fun formatTime(ms: Long): String {
