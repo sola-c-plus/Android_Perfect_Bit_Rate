@@ -107,6 +107,12 @@ class SettingsActivity : AppCompatActivity() {
             value = sleepTimerLabel(),
             onClick = { showSleepTimerDialog() }
         )
+        addSwitchRow(
+            title = "スリープタイマーのフェードアウト",
+            value = "終了前の30秒で少しずつ音量を下げてから停止します",
+            checked = appPrefs.sleepTimerFadeOut,
+            onCheckedChange = { appPrefs.sleepTimerFadeOut = it }
+        )
 
         addCategory("ライブラリ取得範囲")
         addSwitchRow(

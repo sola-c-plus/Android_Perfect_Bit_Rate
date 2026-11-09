@@ -46,6 +46,7 @@ class AppPreferences private constructor(context: Context) {
         private const val KEY_LOCAL_NP_VIEW_MODE = "localNpViewMode"
         private const val KEY_SLEEP_TIMER_MINUTES = "sleepTimerMinutes"
         private const val KEY_SLEEP_TIMER_END_AT_MS = "sleepTimerEndAtMs"
+        private const val KEY_SLEEP_TIMER_FADE_OUT = "sleepTimerFadeOut"
 
         // ★ スリープタイマーの選択肢（分）。0 は OFF。期限は
         //   sleepTimerEndAtMs（UNIX ミリ秒、0 = 未設定）を正とし、
@@ -278,6 +279,15 @@ class AppPreferences private constructor(context: Context) {
     var sleepTimerEndAtMs: Long
         get() = prefs.getLong(KEY_SLEEP_TIMER_END_AT_MS, 0L)
         set(value) = prefs.edit { putLong(KEY_SLEEP_TIMER_END_AT_MS, value) }
+
+    // ★ スリープタイマーのフェードアウト ON/OFF（既定 ON）。ON のときは
+    //   終了前の最大 30 秒で、アプリ内の出力ゲイン（AudioTrack の
+    //   setVolume）を徐々に下げてから停止する。システム音量には触らない。
+    //   実際のフェード駆動は BitPerfectPlaybackService、開始/解除の
+    //   判定は MainActivity の checkSleepTimer が担う。
+    var sleepTimerFadeOut: Boolean
+        get() = prefs.getBoolean(KEY_SLEEP_TIMER_FADE_OUT, true)
+        set(value) = prefs.edit { putBoolean(KEY_SLEEP_TIMER_FADE_OUT, value) }
 
     var isVolLockEnabled: Boolean
         get() = prefs.getBoolean(KEY_VOL_LOCK_ENABLED, false)
