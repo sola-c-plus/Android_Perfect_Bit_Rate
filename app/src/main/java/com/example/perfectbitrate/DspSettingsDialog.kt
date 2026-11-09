@@ -14,6 +14,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -49,10 +50,8 @@ class DspSettingsDialog(
     private var seekBar: SeekBar? = null
     private var btnPlayPause: ImageButton? = null
 
-    private var layoutSectionPerfMode: View? = null
-    private var spinnerPerfMode: Spinner? = null
-    private var layoutSectionRichHarmonics: View? = null
-    private var switchRichHarmonics: SwitchCompat? = null
+    // ★ PR-C1: 行化した 12 セクションのビルダー（閉じるときに破棄する）
+    private var dspRows: DspSettingsRows? = null
     private var spinnerEqPreset: Spinner? = null
     private var btnEqDelete: Button? = null
 
@@ -121,15 +120,11 @@ class DspSettingsDialog(
         }
 
         val view = activity.layoutInflater.inflate(R.layout.dialog_dsp_settings, null)
-        FreqPresetManager.hookDspSettingsDialog(view)
         bottomSheetDialog.setContentView(view)
 
         val btnClose = view.findViewById<ImageButton>(R.id.btnDspDialogClose)
-        val switchDirectSource = view.findViewById<SwitchCompat>(R.id.dialogSwitchDirectSource)
         val switchEqEnable = view.findViewById<SwitchCompat>(R.id.switchEqEnable)
         val switchSpectrumEnable = view.findViewById<SwitchCompat>(R.id.switchSpectrumEnable)
-        val switchCascadeFir = view.findViewById<SwitchCompat>(R.id.dialogSwitchCascadeFir)
-        val switchVolLock = view.findViewById<SwitchCompat>(R.id.dialogSwitchVolLock)
 
         seekBar = view.findViewById(R.id.dialogSeekBar)
         btnPlayPause = view.findViewById(R.id.dialogBtnPlayPause)
@@ -149,25 +144,6 @@ class DspSettingsDialog(
         val layoutEqAdjustControls = view.findViewById<View>(R.id.layoutEqAdjustControls)
 
         val layoutSectionEq = view.findViewById<View>(R.id.layoutSectionEq)
-        val layoutSectionDither = view.findViewById<View>(R.id.layoutSectionDither)
-        val layoutSectionTruePeak = view.findViewById<View>(R.id.layoutSectionTruePeak)
-        val switchTruePeak = view.findViewById<SwitchCompat>(R.id.dialogSwitchTruePeak)
-        val spinnerTruePeakCeiling = view.findViewById<Spinner>(R.id.dialogSpinnerTruePeakCeiling)
-        val layoutSectionDcPhase = view.findViewById<View>(R.id.layoutSectionDcPhase)
-        val layoutSectionDsee = view.findViewById<View>(R.id.layoutSectionDsee)
-        val layoutSectionUpsample = view.findViewById<View>(R.id.layoutSectionUpsample)
-        val layoutSectionCascadeFir = view.findViewById<View>(R.id.layoutSectionCascadeFir)
-
-        val spinnerBitDepth = view.findViewById<Spinner>(R.id.dialogSpinnerBitDepth)
-        val spinnerDither = view.findViewById<Spinner>(R.id.dialogSpinnerDither)
-        val spinnerDcPhase = view.findViewById<Spinner>(R.id.dialogSpinnerDcPhase)
-        spinnerPerfMode = view.findViewById(R.id.dialogSpinnerPerfMode)
-        layoutSectionRichHarmonics = view.findViewById(R.id.layoutSectionRichHarmonics)
-        switchRichHarmonics = view.findViewById(R.id.dialogSwitchRichHarmonics)
-        layoutSectionPerfMode = view.findViewById(R.id.layoutSectionPerfMode)
-        val spinnerDsee = view.findViewById<Spinner>(R.id.dialogSpinnerDsee)
-        val spinnerUpsample = view.findViewById<Spinner>(R.id.dialogSpinnerUpsample)
-        val spinnerDsdRate = view.findViewById<Spinner>(R.id.dialogSpinnerDsdRate)
         spinnerEqPreset = view.findViewById(R.id.dialogSpinnerEqPreset)
 
         imageArtwork = view.findViewById(R.id.dialogImageArtwork)
@@ -180,22 +156,20 @@ class DspSettingsDialog(
         savedCustomPresets = appPrefs.getSavedCustomEqPresets()
 
         if (!isDarkTheme) {
+            // ★ PR-C1: 行（DspSettingsRows）は構築時に isDark で色が確定する
+            //   ため、ライト付け替えの対象は EQ ブロックとミニプレイヤーだけ
+            //   になった（行はこの後で構築する）。
             applyLightModeStyle(
-                view, btnClose, switchDirectSource, switchEqEnable, switchSpectrumEnable,
-                switchCascadeFir, switchVolLock, btnEqEdit, btnEqSave, btnEqDelete!!, btnEqFlat, btnEqPlus, btnEqMinus,
-                textEqBandFreq, textEqGainValue, spinnerBitDepth, spinnerDither, spinnerDcPhase,
-                spinnerDsee, spinnerUpsample, spinnerPerfMode!!, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!,
-                switchTruePeak, spinnerTruePeakCeiling, spinnerDsdRate
+                view, btnClose, switchEqEnable, switchSpectrumEnable,
+                btnEqEdit, btnEqSave, btnEqDelete!!, btnEqFlat, btnEqPlus, btnEqMinus,
+                textEqBandFreq, textEqGainValue, spinnerEqPreset!!, btnPrev, btnNext, btnPlayPause!!
             )
         } else {
             // ★ PR-C: ダーク時も Spinner ドロップダウンの枠をシート地と同系に
             //   揃える（従来はフレームワーク既定）。ライト時は
             //   applyLightModeStyle 側で専用 drawable（_light）を当てる。
-            listOf(
-                spinnerTruePeakCeiling, spinnerBitDepth, spinnerDither, spinnerDcPhase,
-                spinnerDsee, spinnerUpsample, spinnerDsdRate,
-                spinnerPerfMode!!, spinnerEqPreset!!
-            ).forEach { it.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap) }
+            //   PR-C1 で残る Spinner は EQ プリセットのみ（他は行化した）。
+            spinnerEqPreset?.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap)
         }
 
         bottomSheetDialog.setOnShowListener {
@@ -217,26 +191,11 @@ class DspSettingsDialog(
             }
         }
 
-        switchRichHarmonics?.isChecked = appPrefs.isRichHarmonicsEnabled
-        switchRichHarmonics?.setOnCheckedChangeListener { _, isChecked ->
-            appPrefs.isRichHarmonicsEnabled = isChecked
-            NativeAudioEngine.nativeSetRichHarmonics(isChecked)
-        }
-
-        // ★ True Peak ガード: Prefs 保存＋native 即時送信 (RichHarmonics と同型)。
-        //   天井スピナーはスイッチ ON のときだけ有効 (Direct 時は updateDspSectionsState が優先)。
-        //   スピナーの背景には無効状態の見た目がないため、グレーアウトは EQ プリセットと
-        //   同じく alpha 併用で表す。alpha はスイッチの ON/OFF だけに連動させ、Direct 時の
-        //   減光はセクション全体の alpha に任せる。
-        switchTruePeak.isChecked = appPrefs.isTruePeakGuardEnabled
-        spinnerTruePeakCeiling.isEnabled = !appPrefs.isDirectSource && appPrefs.isTruePeakGuardEnabled
-        spinnerTruePeakCeiling.alpha = if (appPrefs.isTruePeakGuardEnabled) 1.0f else 0.35f
-        switchTruePeak.setOnCheckedChangeListener { _, isChecked ->
-            appPrefs.isTruePeakGuardEnabled = isChecked
-            NativeAudioEngine.nativeSetTruePeakGuard(isChecked, appPrefs.truePeakCeilingDb())
-            spinnerTruePeakCeiling.isEnabled = !appPrefs.isDirectSource && isChecked
-            spinnerTruePeakCeiling.alpha = if (isChecked) 1.0f else 0.35f
-        }
+        // ★ PR-C1: RICH HARMONICS / TRUE PEAK GUARD（スイッチ＋天井）の
+        //   初期反映とリスナーは、行の構築側（switchRow / valueRow の
+        //   initial / onChange / isEnabled）へ移った。天井行の有効条件は
+        //   「非 Direct かつ TP スイッチ ON」を isEnabled ラムダで宣言し、
+        //   refreshStates() が減光（alpha 0.35）込みで再評価する。
 
         walkmanEqView?.isLightMode = !isDarkTheme
         walkmanEqView?.isSpectrumEnabled = appPrefs.isSpectrumEnabled
@@ -262,22 +221,16 @@ class DspSettingsDialog(
             updateDeleteButtonState()
         }
 
-        fun updateDspSectionsState(isDirect: Boolean, factor: Int) {
+        // ★ PR-C1: 行化した 12 セクションの有効/無効は DspSettingsRows の
+        //   isEnabled ラムダ＋refreshStates() が担う。本関数は残った
+        //   EQ ブロック側の減光・無効化だけを受け持つ（状態の正は
+        //   従来どおり Prefs。呼び出し側は Prefs を更新してから呼ぶ）。
+        fun updateDspSectionsState() {
+            val isDirect = appPrefs.isDirectSource
             val dspAlpha = if (isDirect) 0.3f else 1.0f
             val dspEnabled = !isDirect
 
             layoutSectionEq.alpha = dspAlpha
-            layoutSectionDither.alpha = dspAlpha
-            layoutSectionTruePeak.alpha = dspAlpha
-            layoutSectionDcPhase.alpha = dspAlpha
-            layoutSectionUpsample.alpha = dspAlpha
-
-            spinnerDither.isEnabled = dspEnabled
-            switchTruePeak.isEnabled = dspEnabled
-            spinnerTruePeakCeiling.isEnabled = dspEnabled && switchTruePeak.isChecked
-            spinnerTruePeakCeiling.alpha = if (switchTruePeak.isChecked) 1.0f else 0.35f
-            spinnerDcPhase.isEnabled = dspEnabled
-            spinnerUpsample.isEnabled = dspEnabled
 
             switchEqEnable.isEnabled = dspEnabled
             switchSpectrumEnable.isEnabled = dspEnabled
@@ -288,54 +241,301 @@ class DspSettingsDialog(
             btnEqMinus.isEnabled = dspEnabled
             walkmanEqView?.isEnabled = dspEnabled
 
-            val isDseeActive = dspEnabled && factor >= 2
-            layoutSectionDsee.alpha = if (isDseeActive) 1.0f else 0.3f
-            spinnerDsee.isEnabled = isDseeActive
-
-            val isUpsampleActive = dspEnabled && factor >= 2
-            layoutSectionCascadeFir.alpha = if (isUpsampleActive) 1.0f else 0.3f
-            switchCascadeFir.isEnabled = isUpsampleActive
-
-            updatePerfModeState(isDseeActive)
+            dspRows?.refreshStates()
             updateEqPresetState(isDirect, switchEqEnable.isChecked)
         }
 
+        // ★ PR-C1: 12 セクションを行化してコンテナへ構築する。行の
+        //   isEnabled ラムダが相互依存（Direct 時の無効化、倍率 <2 での
+        //   FREQ/CASCADE 無効化、PERF/RICH の二重条件、天井行の TP
+        //   スイッチ連動、VOL LOCK の USB 条件）を宣言し、状態変更の
+        //   たびに refreshStates() で再評価する。有効倍率は従来どおり
+        //   「Direct 時は 1、それ以外は Prefs の選択倍率」。選択肢の
+        //   ラベル・保存先・反映経路は従来の Spinner と同一。
+        val container = view.findViewById<LinearLayout>(R.id.dspSectionsContainer)
+        val rows = DspSettingsRows(activity, container, isDarkTheme)
+        dspRows = rows
+
+        fun effectiveFactor(): Int =
+            if (appPrefs.isDirectSource) 1 else appPrefs.selectedUpsampleFactor
+        fun isFreqEngineActive(): Boolean =
+            !appPrefs.isDirectSource && effectiveFactor() >= 2
+
+        var directSwitch: SwitchCompat? = null
+        directSwitch = rows.switchRow(
+            title = "DIRECT SOURCE",
+            description = "全DSPを無効化しダイレクト送信します",
+            initial = appPrefs.isDirectSource,
+            onChange = { isChecked ->
+                // 切替直後 700ms は二重発火防止のためトグルを無効化する
+                //   （従来のガードを行版に読み替え。時間経過後は
+                //   refreshStates() が有効状態を復元する）。
+                directSwitch?.let { rows.holdSwitchDisabled(it, 700L) }
+                appPrefs.isDirectSource = isChecked
+                NativeAudioEngine.nativeSetDirectSource(isChecked)
+                updateDspSectionsState()
+                onDirectSourceChanged(isChecked)
+            }
+        )
+
+        // EQ ブロックは XML のままコンテナ内に残っているため、DIRECT 行の
+        // 直後（従来位置）へ差し戻す。以後の行はその後ろへ積まれる。
+        container.removeView(layoutSectionEq)
+        container.addView(layoutSectionEq, 1)
+
+        rows.categoryHeader("再生処理")
+
+        rows.valueRow(
+            title = "BIT DEPTH FORMAT",
+            description = "DACへ伝送するPCMビット深度",
+            currentValue = {
+                bitOptions[bitModeValues.indexOf(appPrefs.selectedBitMode).coerceAtLeast(0)]
+            },
+            // ビット深度は要求値（Prefs）の編集のため Direct 時も無効化しない
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "BIT DEPTH FORMAT", bitOptions.toList(),
+                    bitModeValues.indexOf(appPrefs.selectedBitMode).coerceAtLeast(0)
+                ) { pos ->
+                    val selectedMode = bitModeValues[pos]
+                    if (selectedMode != appPrefs.selectedBitMode) {
+                        appPrefs.selectedBitMode = selectedMode
+                        onBitModeChanged(selectedMode)
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        rows.valueRow(
+            title = "DITHERING ALGORITHM",
+            description = "量子化ノイズ分散・SBMシェービング",
+            currentValue = {
+                ditherOptions[ditherModeValues.indexOf(appPrefs.selectedDitherMode).coerceAtLeast(0)]
+            },
+            isEnabled = { !appPrefs.isDirectSource },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "DITHERING ALGORITHM", ditherOptions.toList(),
+                    ditherModeValues.indexOf(appPrefs.selectedDitherMode).coerceAtLeast(0)
+                ) { pos ->
+                    val selectedMode = ditherModeValues[pos]
+                    if (selectedMode != appPrefs.selectedDitherMode) {
+                        appPrefs.selectedDitherMode = selectedMode
+                        NativeAudioEngine.nativeSetDitherMode(selectedMode)
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        rows.switchRow(
+            title = "TRUE PEAK GUARD (サンプル間ピーク保護)",
+            description = "補間で生じるピーク超過を先読みで抑制 (Direct時は無効)",
+            initial = appPrefs.isTruePeakGuardEnabled,
+            isEnabled = { !appPrefs.isDirectSource },
+            onChange = { isChecked ->
+                appPrefs.isTruePeakGuardEnabled = isChecked
+                NativeAudioEngine.nativeSetTruePeakGuard(isChecked, appPrefs.truePeakCeilingDb())
+                rows.refreshStates()
+            }
+        )
+
+        rows.valueRow(
+            title = "天井 (CEILING)",
+            description = null,
+            currentValue = {
+                truePeakCeilingOptions[
+                    appPrefs.selectedTruePeakCeiling.coerceIn(0, truePeakCeilingOptions.lastIndex)
+                ]
+            },
+            isEnabled = { !appPrefs.isDirectSource && appPrefs.isTruePeakGuardEnabled },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "天井 (CEILING)", truePeakCeilingOptions.toList(),
+                    appPrefs.selectedTruePeakCeiling.coerceIn(0, truePeakCeilingOptions.lastIndex)
+                ) { pos ->
+                    if (appPrefs.selectedTruePeakCeiling != pos) {
+                        appPrefs.selectedTruePeakCeiling = pos
+                        NativeAudioEngine.nativeSetTruePeakGuard(
+                            appPrefs.isTruePeakGuardEnabled, appPrefs.truePeakCeilingDb()
+                        )
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        rows.valueRow(
+            title = "DC PHASE LINEARIZER",
+            description = "アナログアンプ低域位相 (A/B Curve 2/4/8Hz)",
+            currentValue = {
+                dcPhaseOptions[dcPhaseTypeValues.indexOf(appPrefs.selectedDcPhaseType).coerceAtLeast(0)]
+            },
+            isEnabled = { !appPrefs.isDirectSource },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "DC PHASE LINEARIZER", dcPhaseOptions.toList(),
+                    dcPhaseTypeValues.indexOf(appPrefs.selectedDcPhaseType).coerceAtLeast(0)
+                ) { pos ->
+                    val selectedType = dcPhaseTypeValues[pos]
+                    if (selectedType != appPrefs.selectedDcPhaseType) {
+                        appPrefs.selectedDcPhaseType = selectedType
+                        NativeAudioEngine.nativeSetDcPhaseType(selectedType)
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        // ★ FREQ ENGINE の実体は FreqPresetManager のプリセット選択。
+        //   現在値は manager の currentPresetIndex から引き、選択は
+        //   onPresetChanged() へ委ねる（native 適用は manager 側）。
+        rows.valueRow(
+            title = "FREQ ENGINE (倍音復元)",
+            description = "直交多項式による20k〜40kHz+超高域倍音補完",
+            currentValue = {
+                FreqPresetManager.PRESET_NAMES[
+                    FreqPresetManager.currentPresetIndex.coerceIn(
+                        0, FreqPresetManager.PRESET_NAMES.lastIndex
+                    )
+                ]
+            },
+            isEnabled = { isFreqEngineActive() },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "FREQ ENGINE (倍音復元)", FreqPresetManager.PRESET_NAMES,
+                    FreqPresetManager.currentPresetIndex
+                ) { pos ->
+                    FreqPresetManager.onPresetChanged(pos)
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        rows.valueRow(
+            title = "PERFORMANCE PROFILE (動作モード)",
+            description = "Eco (省電力) / 普通 (標準) / 超高音質 (フルスペック倍音)",
+            currentValue = {
+                perfModeOptions[appPrefs.selectedPerfMode.coerceIn(0, perfModeOptions.lastIndex)]
+            },
+            isEnabled = {
+                isFreqEngineActive() && FreqPresetManager.currentPresetIndex != 0
+            },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "PERFORMANCE PROFILE (動作モード)", perfModeOptions.toList(),
+                    appPrefs.selectedPerfMode.coerceIn(0, perfModeOptions.lastIndex)
+                ) { pos ->
+                    if (appPrefs.selectedPerfMode != pos) {
+                        appPrefs.selectedPerfMode = pos
+                        NativeAudioEngine.nativeSetPerformanceMode(pos)
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        rows.switchRow(
+            title = "RICH HARMONICS (ふくよか倍音)",
+            description = "16kHz〜へ温かみのある偶数次倍音をブレンドし音に厚みを付加",
+            initial = appPrefs.isRichHarmonicsEnabled,
+            isEnabled = {
+                isFreqEngineActive() && FreqPresetManager.currentPresetIndex != 0
+            },
+            onChange = { isChecked ->
+                appPrefs.isRichHarmonicsEnabled = isChecked
+                NativeAudioEngine.nativeSetRichHarmonics(isChecked)
+            }
+        )
+
+        rows.valueRow(
+            title = "ULTRA HQ UPSAMPLING",
+            description = "ARM NEON 多段ポリフェーズFIR (96k/192k/384k)",
+            currentValue = {
+                upsampleOptions[
+                    upsampleFactorValues.indexOf(appPrefs.selectedUpsampleFactor).coerceAtLeast(0)
+                ]
+            },
+            isEnabled = { !appPrefs.isDirectSource },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "ULTRA HQ UPSAMPLING", upsampleOptions.toList(),
+                    upsampleFactorValues.indexOf(appPrefs.selectedUpsampleFactor).coerceAtLeast(0)
+                ) { pos ->
+                    val selectedFactor = upsampleFactorValues[pos]
+                    if (selectedFactor != appPrefs.selectedUpsampleFactor) {
+                        appPrefs.selectedUpsampleFactor = selectedFactor
+                        onUpsampleFactorChanged(selectedFactor)
+                        updateDspSectionsState()
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        rows.switchRow(
+            title = "MULTISTAGE CASCADE FIR",
+            description = "3段2x接続 (255→63→39 taps) 超低ノイズ補間",
+            initial = appPrefs.isCascadeFir,
+            isEnabled = { isFreqEngineActive() },
+            onChange = { isChecked ->
+                appPrefs.isCascadeFir = isChecked
+                NativeAudioEngine.nativeSetCascadeFir(isChecked)
+            }
+        )
+
+        rows.categoryHeader("変換・出力")
+
+        // ★ DSD 変換レート（仕様書 §5.2）: 実体は Prefs のみで native への
+        //   即時送信は無い。デコード側が読む設定のため、ビット深度と同様に
+        //   Direct 時も無効化しない。
+        rows.valueRow(
+            title = "DSD CONVERSION RATE",
+            description = "Local再生時 DSD→PCM 変換レート",
+            currentValue = {
+                dsdRateOptions[dsdRateValues.indexOf(appPrefs.dsdPcmRateHz).coerceAtLeast(0)]
+            },
+            onClick = {
+                PbrChooserSheet.showSingleChoice(
+                    activity, "DSD CONVERSION RATE", dsdRateOptions.toList(),
+                    dsdRateValues.indexOf(appPrefs.dsdPcmRateHz).coerceAtLeast(0)
+                ) { pos ->
+                    val selectedRate = dsdRateValues[pos]
+                    if (selectedRate != appPrefs.dsdPcmRateHz) {
+                        appPrefs.dsdPcmRateHz = selectedRate
+                    }
+                    rows.refreshStates()
+                }
+            }
+        )
+
+        var volLockSwitch: SwitchCompat? = null
+        volLockSwitch = rows.switchRow(
+            title = "0dB VOLUME LOCK",
+            description = "最大音量固定 / 音量UP:次へ / DOWN:前へ",
+            initial = isVolumeLocked,
+            isEnabled = { isUsbDevice(activeOutputDevice) },
+            onChange = { isChecked ->
+                if (isChecked && !isUsbDevice(activeOutputDevice)) {
+                    volLockSwitch?.isChecked = false
+                } else {
+                    onVolumeLockChanged(isChecked)
+                }
+            }
+        )
+
+        // 開いている間の外部変更（開発プリセット側の操作など）で
+        // FreqPresetManager のプリセットが変わったら、行の現在値と
+        // PERF/RICH の有効状態を追従させる。
+        FreqPresetManager.registerDspFreqRow { dspRows?.refreshStates() }
+
         // ★ 初期状態の確実な反映 (起動時のグレーアウトバグ修正)
-        switchDirectSource.isChecked = appPrefs.isDirectSource
         switchEqEnable.isChecked = appPrefs.isEqEnabled
         walkmanEqView?.isDirectBypass = !appPrefs.isEqEnabled
 
-        updateDspSectionsState(appPrefs.isDirectSource, if (appPrefs.isDirectSource) 1 else appPrefs.selectedUpsampleFactor)
+        updateDspSectionsState()
         updateEqPresetState(appPrefs.isDirectSource, appPrefs.isEqEnabled)
-
-        switchDirectSource.setOnCheckedChangeListener { buttonView, isChecked ->
-            buttonView.isEnabled = false
-            buttonView.postDelayed({ buttonView.isEnabled = true }, 700L)
-
-            appPrefs.isDirectSource = isChecked
-            NativeAudioEngine.nativeSetDirectSource(isChecked)
-            val effectiveFactor = if (isChecked) 1 else appPrefs.selectedUpsampleFactor
-            updateDspSectionsState(isChecked, effectiveFactor)
-            onDirectSourceChanged(isChecked)
-        }
-
-        switchCascadeFir.isChecked = appPrefs.isCascadeFir
-        switchCascadeFir.setOnCheckedChangeListener { _, isChecked ->
-            appPrefs.isCascadeFir = isChecked
-            NativeAudioEngine.nativeSetCascadeFir(isChecked)
-        }
-
-        val isUsb = isUsbDevice(activeOutputDevice)
-        switchVolLock.isEnabled = isUsb
-        switchVolLock.alpha = if (isUsb) 1.0f else 0.35f
-        switchVolLock.isChecked = isVolumeLocked
-        switchVolLock.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && !isUsbDevice(activeOutputDevice)) {
-                switchVolLock.isChecked = false
-                return@setOnCheckedChangeListener
-            }
-            onVolumeLockChanged(isChecked)
-        }
 
         fun setEditMode(enabled: Boolean) {
             if (appPrefs.isDirectSource) return
@@ -558,112 +758,9 @@ class DspSettingsDialog(
         btnEqPlus.setOnClickListener { walkmanEqView?.stepGain(+0.5f) }
         btnEqMinus.setOnClickListener { walkmanEqView?.stepGain(-0.5f) }
 
-        // --- 他の DSP スピナー群の設定 ---
-        // ★ Phase 4: ビット深度スピナーは要求値（Prefs.selectedBitMode）を表示・編集する。
-        //   実際に再生されている形式（実績値）はステータス表示側が Service から読む。
-        val bitAdapter = ArrayAdapter(activity, spinnerLayout, bitOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerBitDepth.adapter = bitAdapter
-        spinnerBitDepth.setSelection(bitModeValues.indexOf(appPrefs.selectedBitMode).coerceAtLeast(0))
-        spinnerBitDepth.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedMode = bitModeValues[position]
-                if (selectedMode != appPrefs.selectedBitMode) {
-                    appPrefs.selectedBitMode = selectedMode
-                    onBitModeChanged(selectedMode)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        val ditherAdapter = ArrayAdapter(activity, spinnerLayout, ditherOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerDither.adapter = ditherAdapter
-        spinnerDither.setSelection(ditherModeValues.indexOf(appPrefs.selectedDitherMode).coerceAtLeast(0))
-        spinnerDither.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedMode = ditherModeValues[position]
-                if (selectedMode != appPrefs.selectedDitherMode) {
-                    appPrefs.selectedDitherMode = selectedMode
-                    NativeAudioEngine.nativeSetDitherMode(selectedMode)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        val dcPhaseAdapter = ArrayAdapter(activity, spinnerLayout, dcPhaseOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerDcPhase.adapter = dcPhaseAdapter
-        spinnerDcPhase.setSelection(dcPhaseTypeValues.indexOf(appPrefs.selectedDcPhaseType).coerceAtLeast(0))
-        spinnerDcPhase.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedType = dcPhaseTypeValues[position]
-                if (selectedType != appPrefs.selectedDcPhaseType) {
-                    appPrefs.selectedDcPhaseType = selectedType
-                    NativeAudioEngine.nativeSetDcPhaseType(selectedType)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        val truePeakCeilingAdapter = ArrayAdapter(activity, spinnerLayout, truePeakCeilingOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerTruePeakCeiling.adapter = truePeakCeilingAdapter
-        spinnerTruePeakCeiling.setSelection(appPrefs.selectedTruePeakCeiling.coerceIn(0, truePeakCeilingOptions.lastIndex))
-        spinnerTruePeakCeiling.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                if (appPrefs.selectedTruePeakCeiling != position) {
-                    appPrefs.selectedTruePeakCeiling = position
-                    NativeAudioEngine.nativeSetTruePeakGuard(appPrefs.isTruePeakGuardEnabled, appPrefs.truePeakCeilingDb())
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        val perfAdapter = ArrayAdapter(activity, spinnerLayout, perfModeOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerPerfMode?.adapter = perfAdapter
-        spinnerPerfMode?.setSelection(appPrefs.selectedPerfMode.coerceIn(0, 2))
-        spinnerPerfMode?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                if (appPrefs.selectedPerfMode != position) {
-                    appPrefs.selectedPerfMode = position
-                    NativeAudioEngine.nativeSetPerformanceMode(position)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        val upsampleAdapter = ArrayAdapter(activity, spinnerLayout, upsampleOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerUpsample.adapter = upsampleAdapter
-        spinnerUpsample.setSelection(upsampleFactorValues.indexOf(appPrefs.selectedUpsampleFactor).coerceAtLeast(0))
-        spinnerUpsample.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedFactor = upsampleFactorValues[position]
-                if (selectedFactor != appPrefs.selectedUpsampleFactor) {
-                    appPrefs.selectedUpsampleFactor = selectedFactor
-                    onUpsampleFactorChanged(selectedFactor)
-                    updateDspSectionsState(appPrefs.isDirectSource, if (appPrefs.isDirectSource) 1 else selectedFactor)
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-
-        // ★ DSD 変換レート（仕様書 §5.2）: 設定画面（SettingsActivity）から
-        //   移設した項目（音に関する設定は DSP ダイアログに寄せるユーザー
-        //   判断）。実体は prefs のみで、native への即時送信は無い。効果は
-        //   LocalPlayer / LibraryRepository がデコード・プローブ時に prefs を
-        //   読むことで効き、変更後のライブラリ再読込では DSD 曲の再プローブ
-        //   判定（LibraryRepository 側）により表示レートも追いつく。
-        //   デコード側の変換形式の設定のため、ビット深度スピナーと同様に
-        //   Direct 時も無効化しない（updateDspSectionsState の対象外）。
-        val dsdRateAdapter = ArrayAdapter(activity, spinnerLayout, dsdRateOptions).apply { setDropDownViewResource(spinnerLayout) }
-        spinnerDsdRate.adapter = dsdRateAdapter
-        spinnerDsdRate.setSelection(dsdRateValues.indexOf(appPrefs.dsdPcmRateHz).coerceAtLeast(0))
-        spinnerDsdRate.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
-                val selectedRate = dsdRateValues[position]
-                if (selectedRate != appPrefs.dsdPcmRateHz) {
-                    appPrefs.dsdPcmRateHz = selectedRate
-                }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
+        // ★ PR-C1: ビット深度／ディザ／DC位相／TP天井／性能／倍率／DSD の
+        //   各 Spinner の設定は、行の構築側（valueRow の onClick → 選択
+        //   シート）へ移った。保存先・反映経路は従来と同一。
 
         btnPlayPause?.setOnClickListener {
             it.hapticTick(appPrefs)
@@ -719,27 +816,24 @@ class DspSettingsDialog(
             seekBar = null
             btnPlayPause = null
             btnEqDelete = null
-            layoutSectionPerfMode = null
-            spinnerPerfMode = null
-            layoutSectionRichHarmonics = null
-            switchRichHarmonics = null
+            dspRows = null
             spinnerEqPreset = null
-            FreqPresetManager.clearFrontDialogRefs()
+            FreqPresetManager.clearDspFreqRow()
             onDismiss()
         }
 
         bottomSheetDialog.show()
     }
 
+    // ★ PR-C1: 従来は PERFORMANCE / RICH HARMONICS セクションの有効状態を
+    //   ここで付け替えていた。PR-C1 で両者は行化され、有効状態は行の
+    //   isEnabled ラムダ（FREQ ENGINE 有効 かつ プリセット index != 0）が
+    //   refreshStates() で再評価する。本メソッドは MainActivity 側の
+    //   FreqPresetManager.onPresetChangedListener からの呼び出し互換の
+    //   ため残し、中身を行の再評価へ委ねる（引数は従来の呼び出し形式の
+    //   名残で、判定は行側が Prefs と currentPresetIndex から行う）。
     fun updatePerfModeState(isDseeActive: Boolean) {
-        val isPerfActive = isDseeActive && (FreqPresetManager.currentPresetIndex != 0)
-        val perfAlpha = if (isPerfActive) 1.0f else 0.35f
-        layoutSectionPerfMode?.alpha = perfAlpha
-        spinnerPerfMode?.isEnabled = isPerfActive
-        spinnerPerfMode?.alpha = perfAlpha
-
-        layoutSectionRichHarmonics?.alpha = perfAlpha
-        switchRichHarmonics?.isEnabled = isPerfActive
+        dspRows?.refreshStates()
     }
 
     override fun updatePlayerState(
@@ -791,14 +885,14 @@ class DspSettingsDialog(
         return String.format(java.util.Locale.US, "%d:%02d", minutes, seconds)
     }
 
+    // ★ PR-C1: 行化したセクションは DspSettingsRows が構築時に isDark で
+    //   色を確定するため、本関数の付け替え対象は EQ ブロックと
+    //   ミニプレイヤーだけになった（旧来の約130行の付け替えから縮小）。
     private fun applyLightModeStyle(
         view: View,
         btnClose: ImageButton,
-        switchDirectSource: SwitchCompat,
         switchEqEnable: SwitchCompat,
         switchSpectrumEnable: SwitchCompat,
-        switchCascadeFir: SwitchCompat,
-        switchVolLock: SwitchCompat,
         btnEqEdit: Button,
         btnEqSave: Button,
         btnEqDelete: Button,
@@ -807,80 +901,23 @@ class DspSettingsDialog(
         btnEqMinus: ImageButton,
         textEqBandFreq: TextView,
         textEqGainValue: TextView,
-        spinnerBitDepth: Spinner,
-        spinnerDither: Spinner,
-        spinnerDcPhase: Spinner,
-        spinnerDsee: Spinner,
-        spinnerUpsample: Spinner,
-        spinnerPerfMode: Spinner,
         spinnerEqPreset: Spinner,
         btnPrev: ImageButton,
         btnNext: ImageButton,
-        btnPlayPause: ImageButton,
-        switchTruePeak: SwitchCompat,
-        spinnerTruePeakCeiling: Spinner,
-        spinnerDsdRate: Spinner
+        btnPlayPause: ImageButton
     ) {
         view.setBackgroundResource(R.drawable.bg_bottom_sheet_dap_light)
-        view.findViewById<View>(R.id.layoutSectionDirectSource)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.surface_panel_light))
         view.findViewById<View>(R.id.layoutSectionEq)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.surface_panel_light))
         view.findViewById<TextView>(R.id.textEqTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
         view.findViewById<TextView>(R.id.textEqSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
         view.findViewById<TextView>(R.id.textEqSwLabel)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textBitDepthTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textBitDepthSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textDitherTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textDitherSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textTruePeakTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textTruePeakSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textTruePeakCeilingLabel)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<View>(R.id.dividerDspTruePeak)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        spinnerTruePeakCeiling.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerTruePeakCeiling.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-        view.findViewById<TextView>(R.id.textDcPhaseTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textDcPhaseSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textPerfModeTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textPerfModeSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<View>(R.id.dividerDspPerf)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        view.findViewById<TextView>(R.id.textRichHarmonicsTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textRichHarmonicsSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        val idRich = activity.resources.getIdentifier("dividerDspRich", "id", activity.packageName)
-        if (idRich != 0) view.findViewById<View>(idRich)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        val swRich = view.findViewById<SwitchCompat>(R.id.dialogSwitchRichHarmonics)
-        if (swRich != null) {
-            val swTrackL = ContextCompat.getDrawable(activity, R.drawable.switch_track_walkman_outline_light)
-            val swThumbL = ContextCompat.getDrawable(activity, R.drawable.switch_thumb_light)
-            swRich.trackDrawable = swTrackL
-            swRich.thumbDrawable = swThumbL
-        }
-        spinnerPerfMode.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerPerfMode.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
+
         spinnerEqPreset.setBackgroundResource(R.drawable.bg_spinner_dap_light)
         spinnerEqPreset.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-        view.findViewById<TextView>(R.id.textDseeTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textDseeSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textUpsampleTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textUpsampleSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textCascadeFirTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textCascadeFirSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textVolLockTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textVolLockSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<TextView>(R.id.textDsdRateTitle)?.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        view.findViewById<TextView>(R.id.textDsdRateSub)?.setTextColor(ContextCompat.getColor(activity, R.color.text_secondary_light))
-        view.findViewById<View>(R.id.dividerDspDsd)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        spinnerDsdRate.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerDsdRate.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-
-        view.findViewById<View>(R.id.dividerDsp1)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        view.findViewById<View>(R.id.dividerDsp2)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        view.findViewById<View>(R.id.dividerDsp3)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        val dsp4Id = activity.resources.getIdentifier("dividerDsp4", "id", activity.packageName)
-        if (dsp4Id != 0) view.findViewById<View>(dsp4Id)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
-        view.findViewById<View>(R.id.dividerDsp5)?.setBackgroundColor(ContextCompat.getColor(activity, R.color.divider_light))
 
         val swTrackLight = ContextCompat.getDrawable(activity, R.drawable.switch_track_walkman_outline_light)
         val swThumbLight = ContextCompat.getDrawable(activity, R.drawable.switch_thumb_light)
-        listOf(switchDirectSource, switchEqEnable, switchSpectrumEnable, switchCascadeFir, switchVolLock, switchTruePeak).forEach { sw ->
+        listOf(switchEqEnable, switchSpectrumEnable).forEach { sw ->
             sw.trackDrawable = swTrackLight
             sw.thumbDrawable = swThumbLight
         }
@@ -903,16 +940,6 @@ class DspSettingsDialog(
 
         textEqBandFreq.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
         textEqGainValue.setTextColor(ContextCompat.getColor(activity, R.color.text_primary_light))
-        spinnerBitDepth.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerDither.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerDcPhase.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerDsee.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerUpsample.setBackgroundResource(R.drawable.bg_spinner_dap_light)
-        spinnerBitDepth.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-        spinnerDither.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-        spinnerDcPhase.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-        spinnerDsee.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
-        spinnerUpsample.setPopupBackgroundResource(R.drawable.bg_spinner_popup_dap_light)
 
         seekBar?.progressBackgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(activity, R.color.component_border_light))
         seekBar?.progressTintList = ColorStateList.valueOf(ContextCompat.getColor(activity, R.color.accent_light))

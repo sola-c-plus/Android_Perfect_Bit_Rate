@@ -95,7 +95,10 @@ object FreqPresetManager {
     private var isSyncing = false
     private var isUpdatingUI = false // ★ UI更新中のリスナー誤爆完全遮断フラグ
 
-    private var frontSpinnerRef: WeakReference<Spinner>? = null
+    // ★ PR-C1: 前側（DSP 設定シート）の FREQ ENGINE は Spinner から
+    //   現在値行になったため、前側への同期は「行の再描画コールバック」
+    //   で受ける（現在値テキストと PERF/RICH の有効状態の再評価）。
+    private var frontValueRefresh: (() -> Unit)? = null
     private var backSpinnerRef: WeakReference<Spinner>? = null
     private var backDialogViewRef: WeakReference<View>? = null
 
@@ -188,11 +191,7 @@ object FreqPresetManager {
 
             applyPresetToNative(preset)
 
-            frontSpinnerRef?.get()?.let { sp ->
-                if (sp.selectedItemPosition != safePos) {
-                    sp.setSelection(safePos)
-                }
-            }
+            frontValueRefresh?.invoke()
 
             backSpinnerRef?.get()?.let { sp ->
                 if (sp.selectedItemPosition != safePos) {
@@ -312,32 +311,18 @@ object FreqPresetManager {
         }
     }
 
-    fun hookDspSettingsDialog(dialogView: View?) {
-        if (dialogView == null) return
-        dialogView.post {
-            val frontSp = dialogView.findViewById<View>(R.id.dialogSpinnerDsee) as? Spinner ?: return@post
-            frontSpinnerRef = WeakReference(frontSp)
+    // ★ PR-C1: DSP 設定シートの FREQ ENGINE 行の登録口。行のタップ →
+    //   選択シート → onPresetChanged() という選択経路は DspSettingsDialog
+    //   側が持ち、ここでは「開いている間の外部変更（開発プリセット側の
+    //   操作等）を前側へ伝える再描画コールバック」だけを受ける。
+    //   refresh の中身は DspSettingsRows.refreshStates()（FREQ ENGINE 行の
+    //   現在値テキスト再取得＋PERF/RICH の有効状態の再評価）。
+    fun registerDspFreqRow(refresh: () -> Unit) {
+        frontValueRefresh = refresh
+    }
 
-            val ad = ArrayAdapter(dialogView.context, R.layout.item_spinner_dap, PRESET_NAMES)
-            ad.setDropDownViewResource(R.layout.item_spinner_dap)
-            frontSp.adapter = ad
-            frontSp.setSelection(currentPresetIndex)
-            // ★ PR-C: ドロップダウンの枠をシート地と同系の専用 drawable に揃える
-            frontSp.setPopupBackgroundResource(
-                if (PbrDialogs.isDark(dialogView.context)) {
-                    R.drawable.bg_spinner_popup_dap
-                } else {
-                    R.drawable.bg_spinner_popup_dap_light
-                }
-            )
-
-            frontSp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p0: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    onPresetChanged(pos)
-                }
-                override fun onNothingSelected(p0: AdapterView<*>?) {}
-            }
-        }
+    fun clearDspFreqRow() {
+        frontValueRefresh = null
     }
 
     fun hookDevPresetsDialog(dialogView: View?) {
@@ -456,7 +441,7 @@ object FreqPresetManager {
     }
 
     fun clearFrontDialogRefs() {
-        frontSpinnerRef = null
+        frontValueRefresh = null
     }
 
     fun clearDevDialogRefs() {
