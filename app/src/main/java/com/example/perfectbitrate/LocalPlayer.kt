@@ -50,6 +50,18 @@ class LocalPlayer(
         Thread(runnable, "LocalPlayerDecode").apply { isDaemon = true }
     }
     private val artworkExecutor = Executors.newSingleThreadExecutor()
+    private val persistExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "LocalPlayerPersist").apply { isDaemon = true }
+    }
+
+    init {
+        // ★ キューの位置保存の定期保存（再生中のみ）。曲変化・
+        //   ポーズ等のイベント保存の合間を埋め、タスクキルされて
+        //   も直近の位置から大きく巻き戻らないようにする。
+        persistExecutor.scheduleWithFixedDelay({
+            if (isPlaying) persistQueueState()
+        }, QUEUE_PERSIST_INTERVAL_SEC, QUEUE_PERSIST_INTERVAL_SEC, TimeUnit.SECONDS)
+    }
 
     private var queue: List<LibraryRepository.Track> = emptyList()
     private var currentIndex = -1
@@ -151,6 +163,11 @@ class LocalPlayer(
                 rebuildOrderLocked(if (anchor >= 0) anchor else currentIndex)
                 orderStale = true
             }
+            // ★ 位置保存への反映はここでは行わない: setQueue の
+            //   呼び出しは常に直後の再生開始（playAt /
+            //   playAtEffectivePosition → startTrackLocked）と対で、
+            //   保存はそちらで行われる（数千曲の JSON 構築をタップ
+            //   ごとに二重に行わないため）。
         }
     }
 
@@ -212,6 +229,140 @@ class LocalPlayer(
         }
     }
 
+    // ── キューの位置保存 ──
+    //
+    // キュー本体＋実効再生順（順序表）・現在の実効位置・再生位置
+    // （表示位置）・シャッフル / リピートを AppPreferences の JSON
+    // へ保存し、プロセス再起動後に一時停止状態で復元する（常時
+    // 有効、ON/OFF 設定なし）。「実効順の曲列」ではなく「キュー
+    // 本体＋順序表」の形で持つため、復元後にシャッフルを切り
+    // 替えても元の並びが失われない。保存タイミングは曲変化・
+    // ポーズ・シーク・シャッフル切替・再生し切りの各イベントと、
+    // 再生中の定期保存（persistExecutor）。キュー変化は確定経路
+    // 上で常に再生開始と対になるため、曲変化の保存に含まれる。
+
+    // 現在の状態をスナップショットとして保存する。キューが無い /
+    // 現在曲が決まっていない場合は何もしない（起動直後など、まだ
+    // 何も再生していない状態で呼ばれても前回の保存を消しに行か
+    // ないため）。
+    fun persistQueueState() {
+        try {
+            val state = synchronized(stateLock) {
+                if (queue.isEmpty() || currentIndex !in queue.indices ||
+                    orderPosition !in playOrder.indices
+                ) {
+                    null
+                } else {
+                    LocalQueueState(
+                        queueUris = queue.map { it.uri.toString() },
+                        order = playOrder.toList(),
+                        orderPosition = orderPosition,
+                        positionMs = displayPositionMs(),
+                        shuffleEnabled = shuffleEnabled,
+                        repeatMode = repeatMode
+                    )
+                }
+            } ?: return
+            AppPreferences.get().saveLocalQueueState(state)
+        } catch (e: Exception) {
+            // 保存の失敗で再生を止めない
+            Log.w(TAG, "persist queue state failed", e)
+        }
+    }
+
+    // ★ 保存済みキューを一時停止状態で復元する。ライブラリの曲
+    //   リストが初めて揃ったタイミングで MainActivity から一度
+    //   だけ呼ばれる。既にキューや現在曲がある場合は何もしない
+    //   （今回のセッションで始めた再生を上書きしない）。自動再生
+    //   は絶対にせず、デコーダも開かない: 再生はユーザーが再生
+    //   操作をしたとき play() が現在位置から開き直す。戻り値は
+    //   復元したら true。
+    fun restoreSavedQueue(libraryTracks: List<LibraryRepository.Track>): Boolean {
+        val saved = try {
+            AppPreferences.get().loadLocalQueueState()
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        synchronized(stateLock) {
+            if (queue.isNotEmpty() || currentTrack != null || isPlaying) return false
+            // 保存済み URI をライブラリの曲へ解決する。消えている
+            // 曲はキューから落として詰め、順序表も追随させる。
+            val byUri = HashMap<String, LibraryRepository.Track>()
+            for (track in libraryTracks) {
+                byUri.putIfAbsent(track.uri.toString(), track)
+            }
+            val remap = HashMap<Int, Int>()
+            val resolvedQueue =
+                ArrayList<LibraryRepository.Track>(saved.queueUris.size)
+            saved.queueUris.forEachIndexed { oldIndex, uri ->
+                val track = byUri[uri]
+                if (track != null) {
+                    remap[oldIndex] = resolvedQueue.size
+                    resolvedQueue.add(track)
+                }
+            }
+            if (resolvedQueue.isEmpty()) return false
+            val resolvedOrder = saved.order.mapNotNull { remap[it] }
+            if (resolvedOrder.isEmpty()) return false
+            // 現在位置は「保存された実効位置より前に残った曲の数」
+            // へ詰める（現在曲が残っていればその曲、消えていれば
+            // 次に残った曲が現在位置になる）。
+            val savedPos = saved.orderPosition.coerceIn(0, saved.order.lastIndex)
+            val resolvedPos = (0 until savedPos)
+                .count { remap.containsKey(saved.order[it]) }
+                .coerceAtMost(resolvedOrder.lastIndex)
+            val savedCurrentIndex = saved.order.getOrNull(savedPos)
+            val currentSurvived =
+                savedCurrentIndex != null && remap.containsKey(savedCurrentIndex)
+
+            // シャッフル / リピートは prefs が正のため、保存値を
+            // 先に戻してから状態を組む（順序表は保存された実効順
+            // をそのまま使うので作り直しはしない）。
+            val prefs = AppPreferences.get()
+            prefs.localShuffleEnabled = saved.shuffleEnabled
+            prefs.localRepeatMode = saved.repeatMode
+
+            queue = resolvedQueue
+            playOrder = resolvedOrder
+            orderPosition = resolvedPos
+            currentIndex = resolvedOrder[resolvedPos]
+            orderStale = false
+            val track = resolvedQueue[currentIndex]
+            currentTrack = track
+            durationMs = track.durationMs
+            // 再生位置は 3 秒巻き戻して復元する（現在曲自体が
+            // 消えていた場合は、次に残った曲の頭から）。
+            val restoredMs = if (currentSurvived) {
+                (saved.positionMs - RESTORE_REWIND_MS).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            positionMs = if (durationMs > 0) {
+                restoredMs.coerceAtMost(durationMs)
+            } else {
+                restoredMs
+            }
+            pendingSeekMs = -1L
+            decodeFinished = false
+            // ★ 一時停止状態としての通知（再生画面・常駐ミニ
+            //   プレイヤー・ステータス表示が復元した曲へ追随する
+            //   よう、曲開始時と同じ通知を isPlaying=false で送る）。
+            //   onCodec はデコーダを開いていないため送らない
+            //   （表示側はタグ値で補う）。
+            listener.onTrackChanged(currentIndex, track)
+            listener.onMetadata(track.title, track.artist, null)
+            loadArtworkAsync(generation, track)
+            listener.onProgress(positionMs, durationMs, false)
+            listener.onState(false)
+            Log.i(
+                TAG,
+                "queue restored: ${resolvedQueue.size} tracks, " +
+                    "position=$orderPosition, at=${positionMs}ms"
+            )
+            return true
+        }
+    }
+
     // ── シャッフル / リピート（Now Playing） ──
     //
     // 状態の正は prefs（AppPreferences）で、ここは読み書きの窓口を持つ。
@@ -236,12 +387,15 @@ class LocalPlayer(
             rebuildOrderLocked(currentIndex)
             orderStale = false
         }
+        // ★ 順序表が変わったので位置保存へも反映する
+        persistQueueState()
     }
 
     // リピートを OFF → 全曲 → 1曲 の順に循環させ、新しい状態を返す。
     fun cycleRepeatMode(): Int {
         val next = (repeatMode + 1) % 3
         AppPreferences.get().localRepeatMode = next
+        persistQueueState()
         return next
     }
 
@@ -322,6 +476,8 @@ class LocalPlayer(
             // デコーダは保持し、play() で現在位置から再開する（再オープンしない）
             listener.onState(false)
             listener.onProgress(displayPositionMs(), durationMs, false)
+            // ★ ポーズ位置を位置保存へ反映する
+            persistQueueState()
         }
     }
 
@@ -452,7 +608,25 @@ class LocalPlayer(
 
     fun seekTo(targetMs: Long) {
         synchronized(stateLock) {
-            val dec = decoder ?: return
+            val dec = decoder
+            if (dec == null) {
+                // ★ デコーダ未保持でも現在曲がある場合（キューの
+                //   位置保存から一時停止状態で復元された直後など）
+                //   は、位置だけ先に動かす。再開時に play() が
+                //   startTrackLocked(currentIndex, positionMs) で
+                //   この位置から開くため、復元状態でもシークが
+                //   効く。保留シークにも積み、開き直し側でも
+                //   同じ位置が使われるようにする。
+                if (currentTrack == null) return
+                val clampedNoDec = targetMs.coerceIn(
+                    0L, if (durationMs > 0) durationMs else targetMs
+                )
+                positionMs = clampedNoDec
+                pendingSeekMs = clampedNoDec
+                listener.onProgress(positionMs, durationMs, false)
+                persistQueueState()
+                return
+            }
             val clamped = targetMs.coerceIn(0L, if (durationMs > 0) durationMs else targetMs)
             if (isPlaying && decodeFinished) {
                 // デコードは既に終わっていてネイティブシークが効かない
@@ -470,6 +644,8 @@ class LocalPlayer(
                 positionMs = clamped
             }
             listener.onProgress(positionMs, durationMs, isPlaying)
+            // ★ シーク後の位置を位置保存へ反映する
+            persistQueueState()
         }
     }
 
@@ -488,6 +664,7 @@ class LocalPlayer(
         stop()
         decodeExecutor.shutdown()
         artworkExecutor.shutdown()
+        persistExecutor.shutdown()
     }
 
     // ★ 現在曲のアートワークを取り直してリスナへ再送する。
@@ -596,6 +773,8 @@ class LocalPlayer(
             if (startAtMs > 0) dec.requestSeek(startAtMs)
             runDecodeLoop(gen, dec)
         }
+        // ★ 曲が変わったので位置保存へ反映する
+        persistQueueState()
     }
 
     private fun runDecodeLoop(gen: Int, dec: FfmpegDecoder) {
@@ -728,6 +907,9 @@ class LocalPlayer(
                 decoder = null
                 decodeFuture = null
                 currentInfo = null
+                // ★ 再生し切った状態（最終曲・位置 0）を位置保存へ
+                //   反映する（再起動で途中位置に戻らないように）。
+                persistQueueState()
             }
         }
     }
@@ -871,5 +1053,10 @@ class LocalPlayer(
         private const val DECODE_RETRY_MAX_PER_LOCUS = 2
         // 出力レート上限の適用（変換付きで開き直す）の上限回数
         private const val MAX_RATE_CAP_REOPENS = 3
+        // キューの位置保存: 再生中の定期保存間隔と、復元時の
+        // 巻き戻し量（続きの頭が少し重なる方が「聴いていた場所」
+        // として自然につながるため）
+        private const val QUEUE_PERSIST_INTERVAL_SEC = 30L
+        private const val RESTORE_REWIND_MS = 3000L
     }
 }
