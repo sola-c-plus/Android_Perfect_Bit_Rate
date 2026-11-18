@@ -39,6 +39,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.abs
@@ -166,20 +167,33 @@ class BitPerfectPlaybackService : Service() {
     val pcmQueueCapacity: Int get() = MAX_QUEUE_CAPACITY
 
     // ★ プリロール閾値（再生開始・再開時に何チャンク溜まってから出し始めるか）。
-    //   1チャンク = 4096フレーム。48kHz 換算で 1チャンク ≒ 85ms なので、
-    //   6チャンク ≒ 0.5秒分の先読みになる（実時間はソースのサンプルレートで変動）。
-    //   旧値3（≒256ms）では数百ms 級の供給瞬断でキューが枯れ、再開時に遅延分が
-    //   吸着して「一瞬進みが飛ぶ」症状2になっていたため引き上げた（案8）。
-    //   吸収力と操作感（開始遅延）の調整はこの1箇所の値だけで行う。
-    private val PREROLL_THRESHOLD = 6
+    //   1チャンク = 4096フレーム。48kHz 換算で 1チャンク ≒ 85ms（実時間は
+    //   ソースのサンプルレートで変動）。
+    //   YT 経路の供給元は content.js の ScriptProcessor（GeckoView のメイン
+    //   スレッド）で、ページ側処理や GC でメインスレッドが止まると供給が
+    //   瞬断する。旧値6（≒0.5秒）では定常時もキューが閾値付近に張り付き、
+    //   実効クッションが約0.5秒しかないため、0.5秒を超える瞬断でキューが
+    //   枯れて再生がスタックしていた（低バッテリ時は CPU クロック低下で
+    //   瞬断が長引き特に誘発）。このため YT の基本値を 20（≒1.7秒）へ
+    //   引き上げる。さらに YT 再生中にアンダーランしたら閾値を +8 ずつ
+    //   （上限40 ≒3.4秒）引き上げ、アンダーランなく安定再生が続いたら
+    //   1段ずつ基本値へ戻す適応化を行う（onYtUnderrun /
+    //   decayYtPrerollIfStable 参照）。Local 経路は対象外で、
+    //   LOCAL_PREROLL_THRESHOLD とアーム機構は従来どおり。
+    private val YT_PREROLL_BASE = 20
+    private val YT_PREROLL_STEP = 8
+    private val YT_PREROLL_MAX = 40
+    private val YT_PREROLL_RECOVER_MS = 180_000L // 安定が続いたら1段戻す間隔（3分）
+    private val ytPrerollThreshold = AtomicInteger(YT_PREROLL_BASE)
+    private val lastYtUnderrunAtMs = AtomicLong(0) // 最後に YT アンダーランした時刻
     private val isBuffering = AtomicBoolean(true)
 
     // ★ Local の曲切り替え/シーク直後だけ使う小さいプリロール。
     //   Local の供給は端末内デコードで速く安定しているため、YT 側の
-    //   供給瞬断対策である 6 チャンクまで待つ必要がなく、切り替え後の
+    //   供給瞬断対策である YT 側の閾値まで待つ必要がなく、切り替え後の
     //   再開を早められる。アームは resetBuffer("local") でのみ行い、
     //   再開が成立した時点で消費される（再生中のアンダーラン回復では
-    //   使われず、従来どおり 6 チャンクで復帰する）。YT 由来の
+    //   使われず、従来どおり YT 側の閾値で復帰する）。YT 由来の
     //   フラッシュ（"page" / "mode"）では必ず解除し、YT 経路の
     //   再開条件には影響させない。
     private val LOCAL_PREROLL_THRESHOLD = 3
@@ -199,7 +213,34 @@ class BitPerfectPlaybackService : Service() {
     @Volatile private var sleepFadeSpanMs = 0L    // カーブの長さ（最大30秒）
     private var sleepFadeThread: Thread? = null   // sleepFadeLock 内でのみ触る
     private fun activePrerollThreshold(): Int =
-        if (localFastPrerollArmed) LOCAL_PREROLL_THRESHOLD else PREROLL_THRESHOLD
+        if (localFastPrerollArmed) LOCAL_PREROLL_THRESHOLD else ytPrerollThreshold.get()
+
+    // ★ YT アンダーラン時の適応引き上げ（再生ループのアンダーラン計数箇所
+    //   から、YT 供給時のみ呼ぶ）。閾値を1段上げ、安定計測の起点を更新する。
+    private fun onYtUnderrun() {
+        lastYtUnderrunAtMs.set(System.currentTimeMillis())
+        while (true) {
+            val cur = ytPrerollThreshold.get()
+            val next = minOf(cur + YT_PREROLL_STEP, YT_PREROLL_MAX)
+            if (next == cur || ytPrerollThreshold.compareAndSet(cur, next)) break
+        }
+    }
+
+    // ★ 最後の YT アンダーランから YT_PREROLL_RECOVER_MS 以上アンダーラン
+    //   なく再生が続いたら、閾値を1段だけ基本値方向へ戻す（再生ループの
+    //   ハートビートから定期的に呼ぶ）。CAS で多重実行を防ぎ、戻した時点
+    //   から再度インターバルを数えることで「1段ずつ」戻る。
+    private fun decayYtPrerollIfStable() {
+        val cur = ytPrerollThreshold.get()
+        if (cur <= YT_PREROLL_BASE) return
+        val last = lastYtUnderrunAtMs.get()
+        if (last == 0L) return
+        val now = System.currentTimeMillis()
+        if (now - last < YT_PREROLL_RECOVER_MS) return
+        if (ytPrerollThreshold.compareAndSet(cur, cur - YT_PREROLL_STEP)) {
+            lastYtUnderrunAtMs.set(now)
+        }
+    }
 
     // ★ バッファ破棄の計測カウンタ（診断用、サービス起動以来の累計。再生挙動には影響しない）
     val bufferDropCount = AtomicLong(0)     // キューフルで最古パケットを落とした回数
@@ -1998,6 +2039,7 @@ class BitPerfectPlaybackService : Service() {
                         try {
                             onCommandListener?.invoke("heartbeat")
                         } catch (e: Exception) {}
+                        decayYtPrerollIfStable()
                     }
 
                     if (isSwitchingRate.get() || !isCurrentlyPlaying) {
@@ -2024,6 +2066,7 @@ class BitPerfectPlaybackService : Service() {
                             if (!isBuffering.get() && underrunOpen.compareAndSet(false, true)) {
                                 bufferUnderrunCount.incrementAndGet()
                                 Log.i("BitPerfect", "★ Buffer underrun total=${bufferUnderrunCount.get()}")
+                                if (!isLocalSourceActive) onYtUnderrun()
                             }
                             isBuffering.set(true)
                         }
