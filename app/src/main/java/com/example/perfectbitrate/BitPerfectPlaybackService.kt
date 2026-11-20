@@ -208,6 +208,8 @@ class BitPerfectPlaybackService : Service() {
     val bufferFlushPageCount = AtomicLong(0) // うちページ由来 ({type:"flush"})
     val bufferUnderrunCount = AtomicLong(0) // 再生中にキューが枯れた回数
     val bufferResumeCount = AtomicLong(0)   // アンダーラン後にプリロール再開した回数
+    val watchdogRecoveryCount = AtomicLong(0) // 消費側ウォッチドッグが復旧を試みた回数
+    val silentDropCount = AtomicLong(0)     // トラック不在等で消費ループがチャンクを破棄した回数
     private val underrunOpen = AtomicBoolean(false) // アンダーラン中（再開待ち）か
 
     // ★ True Peak ガードの低減量の表示専用キャッシュ。低減量の正は native であり、
@@ -323,6 +325,16 @@ class BitPerfectPlaybackService : Service() {
     private var streamFailureNotified = false
     private val MAX_STREAM_INIT_FAILURES = 3
 
+    // ★ 構成失敗ラッチの到達時刻（elapsedRealtime、0 = 未ラッチ）。
+    //   ラッチの目的は再構成の無限ループ防止であり、一過性の失敗
+    //   （デバイスの一時的なビジー等）で、その構成が恒常的に無音に
+    //   なることまでは意図していない。そのため (1) 一定時間の経過、
+    //   (2) resetBuffer を伴う明示操作・復旧操作、のどちらかで解除し、
+    //   再試行の機会を与える（isStreamInitExhausted /
+    //   clearStreamInitLatch 参照）。
+    @Volatile private var streamInitLatchedAtMs = 0L
+    private val STREAM_INIT_LATCH_TIMEOUT_MS = 30_000L
+
     // ソースレート未満へのフォールバック先候補（高い順）。出力
     // デバイスの対応レートが取れない経路（本体出力等）で使う。
     private val STANDARD_FALLBACK_RATES =
@@ -365,6 +377,27 @@ class BitPerfectPlaybackService : Service() {
     }
 
     private var totalWrittenFrames = 0L
+
+    // ★ 消費側ウォッチドッグ（YT / Local 共通）の状態。従来、ストール
+    //   検知は MainActivity 側の「PCM 到着時刻」監視（YT のみ）しか
+    //   なく、消費側（キューの消費と AudioTrack への書込み）が止まって
+    //   も検知する者がいなかった。ここではキューの残量ではなく
+    //   「書込みの進捗」で判断する: 再生中なのに write() の完了が
+    //   WRITE_STALL_THRESHOLD_MS の間 1 回もなければストールとみなし、
+    //   既存の仕組み（trackExecutor への直列化と resetBuffer）で復旧を
+    //   試みる。閾値 3 秒の根拠: 1 チャンク ≒ 85ms なので通常の
+    //   書込みは高々数百 ms で戻る。低バッテリー時のクロック低下を
+    //   考えても 3 秒は十分な余裕があり、かつユーザーが無音に気づく
+    //   までの時間を抑えられる長さ。
+    @Volatile private var lastWriteCompletedAtMs = 0L // 最後に write() が正常に戻った時刻（elapsedRealtime、0 = まだ書いていない）
+    @Volatile private var lastWriteHeadPosition = -1L // その時点の再生ヘッド位置（未取得は -1）
+    @Volatile private var watchdogLastFiredAtMs = 0L  // 最後にウォッチドッグが発火した時刻
+    @Volatile private var watchdogRecoveryInFlight = false // 復旧タスクの実行中フラグ
+    private var watchdogThread: Thread? = null
+    private val WRITE_STALL_THRESHOLD_MS = 3000L
+    private val WRITE_STALL_CHECK_MS = 500L      // ウォッチドッグの確認間隔
+    private val WATCHDOG_COOLDOWN_MS = 15_000L   // 復旧の最小間隔（復旧ループ防止）
+    private val SLOW_WRITE_LOG_THRESHOLD_MS = 1000L // これ以上かけて戻った write() は異常に遅いとして記録する
 
     var isVolumeLocked = false
         set(value) {
@@ -591,6 +624,7 @@ class BitPerfectPlaybackService : Service() {
         setupMediaSession()
 
         startPlaybackLoop()
+        startWriteWatchdog()
         updateNotification()
         PlayerWidgetProvider.updateAllWidgets(this, currentTitle, currentArtist, currentArtworkBitmap, isCurrentlyPlaying, currentPosition, currentDuration)
     }
@@ -1058,10 +1092,44 @@ class BitPerfectPlaybackService : Service() {
         "$baseRate/$factor/${activeOutputDevice?.id}/$requestedBitMode"
 
     // 同じ構成での AudioTrack 生成失敗が上限に達しているか
-    // （pushPcm の再構成ループの上限判定）。
+    // （pushPcm の再構成ループの上限判定）。ただしラッチから
+    // STREAM_INIT_LATCH_TIMEOUT_MS 経過していたら、失敗記録を
+    // リセットして再試行を 1 回許可する（一過性の失敗でその構成が
+    // 恒常的に無音になるのを防ぐ。再試行も失敗すれば
+    // handleStreamInitOutcome が数え直して再びラッチする）。
     private fun isStreamInitExhausted(inputRate: Int, factor: Int): Boolean {
         if (streamInitFailureCount < MAX_STREAM_INIT_FAILURES) return false
-        return streamInitSignature(inputRate, factor) == streamInitFailureSignature
+        if (streamInitSignature(inputRate, factor) != streamInitFailureSignature) return false
+        val latchedAt = streamInitLatchedAtMs
+        if (latchedAt > 0L &&
+            SystemClock.elapsedRealtime() - latchedAt >= STREAM_INIT_LATCH_TIMEOUT_MS
+        ) {
+            Log.i(
+                "BitPerfect",
+                "★ Stream init latch expired after ${STREAM_INIT_LATCH_TIMEOUT_MS}ms; " +
+                    "retrying configuration $streamInitFailureSignature"
+            )
+            clearStreamInitLatch("timeout")
+            return false
+        }
+        return true
+    }
+
+    // ★ 構成失敗の記録（ラッチ）を解除する。resetBuffer 経由の明示
+    //   操作・復旧操作と、ラッチの時間経過から呼ばれる。ラッチ中に
+    //   呼ばれた場合だけ記録を残す（通常時はログを出さない）。
+    private fun clearStreamInitLatch(source: String) {
+        if (streamInitFailureCount >= MAX_STREAM_INIT_FAILURES) {
+            Log.i(
+                "BitPerfect",
+                "★ Stream init latch cleared by $source " +
+                    "(was $streamInitFailureCount failures for $streamInitFailureSignature)"
+            )
+        }
+        streamInitFailureCount = 0
+        streamInitFailureSignature = null
+        streamFailureNotified = false
+        streamInitLatchedAtMs = 0L
     }
 
     // ★ initAudioTrack の結果処理: doInit が残した保留（フォール
@@ -1082,6 +1150,7 @@ class BitPerfectPlaybackService : Service() {
             streamInitFailureCount = 0
             streamInitFailureSignature = null
             streamFailureNotified = false
+            streamInitLatchedAtMs = 0L
             return
         }
         val capHz = pendingOutputRateCapHz
@@ -1097,9 +1166,13 @@ class BitPerfectPlaybackService : Service() {
             streamInitFailureSignature = signature
             streamInitFailureCount = 1
             streamFailureNotified = false
+            streamInitLatchedAtMs = 0L
         }
         if (streamInitFailureCount >= MAX_STREAM_INIT_FAILURES && !streamFailureNotified) {
             streamFailureNotified = true
+            if (streamInitLatchedAtMs == 0L) {
+                streamInitLatchedAtMs = SystemClock.elapsedRealtime()
+            }
             Log.w(
                 "BitPerfect",
                 "★ Stream configuration failed $streamInitFailureCount times " +
@@ -1112,6 +1185,10 @@ class BitPerfectPlaybackService : Service() {
     }
 
     fun resetBuffer(reason: String = "unknown") {
+        // ★ フラッシュはユーザーの明示操作（シーク・曲送り）か復旧
+        //   操作のどちらかであり、その意思表示がある以上、過去の
+        //   一過性失敗による構成失敗ラッチで無音のままにはしない。
+        clearStreamInitLatch("resetBuffer:$reason")
         bufferFlushCount.incrementAndGet()
         if (reason == "page") bufferFlushPageCount.incrementAndGet()
         Log.i("BitPerfect", "★ Buffer flush (reason=$reason) total=${bufferFlushCount.get()}")
@@ -2044,9 +2121,27 @@ class BitPerfectPlaybackService : Service() {
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (e: Exception) {}
                         }
+                        val writeStartedAtMs = SystemClock.elapsedRealtime()
                         val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                        val writeEndedAtMs = SystemClock.elapsedRealtime()
                         if (written > 0) {
                             writeErrorStreak = 0
+                            // ★ 書込み進捗の記録（消費側ウォッチドッグの
+                            //   判定材料）。完了時刻と、その時点の再生
+                            //   ヘッド位置を組で残す。
+                            lastWriteCompletedAtMs = writeEndedAtMs
+                            lastWriteHeadPosition = try {
+                                track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                            } catch (e: Exception) { -1L }
+                            val writeDurationMs = writeEndedAtMs - writeStartedAtMs
+                            if (writeDurationMs >= SLOW_WRITE_LOG_THRESHOLD_MS) {
+                                // ★ 戻ってはきたが異常に遅い書込み。出力側
+                                //   滞留の兆候として残す（通常時は出ない）。
+                                Log.w(
+                                    "BitPerfect",
+                                    "★ Slow AudioTrack.write: ${writeDurationMs}ms (${pcm.size} bytes)"
+                                )
+                            }
                             val bytesPerSample = when (actualBitMode) {
                                 "32bit" -> 4
                                 "24bit" -> 3
@@ -2086,6 +2181,13 @@ class BitPerfectPlaybackService : Service() {
                                 handleBecomingNoisyOrDisconnected()
                             }
                         }
+                    } else if (!isSwitchingRate.get()) {
+                        // ★ トラック不在・未初期化でチャンクを書けなかった
+                        //   経路。従来は黙って破棄していたため、恒常化すると
+                        //   「供給はあるのに無音で、理由がログに残らない」
+                        //   状態になった。破棄を数え、節目だけ記録する
+                        //   （切替中の破棄は想定内なので数えない）。
+                        noteSilentDrop(track)
                     }
                 } catch (e: InterruptedException) {
                     break
@@ -2096,6 +2198,126 @@ class BitPerfectPlaybackService : Service() {
         }.apply {
             priority = Thread.MAX_PRIORITY
             start()
+        }
+    }
+
+    // ★ 消費ループがチャンクを書けずに破棄したことの記録。毎チャンク
+    //   出すとログが溢れるため、累計が節目（1 回目と 100 回ごと）に
+    //   達したときだけ出す。通常再生ではこの経路を通らない。
+    private fun noteSilentDrop(track: AudioTrack?) {
+        val total = silentDropCount.incrementAndGet()
+        if (total != 1L && total % 100L != 0L) return
+        val reason = if (track == null) {
+            "no track"
+        } else if (track.state != AudioTrack.STATE_INITIALIZED) {
+            "track not initialized (state=${track.state})"
+        } else {
+            "track unavailable"
+        }
+        Log.w("BitPerfect", "★ Playback chunk dropped without a writable track ($reason), total=$total")
+    }
+
+    // ★ 消費側ウォッチドッグのスレッド。消費スレッド自身が write() で
+    //   止まっている場合でも検知できるよう、判定は消費スレッドの外に
+    //   置く。サービス終了時（stopServiceCleanly）に interrupt で止める。
+    private fun startWriteWatchdog() {
+        watchdogThread = Thread {
+            while (isRunning) {
+                try {
+                    Thread.sleep(WRITE_STALL_CHECK_MS)
+                    checkWriteStall()
+                } catch (e: InterruptedException) {
+                    break
+                } catch (e: Exception) {
+                    Log.e("BitPerfect", "Write watchdog error", e)
+                }
+            }
+        }.apply {
+            name = "BitPerfectWriteWatchdog"
+            start()
+        }
+    }
+
+    // ★ 書込みストールの判定。キューの残量ではなく「最後に write() が
+    //   完了してからの経過」と「再生ヘッドの動き」で判断する（キューが
+    //   満杯でなくても、書込み側が止まればストールになるため）。
+    //   次のいずれかに当てはまる間は正常な静止として対象外にする:
+    //   ポーズ中 / 構成切替中 / バッファリング中（プリロール待ち）/
+    //   フォーカス割り込み中 / トラックなし・未初期化 / キューが空
+    //   （供給側の問題は従来の検知・復旧が担う）。
+    private fun checkWriteStall() {
+        if (!isRunning || !isCurrentlyPlaying) return
+        if (isSwitchingRate.get() || isBuffering.get()) return
+        if (isAudioFocusInterrupted) return
+        if (watchdogRecoveryInFlight) return
+        val track = audioTrack ?: return
+        if (track.state != AudioTrack.STATE_INITIALIZED) return
+        if (pcmQueue.isEmpty()) return
+        val lastWrite = lastWriteCompletedAtMs
+        if (lastWrite == 0L) return // まだ一度も書けていない（開始直後）は材料なし
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastWrite < WRITE_STALL_THRESHOLD_MS) return
+
+        // 再生ヘッドが進んでいるなら出力側は生きており、書込み完了の
+        // 記録だけが古い（部分書込みの継続等）。基準を更新して様子を
+        // 見て、誤検知での復旧を避ける。
+        val head = try {
+            track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+        } catch (e: Exception) { -1L }
+        if (head >= 0 && lastWriteHeadPosition >= 0 && head != lastWriteHeadPosition) {
+            lastWriteHeadPosition = head
+            lastWriteCompletedAtMs = now
+            return
+        }
+
+        if (now - watchdogLastFiredAtMs < WATCHDOG_COOLDOWN_MS) return
+        watchdogLastFiredAtMs = now
+        watchdogRecoveryCount.incrementAndGet()
+        Log.w(
+            "BitPerfect",
+            "★ Playback write stall detected: no completed write for ${now - lastWrite}ms " +
+                "(queue=${pcmQueue.size}, head=$head); attempting recovery " +
+                "(total=${watchdogRecoveryCount.get()})"
+        )
+        recoverFromWriteStall()
+    }
+
+    // ★ ウォッチドッグの復旧。新しい仕組みは作らず、既存の作法に
+    //   合わせる: トラックの破棄は trackExecutor へ直列化し（audioLock
+    //   で保護）、バッファのリセットは resetBuffer に任せ、再生成は
+    //   initAudioTrack を直接呼ぶ（供給が止まっている状況では
+    //   pushPcm の再構成判定に頼れないため）。現トラックを release
+    //   すると、そのトラックでブロック中の write() はエラーで戻る
+    //   ため、消費スレッド側の詰まりも併せて解ける。
+    private fun recoverFromWriteStall() {
+        watchdogRecoveryInFlight = true
+        trackExecutor.execute {
+            try {
+                audioLock.lock()
+                try {
+                    audioTrack?.let { old ->
+                        try {
+                            old.pause()
+                            old.flush()
+                            old.stop()
+                            old.release()
+                        } catch (e: Exception) {
+                            Log.w("BitPerfect", "Watchdog: releasing stalled track failed", e)
+                        }
+                    }
+                    audioTrack = null
+                    clearPreviousMixerAttributes()
+                } finally {
+                    audioLock.unlock()
+                }
+                resetBuffer("watchdog")
+                val recreated = initAudioTrack()
+                Log.i("BitPerfect", "★ Watchdog recovery finished: track recreated=$recreated")
+            } catch (e: Exception) {
+                Log.e("BitPerfect", "Watchdog recovery failed", e)
+            } finally {
+                watchdogRecoveryInFlight = false
+            }
         }
     }
 
@@ -2216,6 +2438,7 @@ class BitPerfectPlaybackService : Service() {
     private fun stopServiceCleanly() {
         isRunning = false
         playbackThread?.interrupt()
+        watchdogThread?.interrupt()
 
         // ★ サービス終了時は割り込み状態によらずフォーカスを解放する
         isAudioFocusInterrupted = false
